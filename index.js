@@ -22,7 +22,7 @@ module.exports = function koaClassicServer(
         urlsReserved: Array(), //carelle riservate sulle quali i filenon vengono letti Ps solo cartelle di primo livello gli annidamenti non sono supportati
         template: {
             render: undefined, // ES --> const templateRender = async ( ctx, next, filePath) => {
-            Ext: Array(),
+            ext: Array(),
         }, // emd template 
     } // end option */
 ){

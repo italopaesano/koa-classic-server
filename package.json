@@ -1,0 +1,20 @@
+{
+  "name": "koa-classic-server",
+  "version": "1.0.0",
+  "description": "a server in style aphasche2",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "nodemon ./test/test.js"
+  },
+  "keywords": [
+    "file",
+    "server"
+  ],
+  "author": "italo Paesano",
+  "license": "GPL-3.0-or-later",
+  "dependencies": {
+    "koa": "^2.13.4"
+  
+  }
+}

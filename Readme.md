@@ -11,6 +11,7 @@ const koaClassicServer = require('koa-classic-server');
 
 ## Options
 
+```js
 opts = {
     method: Array("GET"), // methods enabled, otherwise it will have called the next() function
     showDirContents: true, //show or not the contents of the current directory
@@ -23,10 +24,13 @@ opts = {
         Ext: Array(),// template engine file extension ES :Array("ejs", "EJS"),
     }, // emd template 
 } // end optio
+```
 
 ## Exsample
 
 # exsaple0
+
+```js
 const Koa = require('koa');
 const koaClassicServer = require('koa-classic-server');
 
@@ -35,9 +39,11 @@ const app = new Koa();
 app.use(koaClassicServer('./public'));
 
 app.listen(3000);
+```
 
 # exsample1
 
+```js
 const koa = require('koa');
 const app = new koa();
 const port = 3000;
@@ -60,9 +66,11 @@ app.use( classicServer(
     );
 
 app.listen(port, console.log("server started on port:" + port));
+```
 
 # exsample2
 
+```js
 const koa = require('koa');
 const app = new koa();
 const port = 3000;
@@ -87,6 +95,7 @@ app.use( classicServer(
     );
 
 app.listen(port, console.log("server started on port:" + port));
+```
 
 ## License
 

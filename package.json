@@ -1,17 +1,17 @@
 {
   "name": "koa-classic-server",
-  "version": "1.0.0",
-  "description": "a server in style aphasche2",
+  "version": "1.0.1",
+  "description": "a server in style Apache 2",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "nodemon ./test/test.js"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
     "file",
     "server"
   ],
-  "author": "italo Paesano",
+  "author": "Italo Paesano",
   "license": "MIT",
   "dependencies": {
     "koa": "^2.13.4"

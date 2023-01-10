@@ -3,10 +3,15 @@
 koa-cleassic-server is a mildwere aiming for similar but not identical behavior to apache2 . the contents of a folder on the server will be shown remotely and if you want to access a file, click on it. note: not a highly inexperienced programmer use this code with caution, suggestions are welcome
 
 ## Installation
+```js
+npm i koa-classic-server
+```
 
-in the future when the module is uploaded to the npm repositories for the moment you have to download it locally
+next import 
 
+```js
 const koaClassicServer = require('koa-classic-server');
+```
 
 ## API
 

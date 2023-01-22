@@ -27,7 +27,7 @@ opts = {
   urlsReserved: Array(), //paths on disk that will not be accessible remotely e.g. array('/api','/views') warning nested folders are not allowed
   template: {
     render: undefined, //function that will take care of the rendering if there is a template engine  ES --> const templateRender = async ( ctx, next, filePath) => {
-    Ext: Array(), // template engine file extension ES :Array("ejs", "EJS"),
+    ext: Array(), // template engine file extension ES :Array("ejs", "EJS"),
   }, // emd template
 }; // end optio
 ```

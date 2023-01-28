@@ -30,7 +30,7 @@ module.exports = function koaClassicServer(
     const options = opts || {};
     options.template = opts.template || {template:{}};// necessario per rendere possibili i controlli di typo su options.template.render ecc
 
-    options.method = typeof options.method == 'string' ? options.method : Array('GET');// metod 
+    options.method = Array.isArray( options.method ) ? options.method : Array('GET');// metod 
     options.showDirContents = typeof options.showDirContents == 'boolean' ? options.showDirContents : true;// di default le cartelle vengono mostrate
     options.index = typeof options.index == 'string' ? options.index : "";// index filefile che viene caricato se trovato dentro la cartella
     options.urlPrefix = typeof options.urlPrefix == 'string' ? options.urlPrefix : "";// urlPrefix 
@@ -48,7 +48,15 @@ module.exports = function koaClassicServer(
             return;
         }  
 
-        const pageHref = new URL(ctx.href);
+        //faccio in modo che la formula finale sia senza il "/" finale es 'http://localhost:3000/manage' e non 'http://localhost:3000/manage/' questo per non generare risultati diversi
+        // attenione questo vale anche per la rotto che passa da http://localhost:3000/ a http://localhost:3000 però questa cosa verràcorretta portando il caso base con il '/'  in più da :  new URL(ctx.href)
+        let pageHref = ''; //conterrà l'href della pagina
+        if(ctx.href.charAt(ctx.href.length - 1) == '/'){
+            pageHref = new URL(ctx.href.slice(0, -1));// slice(0, -1); rimuovo l'ultimo carattere '/'
+        }else{
+            pageHref = new URL(ctx.href);
+        }
+        
         //console.log( "rootDir="+rootDir+" UrlPrefix="+options.urlPrefix+" pageHref.pathname="+pageHref.pathname );
 
         // adesso controllo se pageHref rientraun urlPrefix
@@ -180,7 +188,7 @@ module.exports = function koaClassicServer(
 
             // START PARENT directory
             if (pageHrefOutPrefix.origin + "/" != pageHrefOutPrefix.href) {
-                // allora non sei nella cartella base e bisogn visualizzare il linkalla Parent Directory
+                // allora non sei nella cartella base e bisogn visualizzare il link alla Parent Directory
                 const a_pD = pageHref.href.split("/"); // array che conterrà il link della parent directori e che poi verrà ricostruito in stringa
                 a_pD.pop(); // rimuovo l'ultimo elemento per trasormarla dell parent directory
                 const parentDirectory = a_pD.join("/");
@@ -217,10 +225,7 @@ module.exports = function koaClassicServer(
 
                     const itemPath = `${toOpen}/${s_name}`;
                     let itemUri = "";
-                    if (
-                        pageHref.href ==
-                        pageHref.origin + options.urlPrefix + "/"
-                    ) {
+                    if ( pageHref.href == pageHref.origin + options.urlPrefix + "/" ) {
                         // senza questo if else vi rarà sempre un "/" in più o in meno alla fine dell'origin
                         itemUri = `${
                             pageHref.origin + options.urlPrefix

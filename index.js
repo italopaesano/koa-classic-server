@@ -60,12 +60,12 @@ module.exports = function koaClassicServer(
         //console.log( "rootDir="+rootDir+" UrlPrefix="+options.urlPrefix+" pageHref.pathname="+pageHref.pathname );
 
         // adesso controllo se pageHref rientraun urlPrefix
-        const a_pageHref = pageHref.pathname.split("/");
+        const a_pathname = pageHref.pathname.split("/");// nome sbagliato dovrebbe cheamarsi a_pathname
         const a_urlPrefix = options.urlPrefix.split("/");
 
         //controllo urlPrefix
         for (const key in a_urlPrefix) {
-            if (a_urlPrefix[key] != a_pageHref[key]) {
+            if (a_urlPrefix[key] != a_pathname[key]) {
                 next(); // allora non è un sottoinsieme valido e quindi il percorso non riguarda questomidlwzare            }
                 return;
             }
@@ -74,15 +74,11 @@ module.exports = function koaClassicServer(
 
         // creao pageHrefOutPrefix che non conterrà ilprefixnelsuoindirizzo
         let pageHrefOutPrefix = pageHref;
-        if (options.urlPrefix != "") {
-            // se siste un urlPrefix non nullo costruisco un nuovo pageHref
-            let hrefOuyPrefix =
-                pageHref.origin +
-                "/" +
-                a_pageHref
-                    .slice(-(a_pageHref.length - a_urlPrefix.length))
-                    .join("/"); //stringa href senza urlPrefix
-            pageHrefOutPrefix = new URL(hrefOuyPrefix);
+        if (options.urlPrefix != "") { // se siste un urlPrefix non nullo costruisco un nuovo pageHref
+            let a_pathnameAutPrefix = a_pathname.slice(a_urlPrefix.length);//elimino tutte le parti del prefix , ho controllatoprima che queste parti coincidano
+            let s_pathnameAutPrefix = a_pathnameAutPrefix.join("/"); //stringa href senza urlPrefix
+            let hrefOutPrefix = pageHref.origin + '/' + s_pathnameAutPrefix;
+            pageHrefOutPrefix = new URL(hrefOutPrefix);//
         }
 
         //DA MIGLIORARE

@@ -11,7 +11,7 @@ middleware serving static files from a directory. The middleware accepts an opti
         showDirContents: a boolean value indicating whether the contents of a directory should be shown. Default is true.
         index: the name of the index file. Default is an empty string.
         urlPrefix: the prefix of the path , such as localhost:3000/views. Default is an empty string.
-        urlsReserved: an array of reserved URLs that files cannot be read from. Default is an empty array.
+        urlsReserved: an array of reserved URLs that files cannot be read from. Default is an empty array. e.g. Array('/api','/views')
         template: an object with two properties:
             render: a function for rendering templates. Default is undefined.
             ext: an array of file extensions for which the render function should be used. Default is an empty array.

@@ -41,6 +41,10 @@ next import
 ```js
 const koaClassicServer = require('koa-classic-server');
 ```
+or
+```js
+import koaClassicServer from "koa-classic-server";
+'''
 
 ## API
 

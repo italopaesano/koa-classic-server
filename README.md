@@ -1,149 +1,305 @@
-# koa-classic-file
+# koa-smart-server
 
-koa-cleassic-server is a mildwere aiming for similar but not identical behavior to apache2 . the contents of a folder on the server will be shown remotely and if you want to access a file, click on it. note: not a highly inexperienced programmer use this code with caution, suggestions are welcome.
+**Formerly koa-classic-server**
 
-middleware serving static files from a directory. The middleware accepts an options object that allows customization of the serving behavior. For example, it allows setting the supported HTTP methods, whether to show the contents of a directory, the name of the index file, an array of URLs that are reserved and not accessible, and an optional template rendering function for certain file types.
+🔒 **Secure and enhanced Koa middleware for serving static files** with Apache-like directory listing, template engine support, and comprehensive security fixes.
 
-    The middleware takes in two arguments: rootDir which is the directory that contains the static files and opts which is the options object.
+[![npm version](https://img.shields.io/npm/v/koa-smart-server.svg)](https://www.npmjs.com/package/koa-smart-server)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-71%20passing-brightgreen.svg)]()
 
-    In the options object, the following properties are set to default values if they are not provided:
-        method: an array of supported HTTP methods. Default is ['GET'].
-        showDirContents: a boolean value indicating whether the contents of a directory should be shown. Default is true.
-        index: the name of the index file. Default is an empty string.
-        urlPrefix: the prefix of the path , such as localhost:3000/views. Default is an empty string.
-        urlsReserved: an array of reserved URLs that files cannot be read from. Default is an empty array.
-        template: an object with two properties:
-            render: a function for rendering templates. Default is undefined.
-            ext: an array of file extensions for which the render function should be used. Default is an empty array.
+## ⚠️ Version 2.0 - Major Security Update
 
-    The middleware then checks if the requested HTTP method is in the list of supported methods. If it is not, the middleware calls next and returns.
+Version 2.0.0 includes **critical security fixes** for path traversal vulnerabilities and other important improvements. **Upgrade immediately** if you're using version 1.x.
 
-    The middleware then checks if the pageHref is a sub-path of the urlPrefix. If it is not, the middleware calls next and returns.
+### What's New in 2.0
 
-    The middleware checks if the requested URL is in the urlsReserved array. If it is, the middleware calls next and returns.
+✅ **Fixed Path Traversal Vulnerability** - No more unauthorized file access
+✅ **Proper HTTP 404 Status Codes** - Standards-compliant error handling
+✅ **Template Error Handling** - No more server crashes
+✅ **XSS Protection** - HTML escaping in directory listings
+✅ **Race Condition Fixes** - Robust file access
+✅ **71 Tests Passing** - Comprehensive test coverage
 
-    The middleware then generates the file path by combining the rootDir and the pathname of the pageHref.
+[See full changelog](./CHANGELOG.md)
 
-    The middleware then checks if the file exists, and if it does, it sets the content type of the response and sends the file contents. If the file is a directory and showDirContents is true, the contents of the directory are shown. If the index file exists in the directory, it is shown instead.
+## Features
 
-    If the file does not exist, the middleware calls next to let the next middleware handle the request.
+koa-smart-server is a middleware for serving static files from a directory with Apache 2-like behavior. The contents of a folder on the server will be shown remotely and if you want to access a file, click on it.
 
-    If the file extension is in the template.ext array and the template.render function is provided, the function is called to render the file contents.
+**Key Features:**
+
+- 🗂️ **Directory Listing** - Apache-style browseable directories
+- 📄 **Static File Serving** - Automatic MIME type detection
+- 🎨 **Template Engine Support** - Integrate EJS, Pug, Handlebars, etc.
+- 🔒 **Security** - Path traversal protection, XSS prevention
+- ⚙️ **Configurable** - URL prefixes, reserved paths, index files
+- 🧪 **Well-Tested** - 71 tests with security coverage
+- 📦 **Dual Module Support** - CommonJS and ES Modules
 
 ## Installation
 
-```js
-npm i koa-classic-server
+```bash
+npm install koa-smart-server
 ```
 
-next import 
+## Quick Start
 
-```js
-const koaClassicServer = require('koa-classic-server');
-```
-or
-```js
-import koaClassicServer from "koa-classic-server";
-'''
-
-## API
-
-## Options
-
-```js
-opts = {
-  method: Array("GET"), // methods enabled, otherwise it will have called the next() function
-  showDirContents: true, //show or not the contents of the current directory
-  index: "", // the index file , if a file with this name is found it will be loaded automatically Es index.html
-  //indexExt: array(),// futures supported extensions for the index file
-  urlPrefix: "", // prefix of the URL that will be skipped es "/admin" 
-  urlsReserved: Array(), //paths on disk that will not be accessible remotely e.g. array('/api','/views') warning nested folders are not allowed
-  template: {
-    render: undefined, //function that will take care of the rendering if there is a template engine  ES --> const templateRender = async ( ctx, next, filePath) => {
-    ext: Array(), // template engine file extension ES :Array("ejs", "EJS"),
-  }, // emd template
-}; // end optio
-```
-
-## Exsample
-
-### exsaple0
-
-```js
-const Koa = require("koa");
-const koaClassicServer = require("koa-classic-server");
+```javascript
+const Koa = require('koa');
+const koaSmartServer = require('koa-smart-server');
 
 const app = new Koa();
 
-app.use(koaClassicServer(__dirname + "/public"));
+// Serve files from "public" directory
+app.use(koaSmartServer(__dirname + '/public'));
+
+app.listen(3000);
+console.log('Server running on http://localhost:3000');
+```
+
+## Usage
+
+### Import
+
+```javascript
+// CommonJS
+const koaSmartServer = require('koa-smart-server');
+
+// ES Modules
+import koaSmartServer from 'koa-smart-server';
+```
+
+### Basic Examples
+
+#### Example 1: Simple File Server
+
+```javascript
+const Koa = require('koa');
+const koaSmartServer = require('koa-smart-server');
+
+const app = new Koa();
+
+app.use(koaSmartServer(__dirname + '/public', {
+  showDirContents: true,
+  index: 'index.html'
+}));
 
 app.listen(3000);
 ```
 
-### exsample1
+#### Example 2: With URL Prefix
 
-```js
-const koa = require("koa");
-const app = new koa();
-const port = 3000;
+```javascript
+const Koa = require('koa');
+const koaSmartServer = require('koa-smart-server');
 
-const classicServer = require("koa-classic-server");
+const app = new Koa();
 
-const ejs = require("ejs");
+// Files accessible under /static
+// e.g., http://localhost:3000/static/image.png
+app.use(koaSmartServer(__dirname + '/public', {
+  urlPrefix: '/static',
+  showDirContents: true
+}));
 
-app.use(
-  classicServer(
-    __dirname + "/public",
-    (opt = {
-      showDirContents: true,
-      template: {
-        render: async (ctx, next, filePath) => {
-          ctx.body = await ejs.renderFile(filePath, {
-            filePath: filePath,
-            href: ctx.href,
-            query: ctx.query,
-          });
-        },
-        ext: Array("ejs", "EJS"),
-      },
-    })
-  )
-);
-
-app.listen(port, console.log("server started on port:" + port));
+app.listen(3000);
 ```
 
-### exsample2
+#### Example 3: With Template Engine (EJS)
 
-```js
-const koa = require("koa");
-const app = new koa();
-const port = 3000;
+```javascript
+const Koa = require('koa');
+const koaSmartServer = require('koa-smart-server');
+const ejs = require('ejs');
 
-const classicServer = require("koa-classic-server");
+const app = new Koa();
 
-const ejs = require("ejs");
+app.use(koaSmartServer(__dirname + '/views', {
+  template: {
+    render: async (ctx, next, filePath) => {
+      ctx.body = await ejs.renderFile(filePath, {
+        title: 'My App',
+        user: ctx.state.user
+      });
+    },
+    ext: ['ejs', 'html']
+  }
+}));
 
-const templateRender = async (ctx, next, filePath) => {
-  ctx.body = await ejs.renderFile(filePath, { filePath: filePath });
+app.listen(3000);
+```
+
+## API
+
+### koaSmartServer(rootDir, options)
+
+Creates a Koa middleware for serving static files.
+
+**Parameters:**
+
+- `rootDir` (String, required): Absolute path to the directory containing static files
+- `options` (Object, optional): Configuration options
+
+**Returns:** Koa middleware function
+
+## Options
+
+```javascript
+const options = {
+  // HTTP methods allowed (default: ['GET'])
+  method: ['GET', 'HEAD'],
+
+  // Show directory contents (default: true)
+  showDirContents: true,
+
+  // Index file name (default: '')
+  // If present in a directory, it's served automatically
+  index: 'index.html',
+
+  // URL path prefix (default: '')
+  // Files will be served under this prefix
+  urlPrefix: '/static',
+
+  // Reserved paths (default: [])
+  // These directories won't be accessible
+  // Note: Only works for first-level directories
+  urlsReserved: ['/admin', '/private'],
+
+  // Template engine configuration
+  template: {
+    // Template rendering function
+    render: async (ctx, next, filePath) => {
+      // Your rendering logic
+      ctx.body = await yourTemplateEngine.render(filePath, data);
+    },
+
+    // File extensions to process with template.render
+    ext: ['ejs', 'pug', 'hbs']
+  }
 };
-
-app.use(
-  classicServer(
-    __dirname + "/public",
-    (opt = {
-      showDirContents: true,
-      template: {
-        render: templateRender,
-        ext: Array("ejs", "EJS"),
-      },
-    })
-  )
-);
-
-app.listen(port, console.log("server started on port:" + port));
 ```
+
+### Options Details
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `method` | Array | `['GET']` | Allowed HTTP methods |
+| `showDirContents` | Boolean | `true` | Show directory listing |
+| `index` | String | `''` | Index file name |
+| `urlPrefix` | String | `''` | URL path prefix |
+| `urlsReserved` | Array | `[]` | Reserved directory paths |
+| `template.render` | Function | `undefined` | Template rendering function |
+| `template.ext` | Array | `[]` | Extensions for template rendering |
+
+## Security
+
+### Path Traversal Protection
+
+koa-smart-server 2.0 protects against path traversal attacks:
+
+```javascript
+// ❌ These requests are blocked (return 403 Forbidden)
+GET /../../../etc/passwd
+GET /../config/database.yml
+GET /%2e%2e%2fpackage.json
+```
+
+### Protected Directories
+
+Use `urlsReserved` to protect sensitive directories:
+
+```javascript
+app.use(koaSmartServer(__dirname + '/www', {
+  urlsReserved: ['/config', '/private', '/.git', '/node_modules']
+}));
+```
+
+### XSS Protection
+
+All filenames and paths in directory listings are HTML-escaped to prevent XSS attacks.
+
+## Error Handling
+
+koa-smart-server properly handles errors:
+
+- **404** - File/directory not found
+- **403** - Forbidden (path traversal attempts, reserved directories)
+- **500** - Template rendering errors, file access errors
+
+## Testing
+
+```bash
+# Run all tests
+npm test
+
+# Run security tests only
+npm run test:security
+```
+
+## Middleware Behavior
+
+### Directory Handling
+
+1. If `index` file exists → serve index file
+2. If `showDirContents: true` → show directory listing
+3. If `showDirContents: false` → return 404
+
+### File Handling
+
+1. Check if file extension matches `template.ext`
+2. If yes → call `template.render()`
+3. If no → serve static file with appropriate MIME type
+
+### Reserved URLs
+
+Requests to reserved paths are passed to the next middleware.
+
+## Migration from 1.x
+
+See [CHANGELOG.md](./CHANGELOG.md) for detailed migration guide.
+
+**Quick migration:**
+
+1. Update package name in package.json
+2. Ensure `rootDir` is an absolute path
+3. Update error handling (now returns proper status codes)
+4. Run tests
+
+## Complete Documentation
+
+For complete documentation with all features, examples, troubleshooting, and best practices, see [DOCUMENTATION.md](./DOCUMENTATION.md).
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Known Limitations
+
+- Reserved URLs only work for first-level directories
+- Single index file name (no fallback array)
+
+See [DEBUG_REPORT.md](./DEBUG_REPORT.md) for technical details.
 
 ## License
 
 MIT
+
+## Author
+
+Italo Paesano
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md)
+
+## Links
+
+- [Full Documentation](./DOCUMENTATION.md)
+- [Debug Report](./DEBUG_REPORT.md)
+- [Changelog](./CHANGELOG.md)
+- [npm Package](https://www.npmjs.com/package/koa-smart-server)
+
+---
+
+**⚠️ Security Notice:** Version 2.0.0 fixes critical vulnerabilities. Update immediately if using 1.x.

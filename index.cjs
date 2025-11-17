@@ -1,140 +1,171 @@
 
 const { URL } = require("url");
 const fs = require("fs");
+const path = require("path");
 const mime = require("mime-types");
-const { throws } = require("assert");
-const { error } = require("console");
 
-// è la funzione che avierà il server rootDir = cartella dei file statici, UrlPrefix = prefisso del path dove guardare es localhost:3000\views
-// questa funzione deve restituire un midlware
-module.exports =  function koaClassicServer(
+// koa-smart-server - Enhanced version with security fixes and improved error handling
+// Version: 2.0.0
+// Fixes applied:
+// - Path Traversal vulnerability protection
+// - Status code 404 properly set
+// - Template rendering error handling
+// - Race condition file access protection
+// - Proper file extension extraction
+// - fs.readdirSync error handling
+// - Content-Disposition properly quoted
+// - Code quality improvements
+
+module.exports = function koaClassicServer(
     rootDir,
     opts = {}
-
     /*
-    opts SRUCTURE
+    opts STRUCTURE
      opts = {
-        method: Array("GET"), // metodisupportati altrimenti verràchiamata la funzione next()
-        showDirContents: true, // mostrare o meno il contenuto della cartella
-        index: "", // index file name
-        indexExt: array(),// futures possibili estensioni ammesse
-        //setHeaders: Array(), // Futures Function to set custom headers on response.
-        urlPrefix: "",
-        urlsReserved: Array(), //carelle riservate sulle quali i filenon vengono letti Ps solo cartelle di primo livello gli annidamenti non sono supportati
+        method: ['GET'], // Supported methods, otherwise next() will be called
+        showDirContents: true, // Show or hide directory contents
+        index: "", // Index file name
+        urlPrefix: "", // URL path prefix
+        urlsReserved: [], // Reserved paths (first level only)
         template: {
-            render: undefined, // ES --> const templateRender = async ( ctx, next, filePath) => {
-            ext: Array(),
-        }, // emd template 
-    } // end option */
-){
-    // controllo i valori di default options 
+            render: undefined, // Template rendering function: async (ctx, next, filePath) => {}
+            ext: [], // File extensions to process with template.render
+        },
+    }
+    */
+) {
+    // Validate rootDir
+    if (!rootDir || typeof rootDir !== 'string') {
+        throw new TypeError('rootDir must be a non-empty string');
+    }
+    if (!path.isAbsolute(rootDir)) {
+        throw new Error('rootDir must be an absolute path');
+    }
+
+    // Normalize rootDir to prevent issues
+    const normalizedRootDir = path.resolve(rootDir);
+
+    // Set default options
     const options = opts || {};
-    options.template = opts.template || {template:{}};// necessario per rendere possibili i controlli di typo su options.template.render ecc
+    options.template = opts.template || {};
 
-    options.method = Array.isArray( options.method ) ? options.method : Array('GET');// metod 
-    options.showDirContents = typeof options.showDirContents == 'boolean' ? options.showDirContents : true;// di default le cartelle vengono mostrate
-    options.index = typeof options.index == 'string' ? options.index : "";// index filefile che viene caricato se trovato dentro la cartella
-    options.urlPrefix = typeof options.urlPrefix == 'string' ? options.urlPrefix : "";// urlPrefix 
-    options.urlsReserved = Array.isArray( options.urlsReserved ) ? options.urlsReserved : Array();// array di url riservati e non accessibile
-    options.template.render = (options.template.render == undefined || typeof options.template.render == 'function' ) ? options.template.render : undefined;// metod 
-    options.template.ext = ( Array.isArray(options.template.ext) ) ? options.template.ext : Array();// metod 
-
+    options.method = Array.isArray(options.method) ? options.method : ['GET'];
+    options.showDirContents = typeof options.showDirContents == 'boolean' ? options.showDirContents : true;
+    options.index = typeof options.index == 'string' ? options.index : "";
+    options.urlPrefix = typeof options.urlPrefix == 'string' ? options.urlPrefix : "";
+    options.urlsReserved = Array.isArray(options.urlsReserved) ? options.urlsReserved : [];
+    options.template.render = (options.template.render == undefined || typeof options.template.render == 'function') ? options.template.render : undefined;
+    options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
 
     return async (ctx, next) => {
-        
- 
-        // controlla se il metodo richiesto è presente nella lista di quelli ammessi
+        // Check if method is allowed
         if (!options.method.includes(ctx.method)) {
-            next();
+            await next();
             return;
-        }  
+        }
 
-        //faccio in modo che la formula finale sia senza il "/" finale es 'http://localhost:3000/manage' e non 'http://localhost:3000/manage/' questo per non generare risultati diversi
-        // attenione questo vale anche per la rotto che passa da http://localhost:3000/ a http://localhost:3000 però questa cosa verràcorretta portando il caso base con il '/'  in più da :  new URL(ctx.href)
-        let pageHref = ''; //conterrà l'href della pagina
-        if(ctx.href.charAt(ctx.href.length - 1) == '/'){
-            pageHref = new URL(ctx.href.slice(0, -1));// slice(0, -1); rimuovo l'ultimo carattere '/'
-        }else{
+        // Normalize URL (remove trailing slash)
+        let pageHref = '';
+        if (ctx.href.charAt(ctx.href.length - 1) == '/') {
+            pageHref = new URL(ctx.href.slice(0, -1));
+        } else {
             pageHref = new URL(ctx.href);
         }
-        
-        //console.log( "rootDir="+rootDir+" UrlPrefix="+options.urlPrefix+" pageHref.pathname="+pageHref.pathname );
 
-        // adesso controllo se pageHref rientraun urlPrefix
-        const a_pathname = pageHref.pathname.split("/");// nome sbagliato dovrebbe cheamarsi a_pathname
+        // Check URL prefix
+        const a_pathname = pageHref.pathname.split("/");
         const a_urlPrefix = options.urlPrefix.split("/");
 
-        //controllo urlPrefix
         for (const key in a_urlPrefix) {
             if (a_urlPrefix[key] != a_pathname[key]) {
-                next(); // allora non è un sottoinsieme valido e quindi il percorso non riguarda questomidlwzare            }
+                await next();
                 return;
             }
         }
-        // superato questotolgo tutti gli urlprefix dai PageHref
 
-        // creao pageHrefOutPrefix che non conterrà ilprefixnelsuoindirizzo
+        // Create pageHrefOutPrefix without URL prefix
         let pageHrefOutPrefix = pageHref;
-        if (options.urlPrefix != "") { // se siste un urlPrefix non nullo costruisco un nuovo pageHref
-            let a_pathnameAutPrefix = a_pathname.slice(a_urlPrefix.length);//elimino tutte le parti del prefix , ho controllatoprima che queste parti coincidano
-            let s_pathnameAutPrefix = a_pathnameAutPrefix.join("/"); //stringa href senza urlPrefix
-            let hrefOutPrefix = pageHref.origin + '/' + s_pathnameAutPrefix;
-            pageHrefOutPrefix = new URL(hrefOutPrefix);//
+        if (options.urlPrefix != "") {
+            let a_pathnameOutPrefix = a_pathname.slice(a_urlPrefix.length);
+            let s_pathnameOutPrefix = a_pathnameOutPrefix.join("/");
+            let hrefOutPrefix = pageHref.origin + '/' + s_pathnameOutPrefix;
+            pageHrefOutPrefix = new URL(hrefOutPrefix);
         }
 
-        //DA MIGLIORARE
-        // inizio controllo urlReserved // vale solo per il primo livello di cartelle non quelle annidate
-        if (Array.isArray(options.urlsReserved)) {
+        // Check reserved URLs (first level only)
+        if (Array.isArray(options.urlsReserved) && options.urlsReserved.length > 0) {
             const a_pathnameOutPrefix = pageHrefOutPrefix.pathname.split("/");
             for (const value of options.urlsReserved) {
                 if (a_pathnameOutPrefix[1] == value.substring(1)) {
-                    // allora siamo nella cartella riservata //.substring(1) = taglia lo / iniziale
-                    next();
+                    await next();
                     return;
                 }
             }
         }
-        //controllo urlReserved
 
-        // questo if impedirà che ilnome della cartella finisca con "/"
-        let toOpen = ""; // sarà il percorso del file o della directori da aprire
+        // FIX #1: Path Traversal Protection
+        // Construct safe file path
+        let requestedPath = "";
         if (pageHrefOutPrefix.pathname == "/") {
-            toOpen = rootDir;
+            requestedPath = "";
         } else {
-            toOpen = rootDir + decodeURIComponent(pageHrefOutPrefix.pathname);
+            requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
         }
 
+        // Normalize path and prevent path traversal
+        const normalizedPath = path.normalize(requestedPath);
+        const fullPath = path.join(normalizedRootDir, normalizedPath);
+
+        // Security check: ensure resolved path is within rootDir
+        if (!fullPath.startsWith(normalizedRootDir)) {
+            ctx.status = 403;
+            ctx.body = 'Forbidden';
+            return;
+        }
+
+        let toOpen = fullPath;
+
+        // FIX #2: Status Code 404 - Check if file/directory exists
         if (!fs.existsSync(toOpen)) {
-            // il filein questione non esiste quindi si può tornare niente
-            //notfound The requested URL was not found on this server.
+            ctx.status = 404; // FIX: Set proper status code
             ctx.body = requestedUrlNotFound();
             return;
         }
-        const stat = fs.statSync(toOpen);
-        let dir = ""; //solo segnaposto da migliorare
+
+        let stat;
+        try {
+            stat = fs.statSync(toOpen);
+        } catch (error) {
+            console.error('fs.statSync error:', error);
+            ctx.status = 500;
+            ctx.body = 'Internal Server Error';
+            return;
+        }
+
         if (stat.isDirectory()) {
-            // is directory
-            if ( options.showDirContents ) {
+            // Handle directory
+            if (options.showDirContents) {
                 if (options.index) {
-                    //quindi esiste un nome di file index da cercare
-                    if (fs.existsSync(toOpen + "/" + options.index)) {
-                        loadFile(toOpen + "/" + options.index);
+                    const indexPath = path.join(toOpen, options.index);
+                    if (fs.existsSync(indexPath)) {
+                        await loadFile(indexPath);
                         return;
                     }
                 }
                 ctx.body = show_dir(toOpen);
             } else {
-                // allora non devo mostrare il contenuto della directory
+                // FIX #2: Set 404 status when directory listing is disabled
+                ctx.status = 404;
                 ctx.body = requestedUrlNotFound();
             }
             return;
         } else {
-            //is file
-            loadFile(toOpen);
+            // Handle file
+            await loadFile(toOpen);
             return;
         }
 
-        // funzioni interne
+        // Internal functions
 
         function requestedUrlNotFound() {
             return `
@@ -142,133 +173,182 @@ module.exports =  function koaClassicServer(
                     <html>
                     <head>
                         <meta charset="UTF-8">
-                        <meta http-equiv="X-UA-Compatible">
+                        <meta http-equiv="X-UA-Compatible" content="IE=edge">
                         <meta name="viewport" content="width=device-width, initial-scale=1.0">
                         <title>URL not found</title>
                     </head>
                     <body>
                     <h1>Not Found</h1>
-
                     <h3>The requested URL was not found on this server.</h3>
-
                     </body>
                     </html>
                 `;
-        } // function requestedUrlNotFound(){
+        }
 
+        // FIX #3, #4, #5: Template error handling, race condition, file extension
         async function loadFile(toOpen) {
-            if (options.template.ext.length > 0) {
-                // esiste il metodo options.template.render quindi controlliamo i templatengine
-                // ricavo l'estenzione del file
-                const a_path = toOpen.split(".");
-                const fileExt = a_path[a_path.length - 1]; // prendol'ultmo elemento che sarà l'estensione
-                if (options.template.ext.includes(fileExt)) {
-                    // se l'estenzione è nell'elenco si esegue altrimenti mostrerà il file normalmente
-                    await options.template.render(ctx, next, toOpen);
-                    return;
+            // FIX #5: Proper file extension extraction using path.extname
+            if (options.template.ext.length > 0 && options.template.render) {
+                const fileExt = path.extname(toOpen).slice(1); // Remove leading dot
+
+                if (fileExt && options.template.ext.includes(fileExt)) {
+                    // FIX #3: Template rendering error handling
+                    try {
+                        await options.template.render(ctx, next, toOpen);
+                        return;
+                    } catch (error) {
+                        console.error('Template rendering error:', error);
+                        ctx.status = 500;
+                        ctx.body = 'Internal Server Error - Template Rendering Failed';
+                        return;
+                    }
                 }
             }
+
+            // FIX #4: Race condition protection - verify file still exists and is readable
+            try {
+                await fs.promises.access(toOpen, fs.constants.R_OK);
+            } catch (error) {
+                console.error('File access error:', error);
+                ctx.status = 404;
+                ctx.body = requestedUrlNotFound();
+                return;
+            }
+
+            // Serve static file
             let mimeType = mime.lookup(toOpen);
             const src = fs.createReadStream(toOpen);
+
+            // Handle stream errors
+            src.on('error', (err) => {
+                console.error('Stream error:', err);
+                if (!ctx.headerSent) {
+                    ctx.status = 500;
+                    ctx.body = 'Error reading file';
+                }
+            });
+
             ctx.response.set("content-type", mimeType);
+
+            // FIX #7: Content-Disposition properly quoted with only basename
+            const filename = path.basename(toOpen);
+            const safeFilename = filename.replace(/"/g, '\\"'); // Escape quotes
             ctx.response.set(
                 "content-disposition",
-                `inline; filename=${pageHrefOutPrefix.pathname.substring(1)}`
-            ); //pageHref.pathname.substring(1) = taglia l' / iniziale ;//https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Disposition
+                `inline; filename="${safeFilename}"`
+            );
+
             ctx.body = src;
         }
 
-        //adesso devo andarenel rootDir e caricare i file e mostrarli al server
+        // FIX #6: fs.readdirSync error handling
         function show_dir(toOpen) {
-            dir = fs.readdirSync(toOpen, { withFileTypes: true }); // possibile error error.code == "ENOENT" ???
+            let dir;
+            try {
+                dir = fs.readdirSync(toOpen, { withFileTypes: true });
+            } catch (error) {
+                console.error('Directory read error:', error);
+                return `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <title>Error</title>
+                    </head>
+                    <body>
+                        <h1>Error Reading Directory</h1>
+                        <p>Unable to access directory contents.</p>
+                    </body>
+                    </html>
+                `;
+            }
+
             let s_dir = "<table>";
 
-            // START PARENT directory
+            // Parent directory link
             if (pageHrefOutPrefix.origin + "/" != pageHrefOutPrefix.href) {
-                // allora non sei nella cartella base e bisogn visualizzare il link alla Parent Directory
-                const a_pD = pageHref.href.split("/"); // array che conterrà il link della parent directori e che poi verrà ricostruito in stringa
-                a_pD.pop(); // rimuovo l'ultimo elemento per trasormarla dell parent directory
+                const a_pD = pageHref.href.split("/");
+                a_pD.pop();
                 const parentDirectory = a_pD.join("/");
-                s_dir += `<tr><td><a href="${parentDirectory}"><b>.. Parent Directory</b></a></td><td>DIR</td></tr>`;
+                // Escape HTML to prevent XSS
+                s_dir += `<tr><td><a href="${escapeHtml(parentDirectory)}"><b>.. Parent Directory</b></a></td><td>DIR</td></tr>`;
             }
-            // END PARENT directory
 
             if (dir.length == 0) {
-                // cartella vuolta
-
                 s_dir += `<tr><td>empty folder</td><td></td></tr>`;
                 s_dir += `</table>`;
             } else {
-                //la cartella non è vuota per questo si mostrerà il contenuto
+                let a_sy = Object.getOwnPropertySymbols(dir[0]);
+                const sy_type = a_sy[0];
 
-                let a_sy = Object.getOwnPropertySymbols(dir[0]); // recupero l'array dei symbol
-                const sy_type = a_sy[0]; // recupero il symbol Symbol(type)
-                //let test = sy_type.description; test == 'type
                 for (const item of dir) {
                     const s_name = item.name.toString();
                     const type = item[sy_type];
 
-                    // item["Symbol(type)"] == type == ( 1 == file , 2 == cartella )
                     if (type == 1) {
-                        // 1 == file
+                        // File
                         s_dir += `<tr><td> FILE `;
                     } else if (type == 2 || type == 3) {
-                        //2 == cartella , 3 == symbolic link
+                        // Directory or symbolic link
                         s_dir += `<tr><td>`;
                     } else {
-                        // ne file ne cartella , errore ?
-                        throw new Error("unknown file type  type="+type);
+                        console.error("Unknown file type:", type);
+                        continue; // Skip unknown types instead of throwing
                     }
 
-                    const itemPath = `${toOpen}/${s_name}`;
+                    const itemPath = path.join(toOpen, s_name);
                     let itemUri = "";
-                    if ( pageHref.href == pageHref.origin + options.urlPrefix + "/" ) {
-                        // senza questo if else vi rarà sempre un "/" in più o in meno alla fine dell'origin
-                        itemUri = `${
-                            pageHref.origin + options.urlPrefix
-                        }/${encodeURIComponent(s_name)}`;
+                    if (pageHref.href == pageHref.origin + options.urlPrefix + "/") {
+                        itemUri = `${pageHref.origin + options.urlPrefix}/${encodeURIComponent(s_name)}`;
                     } else {
-                        itemUri = `${pageHref.href}/${encodeURIComponent(
-                            s_name
-                        )}`;
-                        //in questo caso non mi trovo nella root ed
+                        itemUri = `${pageHref.href}/${encodeURIComponent(s_name)}`;
                     }
 
-                    // prendo in considerazione il casoin cui sia presente una cartella poireserved options.urlsReserved coniderare inoltre che queste cartelle posso essere presenti solo nella radice ci pageHrefOutPrefix   type == 2 -->  cartella || type == 3 -->  sybolik link
-                    if(pageHrefOutPrefix.pathname == '/' &&  options.urlsReserved.includes( '/' + s_name ) && (type == 2 || type == 3) ){
-                        s_dir += ` ${s_name}</td> <td> DIR BUT RESERVED</td></tr>`;
-                    }else{// mostro le directori ed i file normalmente
-                        s_dir += ` <a href="${itemUri}">${s_name}</a> </td> <td> ${
-                            type == 2 // type == 2 è una cartellla
-                                ? "DIR"
-                                : ( mime.lookup(itemPath) == false ) ? 'unknow' : mime.lookup(itemPath)
-                        } </td></tr>`;
+                    // Check if this is a reserved directory
+                    if (pageHrefOutPrefix.pathname == '/' && options.urlsReserved.includes('/' + s_name) && (type == 2 || type == 3)) {
+                        s_dir += ` ${escapeHtml(s_name)}</td> <td> DIR BUT RESERVED</td></tr>`;
+                    } else {
+                        // Escape HTML to prevent XSS in filenames
+                        const mimeType = type == 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
+                        s_dir += ` <a href="${escapeHtml(itemUri)}">${escapeHtml(s_name)}</a> </td> <td> ${escapeHtml(mimeType)} </td></tr>`;
                     }
-                } // end for
-            } // end if else
+                }
+            }
 
             s_dir += "</table>";
-            //ctx.is('text/html');
+
             let toReturn = `
                         <!DOCTYPE html>
                     <html>
                     <head>
                         <meta charset="UTF-8">
-                        <meta http-equiv="X-UA-Compatible">
+                        <meta http-equiv="X-UA-Compatible" content="IE=edge">
                         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <title>Document</title>
+                        <title>Index of ${escapeHtml(pageHrefOutPrefix.pathname)}</title>
                     </head>
-                    <body>`;
+                    <body>
+                    <h1>Index of ${escapeHtml(pageHrefOutPrefix.pathname)}</h1>`;
 
             toReturn += s_dir;
-            // for test
-            //toReturn += s_dir + " \n <br>  rootDir="+rootDir+" UrlPrefix="+options.urlPrefix+" pageHref.pathname="+pageHref.pathname ;
 
             toReturn += `
                     </body>
                     </html>
                 `;
             return toReturn;
-        } // function show_dir( dir ){
-    }; // return (ctx, next) => {
+        }
+
+        // Helper function to escape HTML and prevent XSS
+        function escapeHtml(unsafe) {
+            if (typeof unsafe !== 'string') {
+                return unsafe;
+            }
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    };
 };

@@ -51,9 +51,9 @@ describe(` koaClassicServer options0: ${JSON.stringify(options0)}`, () => {
   test('controllo che se chiamo un percorso che non esiste mi venga restituito l\'errore apropiato ', async () => {
     // Effettua una richiesta GET sull'endpoint configurato (il prefisso)
     const res = await supertest(server).get('/public/percorso_di_una_cartella_o_file_che_non_esiste_fbrojngbornbo/gbrtbbbrbr/tbrbr/rtbrtbrt');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404); // FIX: Now returns proper 404 status
     expect(res.type).toMatch(/text\/html/);// type sta per mimetype .... restituisce text/plain anche se dovrebbe essere text/html
-    expect(res.text.replace(/\s/g, '')).toBe(requestedUrlNotFound().replace(/\s/g, '')); //.replace(/\s/g, '') --> rimuoce gli spazi bianchi e le tabulazioni , il server agiunge degli spazi all'inizio facendo fallire il controllo 
+    expect(res.text.replace(/\s/g, '')).toBe(requestedUrlNotFound().replace(/\s/g, '')); //.replace(/\s/g, '') --> rimuoce gli spazi bianchi e le tabulazioni , il server agiunge degli spazi all'inizio facendo fallire il controllo
   });
 
   test('controllo che se l\'indirizzo non ricade nel urlPrefix allora debba essere passato al midlware successivo e se non c\'e allora errore 404 not founf', async () => {
@@ -96,9 +96,9 @@ describe(` koaClassicServer options1: ${JSON.stringify(options1)}`, () => {
   test('controllo che se chiamo un percorso che non esiste mi venga restituito l\'errore apropiato [ANCHE SENZA URL PREFIX] ', async () => {
     // Effettua una richiesta GET sull'endpoint configurato (il prefisso)
     const res = await supertest(server).get('/BTBg h gh /percorso_di_una_cartella_o_file_che_non_esiste_fbrojngbornbo/gbrtbbbrbr/tbrbr/rtbrtbrt');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404); // FIX: Now returns proper 404 status
     expect(res.type).toMatch(/text\/html/);// type sta per mimetype .... restituisce text/plain anche se dovrebbe essere text/html
-    expect(res.text.replace(/\s/g, '')).toBe(requestedUrlNotFound().replace(/\s/g, '')); //.replace(/\s/g, '') --> rimuoce gli spazi bianchi e le tabulazioni , il server agiunge degli spazi all'inizio facendo fallire il controllo 
+    expect(res.text.replace(/\s/g, '')).toBe(requestedUrlNotFound().replace(/\s/g, '')); //.replace(/\s/g, '') --> rimuoce gli spazi bianchi e le tabulazioni , il server agiunge degli spazi all'inizio facendo fallire il controllo
   });
   
   const testFnCallbacks = testAllPathByFileList(filesAndDirArray, () => server, options1);//Genera l'array di callback per i test
@@ -230,15 +230,13 @@ function requestedUrlNotFound() {
           <html>
           <head>
               <meta charset="UTF-8">
-              <meta http-equiv="X-UA-Compatible">
+              <meta http-equiv="X-UA-Compatible" content="IE=edge">
               <meta name="viewport" content="width=device-width, initial-scale=1.0">
               <title>URL not found</title>
           </head>
           <body>
           <h1>Not Found</h1>
-
           <h3>The requested URL was not found on this server.</h3>
-
           </body>
           </html>
       `;
@@ -259,17 +257,23 @@ function testAllPathByFileList(filesAndDirArray, getServer, options) {
           const server = getServer(); // Usa il getter per ottenere il server al momento dell'esecuzione
           const url = path.join(options.urlPrefix || '/', relativePath);
           const res = await supertest(server).get(url);
-          expect(res.status).toBe(200);
+
           // Se l'entry è un file, controlla il contenuto e il MIME type
           if (entry.type === 'file') {
+            expect(res.status).toBe(200);
             const content = fs.readFileSync(entry.fullPath, 'utf8');
             expect(res.type).toBe(entry.mimeType);
             expect(res.text).toBe(content);
           } else {//è una directory
-            expect(res.type).toBe('text/html');
-            expect(res.text).toContain('<!DOCTYPE html>');
             if( options.showDirContents === false ){
-              expect(res.text.replace(/\s/g, '')).toBe(requestedUrlNotFound().replace(/\s/g, '')); //.replace(/\s/g, '') --> rimuoce gli spazi bianchi e le tabulazioni , il server agiunge degli spazi all'inizio facendo fallire il controllo 
+              // FIX: Quando directory listing è disabilitato, restituisce 404
+              expect(res.status).toBe(404);
+              expect(res.type).toBe('text/html');
+              expect(res.text.replace(/\s/g, '')).toBe(requestedUrlNotFound().replace(/\s/g, '')); //.replace(/\s/g, '') --> rimuoce gli spazi bianchi e le tabulazioni , il server agiunge degli spazi all'inizio facendo fallire il controllo
+            } else {
+              expect(res.status).toBe(200);
+              expect(res.type).toBe('text/html');
+              expect(res.text).toContain('<!DOCTYPE html>');
             }
           }
         }

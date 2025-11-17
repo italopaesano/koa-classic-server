@@ -1,18 +1,16 @@
-# koa-smart-server
+# koa-classic-server
 
-**Formerly koa-classic-server**
+🔒 **Secure Koa middleware for serving static files** with Apache-like directory listing, template engine support, and comprehensive security fixes.
 
-🔒 **Secure and enhanced Koa middleware for serving static files** with Apache-like directory listing, template engine support, and comprehensive security fixes.
-
-[![npm version](https://img.shields.io/npm/v/koa-smart-server.svg)](https://www.npmjs.com/package/koa-smart-server)
+[![npm version](https://img.shields.io/npm/v/koa-classic-server.svg)](https://www.npmjs.com/package/koa-classic-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-71%20passing-brightgreen.svg)]()
 
-## ⚠️ Version 2.0 - Major Security Update
+## ⚠️ Version 1.2.0 - Critical Security Update
 
-Version 2.0.0 includes **critical security fixes** for path traversal vulnerabilities and other important improvements. **Upgrade immediately** if you're using version 1.x.
+Version 1.2.0 includes **critical security fixes** for path traversal vulnerabilities and other important improvements. **Upgrade immediately** if you're using version 1.1.0 or earlier.
 
-### What's New in 2.0
+### What's New in 1.2.0
 
 ✅ **Fixed Path Traversal Vulnerability** - No more unauthorized file access
 ✅ **Proper HTTP 404 Status Codes** - Standards-compliant error handling
@@ -25,7 +23,7 @@ Version 2.0.0 includes **critical security fixes** for path traversal vulnerabil
 
 ## Features
 
-koa-smart-server is a middleware for serving static files from a directory with Apache 2-like behavior. The contents of a folder on the server will be shown remotely and if you want to access a file, click on it.
+koa-classic-server is a middleware for serving static files from a directory with Apache 2-like behavior. The contents of a folder on the server will be shown remotely and if you want to access a file, click on it.
 
 **Key Features:**
 
@@ -40,19 +38,19 @@ koa-smart-server is a middleware for serving static files from a directory with 
 ## Installation
 
 ```bash
-npm install koa-smart-server
+npm install koa-classic-server
 ```
 
 ## Quick Start
 
 ```javascript
 const Koa = require('koa');
-const koaSmartServer = require('koa-smart-server');
+const koaClassicServer = require('koa-classic-server');
 
 const app = new Koa();
 
 // Serve files from "public" directory
-app.use(koaSmartServer(__dirname + '/public'));
+app.use(koaClassicServer(__dirname + '/public'));
 
 app.listen(3000);
 console.log('Server running on http://localhost:3000');
@@ -64,10 +62,10 @@ console.log('Server running on http://localhost:3000');
 
 ```javascript
 // CommonJS
-const koaSmartServer = require('koa-smart-server');
+const koaClassicServer = require('koa-classic-server');
 
 // ES Modules
-import koaSmartServer from 'koa-smart-server';
+import koaClassicServer from 'koa-classic-server';
 ```
 
 ### Basic Examples
@@ -76,11 +74,11 @@ import koaSmartServer from 'koa-smart-server';
 
 ```javascript
 const Koa = require('koa');
-const koaSmartServer = require('koa-smart-server');
+const koaClassicServer = require('koa-classic-server');
 
 const app = new Koa();
 
-app.use(koaSmartServer(__dirname + '/public', {
+app.use(koaClassicServer(__dirname + '/public', {
   showDirContents: true,
   index: 'index.html'
 }));
@@ -92,13 +90,13 @@ app.listen(3000);
 
 ```javascript
 const Koa = require('koa');
-const koaSmartServer = require('koa-smart-server');
+const koaClassicServer = require('koa-classic-server');
 
 const app = new Koa();
 
 // Files accessible under /static
 // e.g., http://localhost:3000/static/image.png
-app.use(koaSmartServer(__dirname + '/public', {
+app.use(koaClassicServer(__dirname + '/public', {
   urlPrefix: '/static',
   showDirContents: true
 }));
@@ -110,12 +108,12 @@ app.listen(3000);
 
 ```javascript
 const Koa = require('koa');
-const koaSmartServer = require('koa-smart-server');
+const koaClassicServer = require('koa-classic-server');
 const ejs = require('ejs');
 
 const app = new Koa();
 
-app.use(koaSmartServer(__dirname + '/views', {
+app.use(koaClassicServer(__dirname + '/views', {
   template: {
     render: async (ctx, next, filePath) => {
       ctx.body = await ejs.renderFile(filePath, {
@@ -132,7 +130,7 @@ app.listen(3000);
 
 ## API
 
-### koaSmartServer(rootDir, options)
+### koaClassicServer(rootDir, options)
 
 Creates a Koa middleware for serving static files.
 
@@ -196,7 +194,7 @@ const options = {
 
 ### Path Traversal Protection
 
-koa-smart-server 2.0 protects against path traversal attacks:
+koa-classic-server 1.2.0 protects against path traversal attacks:
 
 ```javascript
 // ❌ These requests are blocked (return 403 Forbidden)
@@ -210,7 +208,7 @@ GET /%2e%2e%2fpackage.json
 Use `urlsReserved` to protect sensitive directories:
 
 ```javascript
-app.use(koaSmartServer(__dirname + '/www', {
+app.use(koaClassicServer(__dirname + '/www', {
   urlsReserved: ['/config', '/private', '/.git', '/node_modules']
 }));
 ```
@@ -221,7 +219,7 @@ All filenames and paths in directory listings are HTML-escaped to prevent XSS at
 
 ## Error Handling
 
-koa-smart-server properly handles errors:
+koa-classic-server properly handles errors:
 
 - **404** - File/directory not found
 - **403** - Forbidden (path traversal attempts, reserved directories)
@@ -255,16 +253,20 @@ npm run test:security
 
 Requests to reserved paths are passed to the next middleware.
 
-## Migration from 1.x
+## Migration from 1.1.0
 
-See [CHANGELOG.md](./CHANGELOG.md) for detailed migration guide.
+Upgrading is simple! No code changes required:
 
-**Quick migration:**
+```bash
+npm update koa-classic-server
+```
 
-1. Update package name in package.json
-2. Ensure `rootDir` is an absolute path
-3. Update error handling (now returns proper status codes)
-4. Run tests
+**What changed:**
+- 404 status codes now correct (was 200)
+- Path traversal blocked (was allowed)
+- Template errors return 500 (was crash)
+
+See [CHANGELOG.md](./CHANGELOG.md) for detailed information.
 
 ## Complete Documentation
 
@@ -298,8 +300,9 @@ See [CHANGELOG.md](./CHANGELOG.md)
 - [Full Documentation](./DOCUMENTATION.md)
 - [Debug Report](./DEBUG_REPORT.md)
 - [Changelog](./CHANGELOG.md)
-- [npm Package](https://www.npmjs.com/package/koa-smart-server)
+- [Repository](https://github.com/italopaesano/koa-classic-server)
+- [npm Package](https://www.npmjs.com/package/koa-classic-server)
 
 ---
 
-**⚠️ Security Notice:** Version 2.0.0 fixes critical vulnerabilities. Update immediately if using 1.x.
+**⚠️ Security Notice:** Version 1.2.0 fixes critical vulnerabilities. Update immediately if using 1.1.0 or earlier.

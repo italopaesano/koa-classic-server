@@ -4,8 +4,8 @@ const fs = require("fs");
 const path = require("path");
 const mime = require("mime-types");
 
-// koa-smart-server - Enhanced version with security fixes and improved error handling
-// Version: 2.0.0
+// koa-classic-server - Enhanced version with security fixes and improved error handling
+// Version: 1.2.0
 // Fixes applied:
 // - Path Traversal vulnerability protection
 // - Status code 404 properly set

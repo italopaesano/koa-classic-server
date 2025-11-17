@@ -1,15 +1,15 @@
 # Changelog
 
-All notable changes to koa-smart-server (formerly koa-classic-server) will be documented in this file.
+All notable changes to koa-classic-server will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2025-11-17
+## [1.2.0] - 2025-11-17
 
-### 🎉 MAJOR RELEASE: koa-classic-server → koa-smart-server
+### 🎉 SECURITY & BUG FIX RELEASE
 
-This is a major release with significant security fixes and improvements. The module has been renamed from `koa-classic-server` to `koa-smart-server` to reflect the enhanced security and reliability.
+This release contains **critical security fixes** and important bug fixes. All users should upgrade immediately.
 
 ### 🔒 Security Fixes (CRITICAL)
 
@@ -105,75 +105,33 @@ This is a major release with significant security fixes and improvements. The mo
 
 ### 📦 Package Changes
 
-- **Name**: `koa-classic-server` → `koa-smart-server`
-- **Version**: `1.1.0` → `2.0.0`
-- **Description**: Enhanced with security focus
+- **Version**: `1.1.0` → `1.2.0`
+- **Description**: Enhanced with security fixes
 - **Keywords**: Added `secure`, `middleware`, `file-server`, `directory-listing`
 - **Scripts**: Added `test:security` command
 
 ### ⚠️ Breaking Changes
 
-#### Package Name
-```bash
-# Old
-npm install koa-classic-server
+**None** - This is a backwards-compatible release. However, behavior changes for security:
 
-# New
-npm install koa-smart-server
-```
-
-#### Behavior Changes
 1. **404 Status Codes**: Now properly returns 404 instead of 200 for missing resources
 2. **Path Traversal**: Requests with `../` now return 403 Forbidden instead of allowing access
 3. **Error Handling**: Template errors return 500 instead of crashing the server
 
-These are breaking changes only if you relied on the buggy behavior. The new behavior is correct and standards-compliant.
+These changes fix bugs and security issues. The new behavior is correct and standards-compliant.
 
 ### 🔄 Migration Guide
 
-#### From koa-classic-server 1.x to koa-smart-server 2.0
+No code changes required! Simply update:
 
-**Step 1**: Update package.json
-```diff
-{
-  "dependencies": {
--   "koa-classic-server": "^1.1.0"
-+   "koa-smart-server": "^2.0.0"
-  }
-}
-```
-
-**Step 2**: Update imports (no change needed if using same import name)
-```javascript
-// Both work the same way
-const koaClassicServer = require('koa-smart-server');
-// or
-import koaClassicServer from 'koa-smart-server';
-```
-
-**Step 3**: Verify rootDir is absolute
-```javascript
-// ❌ Old (relative path)
-app.use(koaClassicServer('./public'));
-
-// ✅ New (absolute path required)
-app.use(koaClassicServer(__dirname + '/public'));
-// or
-app.use(koaClassicServer(path.join(__dirname, 'public')));
-```
-
-**Step 4**: Update error handling expectations
-```javascript
-// Status codes now correct
-// 404 for missing files (was 200)
-// 403 for forbidden paths (was 200)
-// 500 for server errors (was crash)
-```
-
-**Step 5**: Test your application
 ```bash
-npm test
+npm update koa-classic-server
 ```
+
+**Recommended**: Verify that:
+1. `rootDir` is an absolute path (e.g., `__dirname + '/public'`)
+2. Your error handling expects proper 404/403/500 status codes
+3. Your tests pass with the new behavior
 
 ### 📊 Statistics
 
@@ -181,14 +139,14 @@ npm test
 - **Security vulnerabilities fixed**: 2 critical
 - **Bugs fixed**: 6
 - **Tests added**: 12 security tests
-- **Documentation added**: 1500+ lines
+- **Documentation added**: 2000+ lines
 - **Test coverage**: 71 tests passing
 
 ### 🙏 Credits
 
-- **Original Author**: Italo Paesano
-- **Security Audit**: Claude Code Analysis
-- **Testing**: Comprehensive test suite with Jest & Supertest
+- **Author**: Italo Paesano
+- **Security Audit**: Comprehensive code analysis
+- **Testing**: Jest & Supertest
 
 ---
 
@@ -201,10 +159,10 @@ npm test
 - URL prefixes
 - Reserved URLs
 
-### Known Issues (Fixed in 2.0.0)
-- Path traversal vulnerability
+### Known Issues (Fixed in 1.2.0)
+- Path traversal vulnerability ⚠️ CRITICAL
 - Missing 404 status codes
-- Unhandled template errors
+- Unhandled template errors ⚠️ CRITICAL
 - Race condition in file access
 - Fragile file extension extraction
 - Missing error handling
@@ -216,8 +174,8 @@ npm test
 - [Full Documentation](./DOCUMENTATION.md)
 - [Debug Report](./DEBUG_REPORT.md)
 - [Repository](https://github.com/italopaesano/koa-classic-server)
-- [npm Package](https://www.npmjs.com/package/koa-smart-server)
+- [npm Package](https://www.npmjs.com/package/koa-classic-server)
 
 ---
 
-**Note**: Version 2.0.0 is a recommended security update. All users should upgrade immediately.
+**⚠️ Security Notice**: Version 1.2.0 fixes critical vulnerabilities. Update immediately if using 1.1.0 or earlier.

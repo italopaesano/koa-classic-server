@@ -8,7 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const BENCHMARK_DIR = path.join(__dirname, '../benchmark-data');
+const BENCHMARK_DIR = path.join(__dirname, 'benchmark-data');
 
 console.log('🔧 Setting up benchmark environment...\n');
 

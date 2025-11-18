@@ -17,7 +17,7 @@ const koaClassicServer = require('../index.cjs');
 const path = require('path');
 const fs = require('fs');
 
-const BENCHMARK_DIR = path.join(__dirname, '../benchmark-data');
+const BENCHMARK_DIR = path.join(__dirname, 'benchmark-data');
 
 // Auto-setup benchmark data if not exists
 function setupBenchmarkData() {

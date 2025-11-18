@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>EJS Conditional Test</title>
+</head>
+<body>
+    <h1>Test Condizionali</h1>
+
+    <% if (isLoggedIn) { %>
+        <div class="user-panel">
+            <p>Benvenuto, <%= username %>!</p>
+            <p>Ruolo: <%= role %></p>
+        </div>
+    <% } else { %>
+        <div class="guest-panel">
+            <p>Benvenuto, ospite!</p>
+            <a href="/login">Login</a>
+        </div>
+    <% } %>
+
+    <% if (notifications > 0) { %>
+        <div class="notifications">
+            <p>Hai <%= notifications %> nuove notifiche</p>
+        </div>
+    <% } %>
+</body>
+</html>

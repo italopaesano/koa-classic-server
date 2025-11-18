@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title><%= pageTitle %></title>
+    <style>
+        .product { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+        .price { color: green; font-weight: bold; }
+        .discount { color: red; }
+    </style>
+</head>
+<body>
+    <h1><%= pageTitle %></h1>
+
+    <% if (user) { %>
+        <div class="user-info">
+            <p>Ciao, <%= user.name %>!</p>
+        </div>
+    <% } %>
+
+    <h2>Prodotti Disponibili</h2>
+
+    <% if (products && products.length > 0) { %>
+        <div class="products">
+        <% products.forEach(function(product) { %>
+            <div class="product" data-id="<%= product.id %>">
+                <h3><%= product.name %></h3>
+                <p><%= product.description %></p>
+                <p class="price">Prezzo: €<%= product.price.toFixed(2) %></p>
+
+                <% if (product.discount > 0) { %>
+                    <p class="discount">Sconto: <%= product.discount %>%</p>
+                    <p class="final-price">
+                        Prezzo finale: €<%= (product.price * (1 - product.discount / 100)).toFixed(2) %>
+                    </p>
+                <% } %>
+
+                <% if (product.inStock) { %>
+                    <button>Aggiungi al carrello</button>
+                <% } else { %>
+                    <p class="out-of-stock">Non disponibile</p>
+                <% } %>
+            </div>
+        <% }); %>
+        </div>
+
+        <p>Totale prodotti: <%= products.length %></p>
+    <% } else { %>
+        <p>Nessun prodotto disponibile al momento.</p>
+    <% } %>
+
+    <footer>
+        <p>Generato il: <%= new Date().toLocaleDateString('it-IT') %></p>
+    </footer>
+</body>
+</html>

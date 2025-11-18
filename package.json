@@ -11,8 +11,11 @@
     "start": "node index.cjs",
     "test": "jest",
     "test:security": "jest __tests__/security.test.js",
+    "test:performance": "jest __tests__/performance.test.js --runInBand",
+    "benchmark": "node benchmark.js",
+    "benchmark:save": "node benchmark.js --save",
+    "benchmark:setup": "node scripts/setup-benchmark.js",
     "loadConfig": "node ./customTest/loadConfig.util.js"
-
   },
   "keywords": [
     "koa",
@@ -27,9 +30,11 @@
   "author": "Italo Paesano",
   "license": "MIT",
   "dependencies": {
-    "koa": "^3.1.1"
+    "koa": "^3.1.1",
+    "mime-types": "^2.1.35"
   },
   "devDependencies": {
+    "autocannon": "^7.15.0",
     "inquirer": "^12.4.1",
     "jest": "^29.7.0",
     "supertest": "^7.0.0"

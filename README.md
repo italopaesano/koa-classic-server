@@ -19,7 +19,7 @@ Version 1.2.0 includes **critical security fixes** for path traversal vulnerabil
 ✅ **Race Condition Fixes** - Robust file access
 ✅ **146 Tests Passing** - Comprehensive test coverage including EJS integration
 
-[See full changelog](./CHANGELOG.md)
+[See full changelog](./docs/CHANGELOG.md)
 
 ## Features
 
@@ -138,7 +138,7 @@ app.use(koaClassicServer(__dirname + '/views', {
 app.listen(3000);
 ```
 
-See **[Template Engine Guide](./docs/template-engine/README.md)** for comprehensive template engine documentation with progressive examples.
+See **[Template Engine Guide](./docs/template-engine/TEMPLATE_ENGINE_GUIDE.md)** for comprehensive template engine documentation with progressive examples.
 
 ## API
 

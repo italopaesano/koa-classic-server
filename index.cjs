@@ -386,6 +386,18 @@ module.exports = function koaClassicServer(
             ctx.body = src;
         }
 
+        // Helper function to format file size in human-readable format
+        function formatSize(bytes) {
+            if (bytes === 0) return '0 B';
+            if (bytes === undefined || bytes === null) return '-';
+
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
         // OPTIMIZATION: show_dir is now async and uses array join instead of string concatenation
         async function show_dir(toOpen) {
             let dir;
@@ -413,6 +425,10 @@ module.exports = function koaClassicServer(
             // This reduces memory allocation from O(n²) to O(n)
             const parts = [];
             parts.push("<table>");
+            parts.push("<thead>");
+            parts.push("<tr><th>Name</th><th>Type</th><th>Size</th></tr>");
+            parts.push("</thead>");
+            parts.push("<tbody>");
 
             // Parent directory link
             if (pageHrefOutPrefix.origin + "/" != pageHrefOutPrefix.href) {
@@ -420,11 +436,11 @@ module.exports = function koaClassicServer(
                 a_pD.pop();
                 const parentDirectory = a_pD.join("/");
                 // Escape HTML to prevent XSS
-                parts.push(`<tr><td><a href="${escapeHtml(parentDirectory)}"><b>.. Parent Directory</b></a></td><td>DIR</td></tr>`);
+                parts.push(`<tr><td><a href="${escapeHtml(parentDirectory)}"><b>.. Parent Directory</b></a></td><td>DIR</td><td>-</td></tr>`);
             }
 
             if (dir.length == 0) {
-                parts.push(`<tr><td>empty folder</td><td></td></tr>`);
+                parts.push(`<tr><td>empty folder</td><td></td><td></td></tr>`);
             } else {
                 let a_sy = Object.getOwnPropertySymbols(dir[0]);
                 const sy_type = a_sy[0];
@@ -453,17 +469,34 @@ module.exports = function koaClassicServer(
                         itemUri = `${pageHref.href}/${encodeURIComponent(s_name)}`;
                     }
 
+                    // Get file size
+                    let sizeStr = '-';
+                    try {
+                        const itemStat = await fs.promises.stat(itemPath);
+                        if (type == 1) {
+                            // File - show size
+                            sizeStr = formatSize(itemStat.size);
+                        } else {
+                            // Directory - show dash
+                            sizeStr = '-';
+                        }
+                    } catch (error) {
+                        // If stat fails, show dash
+                        sizeStr = '-';
+                    }
+
                     // Check if this is a reserved directory
                     if (pageHrefOutPrefix.pathname == '/' && options.urlsReserved.includes('/' + s_name) && (type == 2 || type == 3)) {
-                        parts.push(`${rowStart} ${escapeHtml(s_name)}</td> <td> DIR BUT RESERVED</td></tr>`);
+                        parts.push(`${rowStart} ${escapeHtml(s_name)}</td> <td> DIR BUT RESERVED</td><td>${sizeStr}</td></tr>`);
                     } else {
                         // Escape HTML to prevent XSS in filenames
                         const mimeType = type == 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
-                        parts.push(`${rowStart} <a href="${escapeHtml(itemUri)}">${escapeHtml(s_name)}</a> </td> <td> ${escapeHtml(mimeType)} </td></tr>`);
+                        parts.push(`${rowStart} <a href="${escapeHtml(itemUri)}">${escapeHtml(s_name)}</a> </td> <td> ${escapeHtml(mimeType)} </td><td>${sizeStr}</td></tr>`);
                     }
                 }
             }
 
+            parts.push("</tbody>");
             parts.push("</table>");
 
             // OPTIMIZATION: Single join operation instead of multiple concatenations
@@ -477,6 +510,48 @@ module.exports = function koaClassicServer(
                         <meta http-equiv="X-UA-Compatible" content="IE=edge">
                         <meta name="viewport" content="width=device-width, initial-scale=1.0">
                         <title>Index of ${escapeHtml(pageHrefOutPrefix.pathname)}</title>
+                        <style>
+                            body {
+                                font-family: Arial, sans-serif;
+                                margin: 20px;
+                            }
+                            h1 {
+                                border-bottom: 1px solid #ddd;
+                                padding-bottom: 10px;
+                            }
+                            table {
+                                border-collapse: collapse;
+                                width: 100%;
+                                max-width: 800px;
+                            }
+                            thead {
+                                background-color: #f5f5f5;
+                                border-bottom: 2px solid #ddd;
+                            }
+                            th {
+                                text-align: left;
+                                padding: 10px;
+                                font-weight: bold;
+                                border-bottom: 2px solid #ddd;
+                            }
+                            td {
+                                padding: 8px 10px;
+                                border-bottom: 1px solid #eee;
+                            }
+                            tr:hover {
+                                background-color: #f9f9f9;
+                            }
+                            a {
+                                color: #0066cc;
+                                text-decoration: none;
+                            }
+                            a:hover {
+                                text-decoration: underline;
+                            }
+                            th:nth-child(1), td:nth-child(1) { width: 50%; }
+                            th:nth-child(2), td:nth-child(2) { width: 30%; }
+                            th:nth-child(3), td:nth-child(3) { width: 20%; text-align: right; }
+                        </style>
                     </head>
                     <body>
                     <h1>Index of ${escapeHtml(pageHrefOutPrefix.pathname)}</h1>

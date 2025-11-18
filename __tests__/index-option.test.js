@@ -68,6 +68,46 @@ describe('Enhanced Index Option Tests', () => {
     });
 
     describe('Array of Strings - Priority order', () => {
+        test('Priority order - index1.html searched before index2.html', async () => {
+            // Create both files with distinctive content
+            fs.writeFileSync(path.join(tempDir, 'index1.html'), '<h1>FILE 1 - FIRST PRIORITY</h1>');
+            fs.writeFileSync(path.join(tempDir, 'index2.html'), '<h1>FILE 2 - SECOND PRIORITY</h1>');
+            fs.writeFileSync(path.join(tempDir, 'index3.html'), '<h1>FILE 3 - THIRD PRIORITY</h1>');
+
+            app = new Koa();
+            app.use(koaClassicServer(tempDir, {
+                index: ['index1.html', 'index2.html', 'index3.html']
+            }));
+            server = app.listen();
+
+            const res = await supertest(server).get('/');
+            expect(res.status).toBe(200);
+            // Must serve index1.html (first in array)
+            expect(res.text).toContain('FILE 1 - FIRST PRIORITY');
+            // Must NOT serve index2.html or index3.html
+            expect(res.text).not.toContain('FILE 2');
+            expect(res.text).not.toContain('FILE 3');
+        });
+
+        test('Priority order - index2.html served when index1.html missing', async () => {
+            // Only create index2.html and index3.html (index1.html missing)
+            fs.writeFileSync(path.join(tempDir, 'index2.html'), '<h1>FILE 2 - NOW FIRST AVAILABLE</h1>');
+            fs.writeFileSync(path.join(tempDir, 'index3.html'), '<h1>FILE 3 - STILL THIRD</h1>');
+
+            app = new Koa();
+            app.use(koaClassicServer(tempDir, {
+                index: ['index1.html', 'index2.html', 'index3.html']
+            }));
+            server = app.listen();
+
+            const res = await supertest(server).get('/');
+            expect(res.status).toBe(200);
+            // Must serve index2.html (first available in array)
+            expect(res.text).toContain('FILE 2 - NOW FIRST AVAILABLE');
+            // Must NOT serve index3.html
+            expect(res.text).not.toContain('FILE 3');
+        });
+
         test('First match wins - index.html over index.htm', async () => {
             fs.writeFileSync(path.join(tempDir, 'index.html'), '<h1>This is HTML version</h1>');
             fs.writeFileSync(path.join(tempDir, 'index.htm'), '<h1>This is HTM version</h1>');

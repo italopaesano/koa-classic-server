@@ -30,12 +30,14 @@ module.exports = function koaClassicServer(
      opts = {
         method: ['GET'], // Supported methods, otherwise next() will be called
         showDirContents: true, // Show or hide directory contents
-        index: "", // Index file name(s) - can be:
-                   //   - String: "index.html"
-                   //   - Array of strings: ["index.html", "index.htm", "default.html"]
-                   //   - Array of RegExp: [/index\.html/i, /default\.(html|htm)/i]
-                   //   - Mixed array: ["index.html", /index\.[eE][jJ][sS]/]
-                   // Priority is determined by array order (first match wins)
+        index: ["index.html"], // Index file name(s) - ARRAY FORMAT (recommended):
+                               //   - Array of strings: ["index.html", "index.htm", "default.html"]
+                               //   - Array of RegExp: [/index\.html/i, /default\.(html|htm)/i]
+                               //   - Mixed array: ["index.html", /index\.[eE][jJ][sS]/]
+                               // Priority is determined by array order (first match wins)
+                               //
+                               // DEPRECATED: String format "index.html" is still supported but
+                               // will be removed in future versions. Use array format instead.
         urlPrefix: "", // URL path prefix
         urlsReserved: [], // Reserved paths (first level only)
         template: {
@@ -67,6 +69,16 @@ module.exports = function koaClassicServer(
 
     // Normalize index option to array format
     if (typeof options.index == 'string') {
+        // DEPRECATION WARNING: String format is deprecated
+        if (options.index) {
+            console.warn(
+                '\x1b[33m%s\x1b[0m',
+                '[koa-classic-server] DEPRECATION WARNING: Passing a string to the "index" option is deprecated and may be removed in future versions.\n' +
+                `  Current usage: index: "${options.index}"\n` +
+                `  Recommended:   index: ["${options.index}"]\n` +
+                '  Please update your configuration to use an array format.'
+            );
+        }
         // Single string → convert to array with one element
         options.index = options.index ? [options.index] : [];
     } else if (Array.isArray(options.index)) {

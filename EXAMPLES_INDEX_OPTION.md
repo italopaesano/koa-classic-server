@@ -1,5 +1,21 @@
 # Enhanced Index Option - Esempi Pratici
 
+## ⚠️ Formato Raccomandato: Array
+
+**IMPORTANTE:** L'opzione `index` deve essere usata in **formato array**. Il formato stringa è **deprecato** e verrà rimosso in versioni future.
+
+```javascript
+// ✅ RACCOMANDATO
+index: ['index.html']
+index: ['index.html', 'index.htm']
+index: [/index\.html/i]
+
+// ⚠️ DEPRECATO (genera warning)
+index: 'index.html'  // NON usare! Usa ['index.html'] invece
+```
+
+---
+
 ## Opzione index con RegExp - Casi d'uso reali
 
 ### 1. Case-insensitive matching (Windows/Mac filesystems)
@@ -363,13 +379,14 @@ app.listen(3000, () => {
 
 L'opzione `index` supporta:
 
-| Tipo | Esempio | Caso d'uso |
-|------|---------|------------|
-| String | `"index.html"` | Exact match, massima performance |
-| Array di stringhe | `["index.html", "index.htm"]` | Priorità definita, fast |
-| RegExp singola | `/index\.html/i` | Case-insensitive |
-| Array di RegExp | `[/index\.html/i, /default\.htm/i]` | Pattern multipli |
-| Mixed array | `["index.html", /INDEX\.HTM/i]` | Best of both worlds |
+| Tipo | Esempio | Caso d'uso | Stato |
+|------|---------|------------|-------|
+| **Array di stringhe** | `["index.html", "index.htm"]` | Priorità definita, performance ottimale | ✅ **Raccomandato** |
+| **Array di RegExp** | `[/index\.html/i, /default\.htm/i]` | Pattern multipli, case-insensitive | ✅ **Raccomandato** |
+| **Mixed array** | `["index.html", /INDEX\.HTM/i]` | Best of both worlds | ✅ **Raccomandato** |
+| ~~String~~ | ~~`"index.html"`~~ | Singolo file | ⚠️ **DEPRECATO** |
+
+**Nota:** Il formato stringa (`"index.html"`) è deprecato e genera un warning. Verrà rimosso in versioni future. Usa il formato array `["index.html"]` invece.
 
 ---
 

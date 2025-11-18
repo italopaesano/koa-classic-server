@@ -1,5 +1,29 @@
 # Index Option - Comportamento di Priorità
 
+## ⚠️ Formato Raccomandato: Array
+
+**L'opzione `index` deve essere usata in formato array.**
+
+```javascript
+// ✅ RACCOMANDATO (Array format)
+index: ['index.html']
+index: ['index.html', 'index.htm', 'default.html']
+index: [/index\.html/i]
+
+// ⚠️ DEPRECATO (String format - verrà rimosso in futuro)
+index: 'index.html'  // Genera un warning, usa ['index.html'] invece
+```
+
+**Nota importante:** Il formato stringa (`index: 'index.html'`) è **deprecato** e verrà rimosso in versioni future. Quando viene usato, viene mostrato un warning in console:
+
+```
+[koa-classic-server] DEPRECATION WARNING: Passing a string to the "index" option is deprecated...
+  Current usage: index: "index.html"
+  Recommended:   index: ["index.html"]
+```
+
+---
+
 ## Principio Fondamentale: "First Match Wins"
 
 L'opzione `index` utilizza il principio **"first match wins"** (primo match vince): l'array viene cercato **esattamente nell'ordine** specificato, e il **primo file trovato** viene servito.

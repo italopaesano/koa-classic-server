@@ -80,7 +80,7 @@ const app = new Koa();
 
 app.use(koaClassicServer(__dirname + '/public', {
   showDirContents: true,
-  index: 'index.html'
+  index: ['index.html']  // Array format (recommended)
 }));
 
 app.listen(3000);
@@ -151,16 +151,19 @@ const options = {
   // Show directory contents (default: true)
   showDirContents: true,
 
-  // Index file configuration (default: '')
-  // Supports: string, array of strings, array of RegExp, or mixed array
-  // Examples:
-  //   - String: 'index.html'
-  //   - Array: ['index.html', 'index.htm', 'default.html']
-  //   - RegExp: [/index\.html/i] (case-insensitive)
-  //   - Mixed: ['index.html', /INDEX\.HTM/i]
+  // Index file configuration (default: [])
+  // RECOMMENDED: Use array format (string format is deprecated)
+  // Formats:
+  //   - Array of strings: ['index.html', 'index.htm', 'default.html']
+  //   - Array of RegExp: [/index\.html/i] (case-insensitive)
+  //   - Mixed array: ['index.html', /INDEX\.HTM/i]
   // Priority: First match wins (array order determines search priority)
+  //
+  // DEPRECATED: String format 'index.html' still works but will be removed
+  // in future versions. Please use array format: ['index.html']
+  //
   // See INDEX_OPTION_PRIORITY.md for detailed behavior documentation
-  index: 'index.html',
+  index: ['index.html'],
 
   // URL path prefix (default: '')
   // Files will be served under this prefix

@@ -620,15 +620,6 @@ module.exports = function koaClassicServer(
                             a:hover {
                                 text-decoration: underline;
                             }
-                            th a {
-                                color: #000;
-                                font-weight: bold;
-                                display: block;
-                                cursor: pointer;
-                            }
-                            th a:hover {
-                                background-color: #e0e0e0;
-                            }
                             th:nth-child(1), td:nth-child(1) { width: 50%; }
                             th:nth-child(2), td:nth-child(2) { width: 30%; }
                             th:nth-child(3), td:nth-child(3) { width: 20%; text-align: right; }

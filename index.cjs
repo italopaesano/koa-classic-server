@@ -65,10 +65,10 @@ module.exports = function koaClassicServer(
     options.template = opts.template || {};
 
     options.method = Array.isArray(options.method) ? options.method : ['GET'];
-    options.showDirContents = typeof options.showDirContents == 'boolean' ? options.showDirContents : true;
+    options.showDirContents = typeof options.showDirContents === 'boolean' ? options.showDirContents : true;
 
     // Normalize index option to array format
-    if (typeof options.index == 'string') {
+    if (typeof options.index === 'string') {
         // DEPRECATION WARNING: String format is deprecated
         if (options.index) {
             console.warn(
@@ -91,14 +91,14 @@ module.exports = function koaClassicServer(
         options.index = [];
     }
 
-    options.urlPrefix = typeof options.urlPrefix == 'string' ? options.urlPrefix : "";
+    options.urlPrefix = typeof options.urlPrefix === 'string' ? options.urlPrefix : "";
     options.urlsReserved = Array.isArray(options.urlsReserved) ? options.urlsReserved : [];
-    options.template.render = (options.template.render == undefined || typeof options.template.render == 'function') ? options.template.render : undefined;
+    options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
 
     // OPTIMIZATION: HTTP Caching options
-    options.cacheMaxAge = typeof options.cacheMaxAge == 'number' && options.cacheMaxAge >= 0 ? options.cacheMaxAge : 3600;
-    options.enableCaching = typeof options.enableCaching == 'boolean' ? options.enableCaching : true;
+    options.cacheMaxAge = typeof options.cacheMaxAge === 'number' && options.cacheMaxAge >= 0 ? options.cacheMaxAge : 3600;
+    options.enableCaching = typeof options.enableCaching === 'boolean' ? options.enableCaching : true;
 
     return async (ctx, next) => {
         // Check if method is allowed
@@ -109,7 +109,7 @@ module.exports = function koaClassicServer(
 
         // Normalize URL (remove trailing slash)
         let pageHref = '';
-        if (ctx.href.charAt(ctx.href.length - 1) == '/') {
+        if (ctx.href.charAt(ctx.href.length - 1) === '/') {
             pageHref = new URL(ctx.href.slice(0, -1));
         } else {
             pageHref = new URL(ctx.href);
@@ -120,7 +120,7 @@ module.exports = function koaClassicServer(
         const a_urlPrefix = options.urlPrefix.split("/");
 
         for (const key in a_urlPrefix) {
-            if (a_urlPrefix[key] != a_pathname[key]) {
+            if (a_urlPrefix[key] !== a_pathname[key]) {
                 await next();
                 return;
             }
@@ -128,7 +128,7 @@ module.exports = function koaClassicServer(
 
         // Create pageHrefOutPrefix without URL prefix
         let pageHrefOutPrefix = pageHref;
-        if (options.urlPrefix != "") {
+        if (options.urlPrefix !== "") {
             let a_pathnameOutPrefix = a_pathname.slice(a_urlPrefix.length);
             let s_pathnameOutPrefix = a_pathnameOutPrefix.join("/");
             let hrefOutPrefix = pageHref.origin + '/' + s_pathnameOutPrefix;
@@ -139,7 +139,7 @@ module.exports = function koaClassicServer(
         if (Array.isArray(options.urlsReserved) && options.urlsReserved.length > 0) {
             const a_pathnameOutPrefix = pageHrefOutPrefix.pathname.split("/");
             for (const value of options.urlsReserved) {
-                if (a_pathnameOutPrefix[1] == value.substring(1)) {
+                if (a_pathnameOutPrefix[1] === value.substring(1)) {
                     await next();
                     return;
                 }
@@ -149,7 +149,7 @@ module.exports = function koaClassicServer(
         // Path Traversal Protection
         // Construct safe file path
         let requestedPath = "";
-        if (pageHrefOutPrefix.pathname == "/") {
+        if (pageHrefOutPrefix.pathname === "/") {
             requestedPath = "";
         } else {
             requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
@@ -459,7 +459,7 @@ module.exports = function koaClassicServer(
             parts.push("<tbody>");
 
             // Parent directory link
-            if (pageHrefOutPrefix.origin + "/" != pageHrefOutPrefix.href) {
+            if (pageHrefOutPrefix.origin + "/" !== pageHrefOutPrefix.href) {
                 const a_pD = pageHref.href.split("/");
                 a_pD.pop();
                 const parentDirectory = a_pD.join("/");
@@ -467,7 +467,7 @@ module.exports = function koaClassicServer(
                 parts.push(`<tr><td><a href="${escapeHtml(parentDirectory)}"><b>.. Parent Directory</b></a></td><td>DIR</td><td>-</td></tr>`);
             }
 
-            if (dir.length == 0) {
+            if (dir.length === 0) {
                 parts.push(`<tr><td>empty folder</td><td></td><td></td></tr>`);
             } else {
                 let a_sy = Object.getOwnPropertySymbols(dir[0]);
@@ -486,7 +486,7 @@ module.exports = function koaClassicServer(
 
                     const itemPath = path.join(toOpen, s_name);
                     let itemUri = "";
-                    if (pageHref.href == pageHref.origin + options.urlPrefix + "/") {
+                    if (pageHref.href === pageHref.origin + options.urlPrefix + "/") {
                         itemUri = `${pageHref.origin + options.urlPrefix}/${encodeURIComponent(s_name)}`;
                     } else {
                         itemUri = `${pageHref.href}/${encodeURIComponent(s_name)}`;
@@ -497,7 +497,7 @@ module.exports = function koaClassicServer(
                     let sizeBytes = 0;
                     try {
                         const itemStat = await fs.promises.stat(itemPath);
-                        if (type == 1) {
+                        if (type === 1) {
                             sizeBytes = itemStat.size;
                             sizeStr = formatSize(sizeBytes);
                         } else {
@@ -507,8 +507,8 @@ module.exports = function koaClassicServer(
                         sizeStr = '-';
                     }
 
-                    const mimeType = type == 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
-                    const isReserved = pageHrefOutPrefix.pathname == '/' && options.urlsReserved.includes('/' + s_name) && (type == 2 || type == 3);
+                    const mimeType = type === 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
+                    const isReserved = pageHrefOutPrefix.pathname === '/' && options.urlsReserved.includes('/' + s_name) && (type === 2 || type === 3);
 
                     items.push({
                         name: s_name,
@@ -554,7 +554,7 @@ module.exports = function koaClassicServer(
                 // Generate HTML for sorted items
                 for (const item of items) {
                     let rowStart = '';
-                    if (item.type == 1) {
+                    if (item.type === 1) {
                         rowStart = `<tr><td> FILE `;
                     } else {
                         rowStart = `<tr><td>`;

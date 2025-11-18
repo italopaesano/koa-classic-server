@@ -282,11 +282,11 @@ See [CHANGELOG.md](./CHANGELOG.md) for detailed information.
 
 For complete documentation with all features, examples, troubleshooting, and best practices, see:
 
-- **[DOCUMENTATION.md](./DOCUMENTATION.md)** - Complete API reference and usage guide
-- **[INDEX_OPTION_PRIORITY.md](./INDEX_OPTION_PRIORITY.md)** - Detailed priority behavior for `index` option (string, array, RegExp)
-- **[EXAMPLES_INDEX_OPTION.md](./EXAMPLES_INDEX_OPTION.md)** - 10 practical examples of `index` option with RegExp
-- **[PERFORMANCE_ANALYSIS.md](./PERFORMANCE_ANALYSIS.md)** - Performance optimization analysis
-- **[PERFORMANCE_COMPARISON.md](./PERFORMANCE_COMPARISON.md)** - Before/after performance benchmarks
+- **[DOCUMENTATION.md](./docs/DOCUMENTATION.md)** - Complete API reference and usage guide
+- **[INDEX_OPTION_PRIORITY.md](./docs/INDEX_OPTION_PRIORITY.md)** - Detailed priority behavior for `index` option (string, array, RegExp)
+- **[EXAMPLES_INDEX_OPTION.md](./docs/EXAMPLES_INDEX_OPTION.md)** - 10 practical examples of `index` option with RegExp
+- **[PERFORMANCE_ANALYSIS.md](./docs/PERFORMANCE_ANALYSIS.md)** - Performance optimization analysis
+- **[PERFORMANCE_COMPARISON.md](./docs/PERFORMANCE_COMPARISON.md)** - Before/after performance benchmarks
 
 ## Contributing
 
@@ -295,9 +295,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Known Limitations
 
 - Reserved URLs only work for first-level directories
-- Single index file name (no fallback array)
 
-See [DEBUG_REPORT.md](./DEBUG_REPORT.md) for technical details.
+See [DEBUG_REPORT.md](./docs/DEBUG_REPORT.md) for technical details.
 
 ## License
 
@@ -313,8 +312,8 @@ See [CHANGELOG.md](./CHANGELOG.md)
 
 ## Links
 
-- [Full Documentation](./DOCUMENTATION.md)
-- [Debug Report](./DEBUG_REPORT.md)
+- [Full Documentation](./docs/DOCUMENTATION.md)
+- [Debug Report](./docs/DEBUG_REPORT.md)
 - [Changelog](./CHANGELOG.md)
 - [Repository](https://github.com/italopaesano/koa-classic-server)
 - [npm Package](https://www.npmjs.com/package/koa-classic-server)

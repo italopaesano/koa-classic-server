@@ -12,10 +12,10 @@
     "test": "jest",
     "test:security": "jest __tests__/security.test.js",
     "test:performance": "jest __tests__/performance.test.js --runInBand",
-    "benchmark": "node benchmark.js",
-    "benchmark:save": "node benchmark.js --save",
-    "benchmark:setup": "node scripts/setup-benchmark.js",
-    "loadConfig": "node ./customTest/loadConfig.util.js"
+    "benchmark": "node __tests__/benchmark.js",
+    "benchmark:save": "node __tests__/benchmark.js --save",
+    "benchmark:setup": "node __tests__/setup-benchmark.js",
+    "loadConfig": "node __tests__/customTest/loadConfig.util.js"
   },
   "keywords": [
     "koa",

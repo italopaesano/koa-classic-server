@@ -193,7 +193,7 @@ module.exports = function koaClassicServer(
                 }
 
                 // No index file found, show directory listing
-                ctx.body = await show_dir(toOpen);
+                ctx.body = await show_dir(toOpen, ctx);
             } else {
                 // Directory listing disabled
                 ctx.status = 404;
@@ -399,7 +399,7 @@ module.exports = function koaClassicServer(
         }
 
         // OPTIMIZATION: show_dir is now async and uses array join instead of string concatenation
-        async function show_dir(toOpen) {
+        async function show_dir(toOpen, ctx) {
             let dir;
             try {
                 // OPTIMIZATION: Use async readdir (non-blocking)
@@ -421,12 +421,40 @@ module.exports = function koaClassicServer(
                 `;
             }
 
+            // Get sorting parameters from query string
+            const sortBy = ctx.query.sort || 'name';
+            const sortOrder = ctx.query.order || 'asc';
+
+            // Build base URL for sorting links (without query params)
+            const baseUrl = pageHrefOutPrefix.pathname;
+
+            // Helper to create sorting URL
+            function getSortUrl(column) {
+                let newOrder = 'asc';
+                if (sortBy === column && sortOrder === 'asc') {
+                    newOrder = 'desc';
+                }
+                return `${baseUrl}?sort=${column}&order=${newOrder}`;
+            }
+
+            // Helper to get sort indicator
+            function getSortIndicator(column) {
+                if (sortBy === column) {
+                    return sortOrder === 'asc' ? ' ↑' : ' ↓';
+                }
+                return '';
+            }
+
             // OPTIMIZATION: Use array + join instead of string concatenation
             // This reduces memory allocation from O(n²) to O(n)
             const parts = [];
             parts.push("<table>");
             parts.push("<thead>");
-            parts.push("<tr><th>Name</th><th>Type</th><th>Size</th></tr>");
+            parts.push("<tr>");
+            parts.push(`<th><a href="${escapeHtml(getSortUrl('name'))}">Name${getSortIndicator('name')}</a></th>`);
+            parts.push(`<th><a href="${escapeHtml(getSortUrl('type'))}">Type${getSortIndicator('type')}</a></th>`);
+            parts.push(`<th><a href="${escapeHtml(getSortUrl('size'))}">Size${getSortIndicator('size')}</a></th>`);
+            parts.push("</tr>");
             parts.push("</thead>");
             parts.push("<tbody>");
 
@@ -445,20 +473,15 @@ module.exports = function koaClassicServer(
                 let a_sy = Object.getOwnPropertySymbols(dir[0]);
                 const sy_type = a_sy[0];
 
+                // Collect all items data first (for sorting)
+                const items = [];
                 for (const item of dir) {
                     const s_name = item.name.toString();
                     const type = item[sy_type];
 
-                    let rowStart = '';
-                    if (type == 1) {
-                        // File
-                        rowStart = `<tr><td> FILE `;
-                    } else if (type == 2 || type == 3) {
-                        // Directory or symbolic link
-                        rowStart = `<tr><td>`;
-                    } else {
+                    if (type !== 1 && type !== 2 && type !== 3) {
                         console.error("Unknown file type:", type);
-                        continue; // Skip unknown types instead of throwing
+                        continue;
                     }
 
                     const itemPath = path.join(toOpen, s_name);
@@ -471,27 +494,76 @@ module.exports = function koaClassicServer(
 
                     // Get file size
                     let sizeStr = '-';
+                    let sizeBytes = 0;
                     try {
                         const itemStat = await fs.promises.stat(itemPath);
                         if (type == 1) {
-                            // File - show size
-                            sizeStr = formatSize(itemStat.size);
+                            sizeBytes = itemStat.size;
+                            sizeStr = formatSize(sizeBytes);
                         } else {
-                            // Directory - show dash
                             sizeStr = '-';
                         }
                     } catch (error) {
-                        // If stat fails, show dash
                         sizeStr = '-';
                     }
 
-                    // Check if this is a reserved directory
-                    if (pageHrefOutPrefix.pathname == '/' && options.urlsReserved.includes('/' + s_name) && (type == 2 || type == 3)) {
-                        parts.push(`${rowStart} ${escapeHtml(s_name)}</td> <td> DIR BUT RESERVED</td><td>${sizeStr}</td></tr>`);
+                    const mimeType = type == 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
+                    const isReserved = pageHrefOutPrefix.pathname == '/' && options.urlsReserved.includes('/' + s_name) && (type == 2 || type == 3);
+
+                    items.push({
+                        name: s_name,
+                        type: type,
+                        mimeType: mimeType,
+                        sizeStr: sizeStr,
+                        sizeBytes: sizeBytes,
+                        itemUri: itemUri,
+                        isReserved: isReserved
+                    });
+                }
+
+                // Sort items based on query parameters
+                items.sort((a, b) => {
+                    let comparison = 0;
+
+                    if (sortBy === 'name') {
+                        comparison = a.name.localeCompare(b.name);
+                    } else if (sortBy === 'type') {
+                        // Sort directories first, then by mime type
+                        if (a.type === 2 && b.type !== 2) {
+                            comparison = -1;
+                        } else if (a.type !== 2 && b.type === 2) {
+                            comparison = 1;
+                        } else {
+                            comparison = a.mimeType.localeCompare(b.mimeType);
+                        }
+                    } else if (sortBy === 'size') {
+                        // Directories always at top when sorting by size
+                        if (a.type === 2 && b.type !== 2) {
+                            comparison = -1;
+                        } else if (a.type !== 2 && b.type === 2) {
+                            comparison = 1;
+                        } else {
+                            comparison = a.sizeBytes - b.sizeBytes;
+                        }
+                    }
+
+                    // Apply sort order (asc/desc)
+                    return sortOrder === 'desc' ? -comparison : comparison;
+                });
+
+                // Generate HTML for sorted items
+                for (const item of items) {
+                    let rowStart = '';
+                    if (item.type == 1) {
+                        rowStart = `<tr><td> FILE `;
                     } else {
-                        // Escape HTML to prevent XSS in filenames
-                        const mimeType = type == 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
-                        parts.push(`${rowStart} <a href="${escapeHtml(itemUri)}">${escapeHtml(s_name)}</a> </td> <td> ${escapeHtml(mimeType)} </td><td>${sizeStr}</td></tr>`);
+                        rowStart = `<tr><td>`;
+                    }
+
+                    if (item.isReserved) {
+                        parts.push(`${rowStart} ${escapeHtml(item.name)}</td> <td> DIR BUT RESERVED</td><td>${item.sizeStr}</td></tr>`);
+                    } else {
+                        parts.push(`${rowStart} <a href="${escapeHtml(item.itemUri)}">${escapeHtml(item.name)}</a> </td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
                     }
                 }
             }
@@ -547,6 +619,15 @@ module.exports = function koaClassicServer(
                             }
                             a:hover {
                                 text-decoration: underline;
+                            }
+                            th a {
+                                color: #000;
+                                font-weight: bold;
+                                display: block;
+                                cursor: pointer;
+                            }
+                            th a:hover {
+                                background-color: #e0e0e0;
                             }
                             th:nth-child(1), td:nth-child(1) { width: 50%; }
                             th:nth-child(2), td:nth-child(2) { width: 30%; }

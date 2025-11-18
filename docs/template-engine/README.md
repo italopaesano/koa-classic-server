@@ -37,6 +37,8 @@ Quando una richiesta arriva per un file con estensione specificata in `template.
 
 ### Configurazione Base
 
+La configurazione minima richiede due elementi: l'array `ext` con le estensioni da processare e la funzione `render`.
+
 ```javascript
 const Koa = require('koa');
 const koaClassicServer = require('koa-classic-server');
@@ -49,13 +51,11 @@ app.use(koaClassicServer(__dirname + '/public', {
     // Array di estensioni da processare
     ext: ['ejs', 'EJS'],
 
-    // Funzione di rendering
+    // Funzione di rendering (configurazione minima)
     render: async (ctx, next, filePath) => {
       try {
-        ctx.body = await ejs.renderFile(filePath, {
-          title: 'My App',
-          user: ctx.state.user
-        });
+        // Nessun dato passato - il template deve essere statico
+        ctx.body = await ejs.renderFile(filePath, {});
         ctx.type = 'text/html';
       } catch (error) {
         console.error('Template error:', error);
@@ -68,6 +68,11 @@ app.use(koaClassicServer(__dirname + '/public', {
 
 app.listen(3000);
 ```
+
+**Note:**
+- Questa configurazione base passa un oggetto vuoto `{}` al template
+- Funziona solo con template che non usano variabili
+- Per passare dati al template, vedi le sezioni successive: [Quick Start](#quick-start) e [Esempi Incrementali](#esempi-incrementali)
 
 ### Parametri
 

@@ -295,11 +295,13 @@ See [CHANGELOG.md](./CHANGELOG.md) for detailed information.
 For complete documentation with all features, examples, troubleshooting, and best practices, see:
 
 - **[DOCUMENTATION.md](./docs/DOCUMENTATION.md)** - Complete API reference and usage guide
-- **[TEMPLATE_ENGINE_GUIDE.md](./docs/TEMPLATE_ENGINE_GUIDE.md)** - Complete guide to template engine integration (EJS, Pug, Handlebars, Nunjucks)
+- **[FLOW_DIAGRAM.md](./docs/FLOW_DIAGRAM.md)** - Visual flow diagrams and code execution paths
+- **[TEMPLATE_ENGINE_GUIDE.md](./docs/template-engine/TEMPLATE_ENGINE_GUIDE.md)** - Complete guide to template engine integration (EJS, Pug, Handlebars, Nunjucks)
 - **[INDEX_OPTION_PRIORITY.md](./docs/INDEX_OPTION_PRIORITY.md)** - Detailed priority behavior for `index` option (string, array, RegExp)
 - **[EXAMPLES_INDEX_OPTION.md](./docs/EXAMPLES_INDEX_OPTION.md)** - 10 practical examples of `index` option with RegExp
 - **[PERFORMANCE_ANALYSIS.md](./docs/PERFORMANCE_ANALYSIS.md)** - Performance optimization analysis
 - **[PERFORMANCE_COMPARISON.md](./docs/PERFORMANCE_COMPARISON.md)** - Before/after performance benchmarks
+- **[CODE_REVIEW.md](./docs/CODE_REVIEW.md)** - Code quality analysis and review
 
 ## Contributing
 

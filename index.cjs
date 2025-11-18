@@ -30,7 +30,12 @@ module.exports = function koaClassicServer(
      opts = {
         method: ['GET'], // Supported methods, otherwise next() will be called
         showDirContents: true, // Show or hide directory contents
-        index: "", // Index file name
+        index: "", // Index file name(s) - can be:
+                   //   - String: "index.html"
+                   //   - Array of strings: ["index.html", "index.htm", "default.html"]
+                   //   - Array of RegExp: [/index\.html/i, /default\.(html|htm)/i]
+                   //   - Mixed array: ["index.html", /index\.[eE][jJ][sS]/]
+                   // Priority is determined by array order (first match wins)
         urlPrefix: "", // URL path prefix
         urlsReserved: [], // Reserved paths (first level only)
         template: {
@@ -59,7 +64,21 @@ module.exports = function koaClassicServer(
 
     options.method = Array.isArray(options.method) ? options.method : ['GET'];
     options.showDirContents = typeof options.showDirContents == 'boolean' ? options.showDirContents : true;
-    options.index = typeof options.index == 'string' ? options.index : "";
+
+    // Normalize index option to array format
+    if (typeof options.index == 'string') {
+        // Single string → convert to array with one element
+        options.index = options.index ? [options.index] : [];
+    } else if (Array.isArray(options.index)) {
+        // Already an array → validate elements are strings or RegExp
+        options.index = options.index.filter(item =>
+            typeof item === 'string' || item instanceof RegExp
+        );
+    } else {
+        // Invalid type → default to empty array
+        options.index = [];
+    }
+
     options.urlPrefix = typeof options.urlPrefix == 'string' ? options.urlPrefix : "";
     options.urlsReserved = Array.isArray(options.urlsReserved) ? options.urlsReserved : [];
     options.template.render = (options.template.render == undefined || typeof options.template.render == 'function') ? options.template.render : undefined;
@@ -151,22 +170,17 @@ module.exports = function koaClassicServer(
         if (stat.isDirectory()) {
             // Handle directory
             if (options.showDirContents) {
-                if (options.index) {
-                    const indexPath = path.join(toOpen, options.index);
-
-                    // OPTIMIZATION: Check if index file exists (async)
-                    try {
-                        const indexStat = await fs.promises.stat(indexPath);
-                        if (indexStat.isFile()) {
-                            await loadFile(indexPath, indexStat);
-                            return;
-                        }
-                    } catch (error) {
-                        // Index file doesn't exist, show directory listing
+                // NEW: Enhanced index file search with array and RegExp support
+                if (options.index && options.index.length > 0) {
+                    const indexFile = await findIndexFile(toOpen, options.index);
+                    if (indexFile) {
+                        const indexPath = path.join(toOpen, indexFile.name);
+                        await loadFile(indexPath, indexFile.stat);
+                        return;
                     }
                 }
 
-                // OPTIMIZATION: show_dir is now async
+                // No index file found, show directory listing
                 ctx.body = await show_dir(toOpen);
             } else {
                 // Directory listing disabled
@@ -181,6 +195,59 @@ module.exports = function koaClassicServer(
         }
 
         // Internal functions
+
+        /**
+         * Find index file in directory with priority support
+         * @param {string} dirPath - Directory path to search
+         * @param {Array<string|RegExp>} indexPatterns - Array of patterns (strings or RegExp)
+         * @returns {Promise<{name: string, stat: fs.Stats}|null>} - First matching file or null
+         */
+        async function findIndexFile(dirPath, indexPatterns) {
+            try {
+                // Read directory contents
+                const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
+
+                // Filter only files (not directories)
+                const fileNames = files
+                    .filter(dirent => dirent.isFile())
+                    .map(dirent => dirent.name);
+
+                // Search with priority order (first pattern wins)
+                for (const pattern of indexPatterns) {
+                    let matchedFile = null;
+
+                    if (typeof pattern === 'string') {
+                        // Exact string match (case-sensitive)
+                        if (fileNames.includes(pattern)) {
+                            matchedFile = pattern;
+                        }
+                    } else if (pattern instanceof RegExp) {
+                        // RegExp match (supports case-insensitive with /i flag)
+                        matchedFile = fileNames.find(fileName => pattern.test(fileName));
+                    }
+
+                    // If match found, verify it's a file and return it
+                    if (matchedFile) {
+                        try {
+                            const filePath = path.join(dirPath, matchedFile);
+                            const fileStat = await fs.promises.stat(filePath);
+                            if (fileStat.isFile()) {
+                                return { name: matchedFile, stat: fileStat };
+                            }
+                        } catch (error) {
+                            // File was deleted between readdir and stat, continue to next pattern
+                            continue;
+                        }
+                    }
+                }
+
+                // No match found
+                return null;
+            } catch (error) {
+                console.error('Error finding index file:', error);
+                return null;
+            }
+        }
 
         function requestedUrlNotFound() {
             return `

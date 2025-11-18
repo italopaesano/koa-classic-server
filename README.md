@@ -151,8 +151,15 @@ const options = {
   // Show directory contents (default: true)
   showDirContents: true,
 
-  // Index file name (default: '')
-  // If present in a directory, it's served automatically
+  // Index file configuration (default: '')
+  // Supports: string, array of strings, array of RegExp, or mixed array
+  // Examples:
+  //   - String: 'index.html'
+  //   - Array: ['index.html', 'index.htm', 'default.html']
+  //   - RegExp: [/index\.html/i] (case-insensitive)
+  //   - Mixed: ['index.html', /INDEX\.HTM/i]
+  // Priority: First match wins (array order determines search priority)
+  // See INDEX_OPTION_PRIORITY.md for detailed behavior documentation
   index: 'index.html',
 
   // URL path prefix (default: '')
@@ -270,7 +277,13 @@ See [CHANGELOG.md](./CHANGELOG.md) for detailed information.
 
 ## Complete Documentation
 
-For complete documentation with all features, examples, troubleshooting, and best practices, see [DOCUMENTATION.md](./DOCUMENTATION.md).
+For complete documentation with all features, examples, troubleshooting, and best practices, see:
+
+- **[DOCUMENTATION.md](./DOCUMENTATION.md)** - Complete API reference and usage guide
+- **[INDEX_OPTION_PRIORITY.md](./INDEX_OPTION_PRIORITY.md)** - Detailed priority behavior for `index` option (string, array, RegExp)
+- **[EXAMPLES_INDEX_OPTION.md](./EXAMPLES_INDEX_OPTION.md)** - 10 practical examples of `index` option with RegExp
+- **[PERFORMANCE_ANALYSIS.md](./PERFORMANCE_ANALYSIS.md)** - Performance optimization analysis
+- **[PERFORMANCE_COMPARISON.md](./PERFORMANCE_COMPARISON.md)** - Before/after performance benchmarks
 
 ## Contributing
 

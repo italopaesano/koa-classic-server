@@ -157,6 +157,77 @@ describe('Enhanced Index Option Tests', () => {
     });
 
     describe('Array of RegExp - Case insensitive matching', () => {
+        test('Priority order - First RegExp pattern searched before second', async () => {
+            // Create files that match different patterns
+            fs.writeFileSync(path.join(tempDir, 'index1.html'), '<h1>PATTERN 1 MATCH</h1>');
+            fs.writeFileSync(path.join(tempDir, 'index2.html'), '<h1>PATTERN 2 MATCH</h1>');
+            fs.writeFileSync(path.join(tempDir, 'index3.html'), '<h1>PATTERN 3 MATCH</h1>');
+
+            app = new Koa();
+            app.use(koaClassicServer(tempDir, {
+                index: [
+                    /index1\.html/i,  // First pattern - should match index1.html
+                    /index2\.html/i,  // Second pattern - should be skipped
+                    /index3\.html/i   // Third pattern - should be skipped
+                ]
+            }));
+            server = app.listen();
+
+            const res = await supertest(server).get('/');
+            expect(res.status).toBe(200);
+            // Must serve index1.html (first RegExp match)
+            expect(res.text).toContain('PATTERN 1 MATCH');
+            // Must NOT serve index2.html or index3.html
+            expect(res.text).not.toContain('PATTERN 2');
+            expect(res.text).not.toContain('PATTERN 3');
+        });
+
+        test('Priority order - Second RegExp when first does not match', async () => {
+            // index1.html does NOT exist, so first pattern won't match
+            fs.writeFileSync(path.join(tempDir, 'index2.html'), '<h1>PATTERN 2 NOW FIRST</h1>');
+            fs.writeFileSync(path.join(tempDir, 'index3.html'), '<h1>PATTERN 3 STILL THIRD</h1>');
+
+            app = new Koa();
+            app.use(koaClassicServer(tempDir, {
+                index: [
+                    /index1\.html/i,  // First pattern - no match (file doesn't exist)
+                    /index2\.html/i,  // Second pattern - should match
+                    /index3\.html/i   // Third pattern - should be skipped
+                ]
+            }));
+            server = app.listen();
+
+            const res = await supertest(server).get('/');
+            expect(res.status).toBe(200);
+            // Must serve index2.html (first available match)
+            expect(res.text).toContain('PATTERN 2 NOW FIRST');
+            // Must NOT serve index3.html
+            expect(res.text).not.toContain('PATTERN 3');
+        });
+
+        test('Priority order - Broader pattern searched before narrower pattern', async () => {
+            // Create multiple files
+            fs.writeFileSync(path.join(tempDir, 'index.html'), '<h1>HTML FILE</h1>');
+            fs.writeFileSync(path.join(tempDir, 'index.htm'), '<h1>HTM FILE</h1>');
+            fs.writeFileSync(path.join(tempDir, 'default.html'), '<h1>DEFAULT FILE</h1>');
+
+            app = new Koa();
+            app.use(koaClassicServer(tempDir, {
+                index: [
+                    /index\.(html|htm)/i,  // Broader pattern first - matches both .html and .htm
+                    /default\.html/i       // Narrower pattern second - should be skipped
+                ]
+            }));
+            server = app.listen();
+
+            const res = await supertest(server).get('/');
+            expect(res.status).toBe(200);
+            // Must serve one of: index.html or index.htm (first pattern match)
+            expect(res.text).toMatch(/HTML FILE|HTM FILE/);
+            // Must NOT serve default.html
+            expect(res.text).not.toContain('DEFAULT FILE');
+        });
+
         test('RegExp case-insensitive: /index\\.html/i matches INDEX.HTML', async () => {
             fs.writeFileSync(path.join(tempDir, 'INDEX.HTML'), '<h1>UPPERCASE INDEX</h1>');
 

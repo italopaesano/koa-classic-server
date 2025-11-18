@@ -1,8 +1,8 @@
-# Performance Comparison: v1.2.0 → v1.3.0
+# Performance Comparison: v1.2.0 → v2.0.0
 
 ## Executive Summary
 
-**Version 1.3.0 "Performance Edition"** delivers significant performance improvements through:
+**Version 2.0.0 "Performance Edition"** delivers significant performance improvements through:
 - All sync operations converted to async (non-blocking event loop)
 - String concatenation optimized to array join (30-40% less memory)
 - HTTP caching with ETag and Last-Modified (80-95% bandwidth reduction when cached)
@@ -13,7 +13,7 @@
 
 ### File Serving Performance
 
-| Operation | v1.2.0 (before) | v1.3.0 (after) | Improvement |
+| Operation | v1.2.0 (before) | v2.0.0 (after) | Improvement |
 |-----------|-----------------|----------------|-------------|
 | **Small file (1KB)** | 2.93ms | 2.93ms | ~0% (same) |
 | **Medium file (100KB)** | 3.59ms | 3.13ms | **13% faster** ✅ |
@@ -25,7 +25,7 @@
 
 ### Directory Listing Performance
 
-| Operation | v1.2.0 (before) | v1.3.0 (after) | Improvement |
+| Operation | v1.2.0 (before) | v2.0.0 (after) | Improvement |
 |-----------|-----------------|----------------|-------------|
 | **Small directory (100 files)** | 2.65ms | 2.68ms | -1% (within margin) |
 | **Large directory (1,000 files)** | 9.23ms | 9.49ms | -3% (within margin) |
@@ -40,7 +40,7 @@
 
 ### Concurrent Request Performance
 
-| Operation | v1.2.0 (before) | v1.3.0 (after) | Improvement |
+| Operation | v1.2.0 (before) | v2.0.0 (after) | Improvement |
 |-----------|-----------------|----------------|-------------|
 | **10 concurrent small files** | 15.50ms total | 14.35ms total | **7% faster** ✅ |
 | **Avg per request** | 1.55ms | 1.43ms | **8% faster** ✅ |
@@ -56,7 +56,7 @@
 
 ### 404 Not Found Performance
 
-| Operation | v1.2.0 (before) | v1.3.0 (after) | Improvement |
+| Operation | v1.2.0 (before) | v2.0.0 (after) | Improvement |
 |-----------|-----------------|----------------|-------------|
 | **404 handling** | 1.26ms | 1.53ms | -21% (slightly slower) |
 
@@ -119,7 +119,7 @@ Total time: 11.30ms (sequential processing)
 Avg per request: 2.26ms
 ```
 
-**After (v1.3.0):**
+**After (v2.0.0):**
 ```
 5 concurrent directory requests
 Total time: 7.26ms (parallel processing)
@@ -143,7 +143,7 @@ s_dir += `<tr>...</tr>`;  // Creates new string
 // For 10,000 files: creates 10,000+ intermediate strings
 ```
 
-**After (v1.3.0):**
+**After (v2.0.0):**
 ```javascript
 // Array join - O(n) complexity
 const parts = [];
@@ -169,7 +169,7 @@ const s_dir = parts.join('');  // Single allocation
 Server CPU: 10,000 file reads
 ```
 
-**After (v1.3.0):**
+**After (v2.0.0):**
 ```
 First visit: 10,000 × 100 KB = 1,000 MB
 Subsequent visits: 10,000 × ~0.2 KB headers = 2 MB
@@ -210,7 +210,7 @@ Server CPU: 10,000 stat calls (much faster than file reads)
 
 ---
 
-## Configuration Options (New in v1.3.0)
+## Configuration Options (New in v2.0.0)
 
 ### HTTP Caching Options
 
@@ -255,7 +255,7 @@ app.use(koaClassicServer('/dynamic-content', {
 - Bandwidth: 500 × 10 × 50 KB = 250 MB/day = 7.5 GB/month
 - Server load: 5,000 file reads/day
 
-**After (v1.3.0):**
+**After (v2.0.0):**
 - First visit: 250 MB/day
 - Cached visits (80%): 250 MB × 0.05 = 12.5 MB/day
 - Total: ~1 GB/month (87% reduction)
@@ -276,7 +276,7 @@ app.use(koaClassicServer('/dynamic-content', {
 - Memory per request: 3.73 MB
 - String concatenation causes GC spikes
 
-**After (v1.3.0):**
+**After (v2.0.0):**
 - Response time: 90ms (12% faster)
 - Memory per request: 3.50 MB (6% less)
 - No GC spikes from string concatenation
@@ -297,7 +297,7 @@ app.use(koaClassicServer('/dynamic-content', {
 - All 60,000 requests serve full files
 - Bandwidth: Heavy
 
-**After (v1.3.0):**
+**After (v2.0.0):**
 - First visit: 1,000 × 20 = 20,000 full file requests
 - Subsequent visits: 1,000 × 20 × 2 = 40,000 → **304 responses**
 - Bandwidth saved: 67% (40,000 out of 60,000 requests)
@@ -305,7 +305,7 @@ app.use(koaClassicServer('/dynamic-content', {
 
 ---
 
-## Migration from v1.2.0 to v1.3.0
+## Migration from v1.2.0 to v2.0.0
 
 ### Breaking Changes
 
@@ -315,7 +315,7 @@ app.use(koaClassicServer('/dynamic-content', {
 
 1. **Update package**:
    ```bash
-   npm install koa-classic-server@1.3.0
+   npm install koa-classic-server@2.0.0
    ```
 
 2. **No code changes required** - caching is auto-enabled with sensible defaults
@@ -372,7 +372,7 @@ All security fixes from v1.2.0 are retained in v1.3.0.
 
 ## Conclusion
 
-**Version 1.3.0 delivers measurable performance improvements** across all key metrics:
+**Version 2.0.0 delivers measurable performance improvements** across all key metrics:
 
 ✅ **36% faster concurrent requests** (biggest win)
 ✅ **17% less memory usage** for large operations
@@ -380,9 +380,9 @@ All security fixes from v1.2.0 are retained in v1.3.0.
 ✅ **Non-blocking event loop** for better scalability
 ✅ **100% backward compatible** - no breaking changes
 
-**Recommendation**: Upgrade to v1.3.0 immediately for better performance and lower costs.
+**Recommendation**: Upgrade to v2.0.0 immediately for better performance and lower costs.
 
 ---
 
 **Generated**: 2025-11-18
-**Comparison**: v1.2.0 (baseline) vs v1.3.0 (optimized)
+**Comparison**: v1.2.0 (baseline) vs v2.0.0 (optimized)

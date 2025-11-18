@@ -5,8 +5,8 @@ const path = require("path");
 const mime = require("mime-types");
 
 // koa-classic-server - Performance optimized version
-// Version: 1.3.0
-// Optimizations applied (v1.3.0):
+// Version: 2.0.0
+// Optimizations applied (v2.0.0):
 // - All sync operations converted to async (non-blocking event loop)
 // - String concatenation replaced with array join (30-40% less memory)
 // - HTTP caching with ETag and Last-Modified (80-95% bandwidth reduction)

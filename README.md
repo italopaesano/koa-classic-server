@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/koa-classic-server.svg)](https://www.npmjs.com/package/koa-classic-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-71%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-146%20passing-brightgreen.svg)]()
 
 ## ⚠️ Version 1.2.0 - Critical Security Update
 
@@ -17,7 +17,7 @@ Version 1.2.0 includes **critical security fixes** for path traversal vulnerabil
 ✅ **Template Error Handling** - No more server crashes
 ✅ **XSS Protection** - HTML escaping in directory listings
 ✅ **Race Condition Fixes** - Robust file access
-✅ **71 Tests Passing** - Comprehensive test coverage
+✅ **146 Tests Passing** - Comprehensive test coverage including EJS integration
 
 [See full changelog](./CHANGELOG.md)
 
@@ -32,7 +32,7 @@ koa-classic-server is a middleware for serving static files from a directory wit
 - 🎨 **Template Engine Support** - Integrate EJS, Pug, Handlebars, etc.
 - 🔒 **Security** - Path traversal protection, XSS prevention
 - ⚙️ **Configurable** - URL prefixes, reserved paths, index files
-- 🧪 **Well-Tested** - 71 tests with security coverage
+- 🧪 **Well-Tested** - 146 tests with comprehensive coverage (security, EJS, performance)
 - 📦 **Dual Module Support** - CommonJS and ES Modules
 
 ## Installation
@@ -110,23 +110,35 @@ app.listen(3000);
 const Koa = require('koa');
 const koaClassicServer = require('koa-classic-server');
 const ejs = require('ejs');
+const fs = require('fs').promises;
 
 const app = new Koa();
 
 app.use(koaClassicServer(__dirname + '/views', {
   template: {
+    ext: ['ejs'],  // File extensions to process
     render: async (ctx, next, filePath) => {
-      ctx.body = await ejs.renderFile(filePath, {
+      // Read template file
+      const templateContent = await fs.readFile(filePath, 'utf-8');
+
+      // Render with data
+      const html = ejs.render(templateContent, {
         title: 'My App',
-        user: ctx.state.user
+        user: ctx.state.user || { name: 'Guest' },
+        path: ctx.path,
+        timestamp: new Date().toISOString()
       });
-    },
-    ext: ['ejs', 'html']
+
+      ctx.type = 'text/html';
+      ctx.body = html;
+    }
   }
 }));
 
 app.listen(3000);
 ```
+
+See **[TEMPLATE_ENGINE_GUIDE.md](./docs/TEMPLATE_ENGINE_GUIDE.md)** for advanced template engine integration examples.
 
 ## API
 
@@ -283,6 +295,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for detailed information.
 For complete documentation with all features, examples, troubleshooting, and best practices, see:
 
 - **[DOCUMENTATION.md](./docs/DOCUMENTATION.md)** - Complete API reference and usage guide
+- **[TEMPLATE_ENGINE_GUIDE.md](./docs/TEMPLATE_ENGINE_GUIDE.md)** - Complete guide to template engine integration (EJS, Pug, Handlebars, Nunjucks)
 - **[INDEX_OPTION_PRIORITY.md](./docs/INDEX_OPTION_PRIORITY.md)** - Detailed priority behavior for `index` option (string, array, RegExp)
 - **[EXAMPLES_INDEX_OPTION.md](./docs/EXAMPLES_INDEX_OPTION.md)** - 10 practical examples of `index` option with RegExp
 - **[PERFORMANCE_ANALYSIS.md](./docs/PERFORMANCE_ANALYSIS.md)** - Performance optimization analysis

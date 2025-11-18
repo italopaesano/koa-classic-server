@@ -1,6 +1,6 @@
 {
   "name": "koa-classic-server",
-  "version": "2.0.0-beta.3",
+  "version": "2.0.0-beta.4",
   "description": "High-performance Koa middleware for serving static files with Apache-like directory listing, HTTP caching, template engine support, and comprehensive security fixes",
   "main": "index.cjs",
   "exports": {
@@ -30,8 +30,10 @@
   "author": "Italo Paesano",
   "license": "MIT",
   "dependencies": {
-    "koa": "^3.1.1",
     "mime-types": "^2.1.35"
+  },
+  "peerDependencies": {
+    "koa": "^2.0.0 || ^3.0.0"
   },
   "devDependencies": {
     "autocannon": "^7.15.0",

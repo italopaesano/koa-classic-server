@@ -459,8 +459,10 @@ module.exports = function koaClassicServer(
             parts.push("<tbody>");
 
             // Parent directory link
-            if (pageHrefOutPrefix.origin + "/" !== pageHrefOutPrefix.href) {
-                const a_pD = pageHref.href.split("/");
+            const currentPath = pageHref.origin + pageHref.pathname;
+            if (currentPath !== pageHrefOutPrefix.origin + "/") {
+                // Build parent directory URL without query parameters
+                const a_pD = currentPath.split("/");
                 a_pD.pop();
                 const parentDirectory = a_pD.join("/");
                 // Escape HTML to prevent XSS
@@ -486,10 +488,12 @@ module.exports = function koaClassicServer(
 
                     const itemPath = path.join(toOpen, s_name);
                     let itemUri = "";
-                    if (pageHref.href === pageHref.origin + options.urlPrefix + "/") {
+                    // Build item URI without query parameters
+                    const baseUrl = pageHref.origin + pageHref.pathname;
+                    if (baseUrl === pageHref.origin + options.urlPrefix + "/" || baseUrl === pageHref.origin + options.urlPrefix) {
                         itemUri = `${pageHref.origin + options.urlPrefix}/${encodeURIComponent(s_name)}`;
                     } else {
-                        itemUri = `${pageHref.href}/${encodeURIComponent(s_name)}`;
+                        itemUri = `${baseUrl}/${encodeURIComponent(s_name)}`;
                     }
 
                     // Get file size

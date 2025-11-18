@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title || 'Test EJS' %></title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin: 20px 0;
+        }
+        h1 { color: #333; }
+        .info { color: #666; }
+        .success { color: green; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>✅ EJS Template Funzionante!</h1>
+        <p class="success">Se vedi questo messaggio, il template EJS sta funzionando correttamente.</p>
+    </div>
+
+    <div class="card">
+        <h2>📊 Informazioni</h2>
+        <p><strong>Titolo:</strong> <%= title %></p>
+        <p><strong>User:</strong> <%= user.name %></p>
+        <p><strong>Path:</strong> <%= path %></p>
+        <p><strong>File Template:</strong> <%= filePath %></p>
+        <p><strong>Timestamp:</strong> <%= timestamp %></p>
+    </div>
+
+    <div class="card">
+        <h2>🔍 Query Parameters</h2>
+        <% if (Object.keys(query).length > 0) { %>
+            <ul>
+            <% Object.keys(query).forEach(function(key) { %>
+                <li><strong><%= key %>:</strong> <%= query[key] %></li>
+            <% }); %>
+            </ul>
+        <% } else { %>
+            <p class="info">Nessun parametro query. Prova ad aggiungere ?name=test alla URL</p>
+        <% } %>
+    </div>
+
+    <div class="card">
+        <h2>📝 Note</h2>
+        <ul>
+            <li>Questo è un template EJS renderizzato dinamicamente</li>
+            <li>I dati vengono passati dalla funzione <code>templateRender</code></li>
+            <li>Puoi modificare questo file e ricaricare la pagina</li>
+        </ul>
+    </div>
+</body>
+</html>

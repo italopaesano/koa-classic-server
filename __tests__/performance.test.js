@@ -19,12 +19,81 @@ const fs = require('fs');
 
 const BENCHMARK_DIR = path.join(__dirname, '../benchmark-data');
 
-// Check if benchmark data exists
-if (!fs.existsSync(BENCHMARK_DIR)) {
-    console.error('\n❌ Benchmark data not found!');
-    console.error('Please run: node scripts/setup-benchmark.js\n');
-    process.exit(1);
+// Auto-setup benchmark data if not exists
+function setupBenchmarkData() {
+    if (fs.existsSync(BENCHMARK_DIR)) {
+        return; // Data already exists
+    }
+
+    console.log('\n🔧 Setting up benchmark data automatically...\n');
+
+    // Create benchmark directory
+    fs.mkdirSync(BENCHMARK_DIR, { recursive: true });
+
+    // Create small files (1KB each)
+    console.log('  Creating 100 small files (1KB each)...');
+    const smallDir = path.join(BENCHMARK_DIR, 'small-files');
+    fs.mkdirSync(smallDir);
+    for (let i = 1; i <= 100; i++) {
+        const content = 'X'.repeat(1024);
+        fs.writeFileSync(path.join(smallDir, `file-${i}.txt`), content);
+    }
+
+    // Create medium files (100KB each)
+    console.log('  Creating 50 medium files (100KB each)...');
+    const mediumDir = path.join(BENCHMARK_DIR, 'medium-files');
+    fs.mkdirSync(mediumDir);
+    for (let i = 1; i <= 50; i++) {
+        const content = 'X'.repeat(100 * 1024);
+        fs.writeFileSync(path.join(mediumDir, `file-${i}.txt`), content);
+    }
+
+    // Create large files (1MB each)
+    console.log('  Creating 10 large files (1MB each)...');
+    const largeDir = path.join(BENCHMARK_DIR, 'large-files');
+    fs.mkdirSync(largeDir);
+    for (let i = 1; i <= 10; i++) {
+        const content = 'X'.repeat(1024 * 1024);
+        fs.writeFileSync(path.join(largeDir, `file-${i}.txt`), content);
+    }
+
+    // Create directory with 1000 files
+    console.log('  Creating directory with 1000 files...');
+    const largeDirListing = path.join(BENCHMARK_DIR, 'large-directory');
+    fs.mkdirSync(largeDirListing);
+    for (let i = 1; i <= 1000; i++) {
+        const content = `File number ${i}\n`;
+        fs.writeFileSync(path.join(largeDirListing, `item-${String(i).padStart(4, '0')}.txt`), content);
+    }
+
+    // Create directory with 10,000 files
+    console.log('  Creating directory with 10,000 files (this may take a moment)...');
+    const veryLargeDirListing = path.join(BENCHMARK_DIR, 'very-large-directory');
+    fs.mkdirSync(veryLargeDirListing);
+    for (let i = 1; i <= 10000; i++) {
+        const content = `File number ${i}\n`;
+        fs.writeFileSync(path.join(veryLargeDirListing, `item-${String(i).padStart(5, '0')}.txt`), content);
+    }
+
+    // Create HTML file for caching test
+    const htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Benchmark Test</title>
+</head>
+<body>
+    <h1>Benchmark Test Page</h1>
+    <p>${'Lorem ipsum dolor sit amet. '.repeat(100)}</p>
+</body>
+</html>`;
+    fs.writeFileSync(path.join(BENCHMARK_DIR, 'test.html'), htmlContent);
+
+    console.log('\n✅ Benchmark data setup complete!\n');
 }
+
+// Setup benchmark data automatically if needed
+setupBenchmarkData();
 
 // Helper to measure execution time
 function measureTime(fn) {

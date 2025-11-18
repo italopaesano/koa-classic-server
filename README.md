@@ -138,7 +138,7 @@ app.use(koaClassicServer(__dirname + '/views', {
 app.listen(3000);
 ```
 
-See **[TEMPLATE_ENGINE_GUIDE.md](./docs/TEMPLATE_ENGINE_GUIDE.md)** for advanced template engine integration examples.
+See **[Template Engine Guide](./docs/template-engine/README.md)** for comprehensive template engine documentation with progressive examples.
 
 ## API
 

@@ -1,7 +1,7 @@
 const koa = require("koa");
 const app = new koa();
 const port = 3000;
-const classicServer = require("./index.cjs");
+const classicServer = require("../../index.cjs");
 const ejs = require("ejs");
 const path = require("path");
 
@@ -155,7 +155,7 @@ const templateRender = async (ctx, next, filePath) => {
 
 app.use(
   classicServer(
-    __dirname + "/public",
+    __dirname + "/examples",
     {
       showDirContents: true,
       template: {

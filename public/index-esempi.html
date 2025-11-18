@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Esempi Incrementali EJS</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 3px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .esempio {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .esempio h2 {
+            margin-top: 0;
+            color: #007bff;
+        }
+        .esempio p {
+            color: #666;
+            margin: 10px 0;
+        }
+        .esempio code {
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+        a.btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        a.btn:hover {
+            background: #0056b3;
+        }
+        .code-block {
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>📚 Esempi Incrementali - Template EJS</h1>
+    <p>Questa pagina mostra esempi progressivi di template EJS, partendo dal più semplice al più complesso.</p>
+
+    <!-- ESEMPIO 1 -->
+    <div class="esempio">
+        <h2>1️⃣ Esempio 1: Nessun Dato</h2>
+        <p>Template EJS senza variabili - equivale a un normale file HTML.</p>
+
+        <div class="code-block">
+// Server: Non passa nessun dato
+ctx.body = await ejs.renderFile(filePath, {});
+
+// Template: Non usa variabili
+&lt;h1&gt;Ciao Mondo!&lt;/h1&gt;
+        </div>
+
+        <a href="/esempio1-nessun-dato.ejs" class="btn">Vedi Esempio 1</a>
+    </div>
+
+    <!-- ESEMPIO 2 -->
+    <div class="esempio">
+        <h2>2️⃣ Esempio 2: Una Variabile</h2>
+        <p>Template che usa <strong>una sola variabile</strong>.</p>
+
+        <div class="code-block">
+// Server: Passa UNA variabile
+ctx.body = await ejs.renderFile(filePath, {
+  nome: 'Mario'
+});
+
+// Template: Usa la variabile
+Il tuo nome è: &lt;%= nome %&gt;
+        </div>
+
+        <a href="/esempio2-una-variabile.ejs" class="btn">Vedi Esempio 2</a>
+    </div>
+
+    <!-- ESEMPIO 3 -->
+    <div class="esempio">
+        <h2>3️⃣ Esempio 3: Più Variabili</h2>
+        <p>Template che usa <strong>più variabili</strong>.</p>
+
+        <div class="code-block">
+// Server: Passa PIÙ variabili
+ctx.body = await ejs.renderFile(filePath, {
+  nome: 'Mario',
+  eta: 30,
+  citta: 'Roma'
+});
+
+// Template: Usa tutte le variabili
+Nome: &lt;%= nome %&gt;
+Età: &lt;%= eta %&gt;
+Città: &lt;%= citta %&gt;
+        </div>
+
+        <a href="/esempio3-piu-variabili.ejs" class="btn">Vedi Esempio 3</a>
+    </div>
+
+    <!-- ESEMPIO 4 -->
+    <div class="esempio">
+        <h2>4️⃣ Esempio 4: Condizionale (if/else)</h2>
+        <p>Template con <strong>logica condizionale</strong>.</p>
+
+        <div class="code-block">
+// Server: Passa variabili per if/else
+ctx.body = await ejs.renderFile(filePath, {
+  autenticato: true,
+  nome: 'Mario'
+});
+
+// Template: Usa if/else
+&lt;% if (autenticato) { %&gt;
+  Benvenuto &lt;%= nome %&gt;!
+&lt;% } else { %&gt;
+  Non sei autenticato.
+&lt;% } %&gt;
+        </div>
+
+        <a href="/esempio4-condizionale.ejs" class="btn">Vedi Esempio 4</a>
+    </div>
+
+    <!-- ESEMPIO 5 -->
+    <div class="esempio">
+        <h2>5️⃣ Esempio 5: Loop (forEach)</h2>
+        <p>Template con <strong>ciclo forEach</strong> su array.</p>
+
+        <div class="code-block">
+// Server: Passa un array
+ctx.body = await ejs.renderFile(filePath, {
+  prodotti: ['Laptop', 'Mouse', 'Tastiera']
+});
+
+// Template: Loop sull'array
+&lt;% prodotti.forEach(function(prodotto) { %&gt;
+  &lt;li&gt;&lt;%= prodotto %&gt;&lt;/li&gt;
+&lt;% }); %&gt;
+        </div>
+
+        <a href="/esempio5-loop.ejs" class="btn">Vedi Esempio 5</a>
+    </div>
+
+    <hr style="margin: 40px 0; border: 1px solid #ddd;">
+
+    <div class="esempio" style="background: #e3f2fd;">
+        <h2>💡 Punti Chiave</h2>
+        <ul>
+            <li><strong>Esempio 1:</strong> Template senza variabili → Non serve passare dati</li>
+            <li><strong>Esempio 2:</strong> Template con 1 variabile → Passa 1 dato</li>
+            <li><strong>Esempio 3:</strong> Template con N variabili → Passa N dati</li>
+            <li><strong>Esempio 4:</strong> Template con if/else → Passa dati per la logica</li>
+            <li><strong>Esempio 5:</strong> Template con forEach → Passa array</li>
+        </ul>
+        <p><strong>Regola:</strong> Devi passare esattamente i dati che il template usa!</p>
+    </div>
+</body>
+</html>

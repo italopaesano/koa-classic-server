@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Esempio 4 - Condizionale</title>
+</head>
+<body>
+    <h1>Controllo Accesso</h1>
+
+    <% if (autenticato) { %>
+        <p>✅ Benvenuto <strong><%= nome %></strong>!</p>
+        <p>Sei autenticato.</p>
+    <% } else { %>
+        <p>❌ Non sei autenticato.</p>
+        <p>Effettua il login per continuare.</p>
+    <% } %>
+</body>
+</html>

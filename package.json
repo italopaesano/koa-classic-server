@@ -1,6 +1,6 @@
 {
   "name": "koa-classic-server",
-  "version": "2.0.0-beta.7",
+  "version": "2.0.0-beta.8",
   "description": "High-performance Koa middleware for serving static files with Apache-like directory listing, HTTP caching, template engine support, and comprehensive security fixes",
   "main": "index.cjs",
   "exports": {

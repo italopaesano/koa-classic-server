@@ -8,11 +8,11 @@
 
 ---
 
-## 🎉 Version 2.1.1 - Production Release
+## 🎉 Version 2.1.2 - Production Release
 
-Version 2.1.1 is a **major production release** featuring performance optimizations, enhanced directory listing, and critical bug fixes.
+Version 2.1.2 is a **major production release** featuring performance optimizations, enhanced directory listing, and critical bug fixes.
 
-### What's New in 2.1.1
+### What's New in 2.1.2
 
 ✅ **Sortable Directory Columns** - Click Name/Type/Size to sort (Apache2-like)
 ✅ **Navigation Bug Fixed** - Directory navigation now works correctly after sorting

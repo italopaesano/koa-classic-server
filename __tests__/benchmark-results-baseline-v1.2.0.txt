@@ -1,0 +1,354 @@
+
+> koa-classic-server@1.2.0 test:performance
+> jest __tests__/performance.test.js --runInBand
+
+  console.log
+    
+    📊 Small File (1KB) Benchmark:
+
+      at Object.log (__tests__/performance.test.js:90:21)
+
+  console.log
+       Average: 2.93ms
+
+      at Object.log (__tests__/performance.test.js:91:21)
+
+  console.log
+       Median:  2.54ms
+
+      at Object.log (__tests__/performance.test.js:92:21)
+
+  console.log
+       Min:     1.99ms
+
+      at Object.log (__tests__/performance.test.js:93:21)
+
+  console.log
+       Max:     26.87ms
+
+      at Object.log (__tests__/performance.test.js:94:21)
+
+  console.log
+    
+    📊 Medium File (100KB) Benchmark:
+
+      at Object.log (__tests__/performance.test.js:109:21)
+
+  console.log
+       Average: 3.59ms
+
+      at Object.log (__tests__/performance.test.js:110:21)
+
+  console.log
+       Median:  3.51ms
+
+      at Object.log (__tests__/performance.test.js:111:21)
+
+  console.log
+       Min:     2.46ms
+
+      at Object.log (__tests__/performance.test.js:112:21)
+
+  console.log
+       Max:     8.36ms
+
+      at Object.log (__tests__/performance.test.js:113:21)
+
+  console.log
+    
+    📊 Large File (1MB) Benchmark:
+
+      at Object.log (__tests__/performance.test.js:128:21)
+
+  console.log
+       Average: 9.03ms
+
+      at Object.log (__tests__/performance.test.js:129:21)
+
+  console.log
+       Median:  8.35ms
+
+      at Object.log (__tests__/performance.test.js:130:21)
+
+  console.log
+       Min:     5.46ms
+
+      at Object.log (__tests__/performance.test.js:131:21)
+
+  console.log
+       Max:     13.81ms
+
+      at Object.log (__tests__/performance.test.js:132:21)
+
+  console.log
+    
+    📊 Small Directory (100 files) Benchmark:
+
+      at Object.log (__tests__/performance.test.js:150:21)
+
+  console.log
+       Average: 2.65ms
+
+      at Object.log (__tests__/performance.test.js:151:21)
+
+  console.log
+       Median:  2.54ms
+
+      at Object.log (__tests__/performance.test.js:152:21)
+
+  console.log
+       Min:     2.22ms
+
+      at Object.log (__tests__/performance.test.js:153:21)
+
+  console.log
+       Max:     4.69ms
+
+      at Object.log (__tests__/performance.test.js:154:21)
+
+  console.log
+    
+    📊 Large Directory (1,000 files) Benchmark:
+
+      at Object.log (__tests__/performance.test.js:168:21)
+
+  console.log
+       Average: 9.23ms
+
+      at Object.log (__tests__/performance.test.js:169:21)
+
+  console.log
+       Median:  9.14ms
+
+      at Object.log (__tests__/performance.test.js:170:21)
+
+  console.log
+       Min:     8.26ms
+
+      at Object.log (__tests__/performance.test.js:171:21)
+
+  console.log
+       Max:     11.64ms
+
+      at Object.log (__tests__/performance.test.js:172:21)
+
+  console.log
+       ⚠️  WARNING: This will be MUCH faster after async optimization
+
+      at Object.log (__tests__/performance.test.js:175:21)
+
+  console.log
+    
+    📊 Very Large Directory (10,000 files) Benchmark:
+
+      at Object.log (__tests__/performance.test.js:189:21)
+
+  console.log
+       Average: 102.37ms
+
+      at Object.log (__tests__/performance.test.js:190:21)
+
+  console.log
+       Median:  95.13ms
+
+      at Object.log (__tests__/performance.test.js:191:21)
+
+  console.log
+       Min:     90.91ms
+
+      at Object.log (__tests__/performance.test.js:192:21)
+
+  console.log
+       Max:     120.85ms
+
+      at Object.log (__tests__/performance.test.js:193:21)
+
+  console.log
+       ⚠️  WARNING: Event loop BLOCKED during this operation!
+
+      at Object.log (__tests__/performance.test.js:194:21)
+
+  console.log
+       ⚠️  Expected to drop to ~30.71ms after optimization
+
+      at Object.log (__tests__/performance.test.js:195:21)
+
+  console.log
+    
+    📊 10 Concurrent Small Files:
+
+      at Object.log (__tests__/performance.test.js:212:21)
+
+  console.log
+       Total time: 15.50ms
+
+      at Object.log (__tests__/performance.test.js:213:21)
+
+  console.log
+       Avg per request: 1.55ms
+
+      at Object.log (__tests__/performance.test.js:214:21)
+
+  console.log
+    
+    📊 5 Concurrent Directory Listings (100 files):
+
+      at Object.log (__tests__/performance.test.js:231:21)
+
+  console.log
+       Total time: 11.30ms
+
+      at Object.log (__tests__/performance.test.js:232:21)
+
+  console.log
+       Avg per request: 2.26ms
+
+      at Object.log (__tests__/performance.test.js:233:21)
+
+  console.log
+       ⚠️  With current sync code, these run SEQUENTIALLY
+
+      at Object.log (__tests__/performance.test.js:234:21)
+
+  console.log
+       ⚠️  After async optimization, will run in PARALLEL
+
+      at Object.log (__tests__/performance.test.js:235:21)
+
+  console.log
+    
+    📊 404 Not Found Benchmark:
+
+      at Object.log (__tests__/performance.test.js:252:21)
+
+  console.log
+       Average: 1.26ms
+
+      at Object.log (__tests__/performance.test.js:253:21)
+
+  console.log
+       Median:  1.24ms
+
+      at Object.log (__tests__/performance.test.js:254:21)
+
+  console.log
+       Min:     1.05ms
+
+      at Object.log (__tests__/performance.test.js:255:21)
+
+  console.log
+       Max:     2.17ms
+
+      at Object.log (__tests__/performance.test.js:256:21)
+
+  console.log
+    
+    📊 Memory Usage (10,000 files directory):
+
+      at Object.log (__tests__/performance.test.js:278:21)
+
+  console.log
+       Heap used increase: 1.16 MB
+
+      at Object.log (__tests__/performance.test.js:279:21)
+
+  console.log
+       External increase: 2.57 MB
+
+      at Object.log (__tests__/performance.test.js:280:21)
+
+  console.log
+       Response size: 1.29 MB
+
+      at Object.log (__tests__/performance.test.js:281:21)
+
+  console.log
+       ⚠️  Expected to reduce by ~30-40% after optimization
+
+      at Object.log (__tests__/performance.test.js:282:21)
+
+  console.log
+    
+    ======================================================================
+
+      at Object.log (__tests__/performance.test.js:289:13)
+
+  console.log
+    📋 BASELINE BENCHMARK SUMMARY
+
+      at Object.log (__tests__/performance.test.js:290:13)
+
+  console.log
+    ======================================================================
+
+      at Object.log (__tests__/performance.test.js:291:13)
+
+  console.log
+    
+    These results represent the CURRENT performance (v1.2.0)
+
+      at Object.log (__tests__/performance.test.js:292:13)
+
+  console.log
+    After implementing optimizations, run this test again to see improvements.
+
+      at Object.log (__tests__/performance.test.js:293:13)
+
+  console.log
+    Expected improvements after optimization:
+
+      at Object.log (__tests__/performance.test.js:294:13)
+
+  console.log
+      ✓ Small files:        10-20% faster (async operations)
+
+      at Object.log (__tests__/performance.test.js:295:13)
+
+  console.log
+      ✓ Large directories:  50-70% faster (async + array join)
+
+      at Object.log (__tests__/performance.test.js:296:13)
+
+  console.log
+      ✓ Concurrent requests: 5-10x faster (non-blocking event loop)
+
+      at Object.log (__tests__/performance.test.js:297:13)
+
+  console.log
+      ✓ Memory usage:       30-40% reduction (array join vs concatenation)
+
+      at Object.log (__tests__/performance.test.js:298:13)
+
+  console.log
+      ✓ With HTTP caching:  80-95% faster (304 responses)
+
+      at Object.log (__tests__/performance.test.js:299:13)
+
+  console.log
+    ======================================================================
+
+      at Object.log (__tests__/performance.test.js:300:13)
+
+PASS __tests__/performance.test.js
+  Performance Benchmarks - BASELINE (v1.2.0)
+    File Serving Performance
+      ✓ Benchmark: Small file (1KB) - 100 iterations (318 ms)
+      ✓ Benchmark: Medium file (100KB) - 50 iterations (184 ms)
+      ✓ Benchmark: Large file (1MB) - 20 iterations (183 ms)
+    Directory Listing Performance
+      ✓ Benchmark: Small directory (100 files) - 50 iterations (135 ms)
+      ✓ Benchmark: Large directory (1,000 files) - 20 iterations (188 ms)
+      ✓ Benchmark: Very large directory (10,000 files) - 5 iterations (515 ms)
+    Concurrent Request Performance
+      ✓ Benchmark: 10 concurrent small file requests (18 ms)
+      ✓ Benchmark: 5 concurrent directory listings (100 files each) (14 ms)
+    404 Not Found Performance
+      ✓ Benchmark: Non-existent file - 50 iterations (66 ms)
+    Memory Usage (Informational)
+      ✓ Memory usage during large directory listing (88 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       10 passed, 10 total
+Snapshots:   0 total
+Time:        3.227 s, estimated 4 s
+Ran all test suites matching /__tests__\/performance.test.js/i.

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>EJS Loop Test</title>
+</head>
+<body>
+    <h1>Lista di Items</h1>
+    <ul>
+    <% items.forEach(function(item, index) { %>
+        <li data-index="<%= index %>"><%= item.name %> - <%= item.value %></li>
+    <% }); %>
+    </ul>
+    <p>Totale items: <%= items.length %></p>
+</body>
+</html>

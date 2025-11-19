@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>EJS Escaping Test</title>
+</head>
+<body>
+    <h1>Test HTML Escaping</h1>
+
+    <div class="escaped">
+        <h2>HTML Escaped (safe):</h2>
+        <p><%= userInput %></p>
+    </div>
+
+    <div class="unescaped">
+        <h2>HTML Unescaped (unsafe - solo per test):</h2>
+        <p><%- htmlContent %></p>
+    </div>
+
+    <div class="mixed">
+        <h2>Mixed Content:</h2>
+        <p>Safe: <%= safeText %></p>
+        <p>HTML: <%- allowedHtml %></p>
+    </div>
+</body>
+</html>

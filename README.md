@@ -228,10 +228,14 @@ app.use(koaClassicServer(__dirname + '/public', {
 }));
 ```
 
-**Benefits:**
+**⚠️ Important: Production Recommendation**
+
+The default value for `enableCaching` is `false` to facilitate development (where you want changes to be immediately visible). **For production environments, it is strongly recommended to set `enableCaching: true`** to benefit from:
+
 - 80-95% bandwidth reduction
 - 304 Not Modified responses for unchanged files
 - Faster page loads for returning visitors
+- Reduced server load
 
 **See details:** [HTTP Caching Optimization →](./docs/OPTIMIZATION_HTTP_CACHING.md)
 
@@ -357,7 +361,8 @@ Creates a Koa middleware for serving static files.
   },
 
   // HTTP caching configuration
-  enableCaching: true,      // Enable ETag & Last-Modified (default: true)
+  // NOTE: Default is false for development. Set to true in production for better performance!
+  enableCaching: false,     // Enable ETag & Last-Modified (default: false)
   cacheMaxAge: 3600,        // Cache-Control max-age in seconds (default: 3600 = 1 hour)
 }
 ```
@@ -373,7 +378,7 @@ Creates a Koa middleware for serving static files.
 | `urlsReserved` | Array | `[]` | Reserved directory paths (first-level only) |
 | `template.render` | Function | `undefined` | Template rendering function |
 | `template.ext` | Array | `[]` | Extensions for template rendering |
-| `enableCaching` | Boolean | `true` | Enable HTTP caching headers |
+| `enableCaching` | Boolean | `false` | Enable HTTP caching headers (recommended: `true` in production) |
 | `cacheMaxAge` | Number | `3600` | Cache duration in seconds |
 
 ---

@@ -45,7 +45,10 @@ module.exports = function koaClassicServer(
             ext: [], // File extensions to process with template.render
         },
         cacheMaxAge: 3600, // Cache-Control max-age in seconds (default: 1 hour)
-        enableCaching: true, // Enable HTTP caching headers (ETag, Last-Modified)
+        enableCaching: false, // Enable HTTP caching headers (ETag, Last-Modified)
+                              // NOTE: Default is false for development.
+                              // In production, it's recommended to set enableCaching: true
+                              // to reduce bandwidth usage and improve performance.
     }
     */
 ) {
@@ -97,8 +100,11 @@ module.exports = function koaClassicServer(
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
 
     // OPTIMIZATION: HTTP Caching options
+    // NOTE: Default enableCaching is false for development environments.
+    // For production deployments, it's strongly recommended to enable caching
+    // by setting enableCaching: true to benefit from reduced bandwidth and improved performance.
     options.cacheMaxAge = typeof options.cacheMaxAge === 'number' && options.cacheMaxAge >= 0 ? options.cacheMaxAge : 3600;
-    options.enableCaching = typeof options.enableCaching === 'boolean' ? options.enableCaching : true;
+    options.enableCaching = typeof options.enableCaching === 'boolean' ? options.enableCaching : false;
 
     return async (ctx, next) => {
         // Check if method is allowed

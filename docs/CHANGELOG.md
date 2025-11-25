@@ -5,6 +5,84 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3] - 2025-11-25
+
+### 🔧 Configuration Changes
+
+#### Changed Default Caching Behavior
+- **Change**: `enableCaching` default value changed from `true` to `false`
+- **Rationale**: Better development experience - changes are immediately visible without cache invalidation
+- **Production Impact**: **Users should explicitly set `enableCaching: true` in production environments**
+- **Benefits in Production**:
+  - 80-95% bandwidth reduction
+  - Faster page loads with 304 Not Modified responses
+  - Reduced server load
+- **Code**: `index.cjs:107`
+
+### 📝 Documentation Improvements
+
+#### Enhanced Caching Documentation
+- Added comprehensive production recommendations in README.md
+- Added inline code comments explaining the default behavior
+- Clear guidance on when to enable caching (development vs production)
+- **Files**: `README.md`, `index.cjs`
+
+### ⚠️ Migration Notice
+
+**IMPORTANT**: If you are upgrading from 2.1.2 or earlier and rely on HTTP caching:
+
+```javascript
+// You must now explicitly enable caching in production
+app.use(koaClassicServer(__dirname + '/public', {
+  enableCaching: true  // ← Add this for production environments
+}));
+```
+
+**Development**: No changes needed - the new default (`false`) is better for development.
+
+**Production**: Explicitly set `enableCaching: true` to maintain previous behavior and performance benefits.
+
+### 📦 Package Changes
+
+- **Version**: `2.1.2` → `2.1.3`
+
+---
+
+## [2.1.2] - 2025-11-24
+
+### 🎨 Features
+
+#### Sortable Directory Columns
+- Apache2-like directory listing with clickable column headers
+- Sort by Name, Type, or Size (ascending/descending)
+- Fixed navigation bug after sorting
+
+#### File Size Display
+- Human-readable file sizes (B, KB, MB, GB, TB)
+- Proper formatting and precision
+
+#### HTTP Caching
+- ETag and Last-Modified headers
+- 304 Not Modified responses
+- 80-95% bandwidth reduction
+
+### 🧪 Testing
+- 153 tests passing
+- Comprehensive test coverage
+
+---
+
+## [2.1.1] - 2025-11-23
+
+### 🚀 Production Release
+
+- Async/await implementation
+- Non-blocking I/O
+- Performance optimizations
+- Flow documentation
+
+---
+
 ## [1.2.0] - 2025-11-17
 
 ### 🎉 SECURITY & BUG FIX RELEASE

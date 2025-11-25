@@ -8,9 +8,15 @@
 
 ---
 
-## 🎉 Version 2.1.2 - Production Release
+## 🎉 Version 2.1.3 - Configuration Update
 
-Version 2.1.2 is a **major production release** featuring performance optimizations, enhanced directory listing, and critical bug fixes.
+Version 2.1.3 updates the default caching behavior for better development experience while maintaining production-ready performance.
+
+### What's New in 2.1.3
+
+✅ **Development-Friendly Defaults** - `enableCaching` now defaults to `false` for easier development
+✅ **Production Guidance** - Clear documentation on enabling caching for production environments
+✅ **Enhanced Documentation** - Comprehensive notes on caching configuration and recommendations
 
 ### What's New in 2.1.2
 

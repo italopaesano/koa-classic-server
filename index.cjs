@@ -353,6 +353,12 @@ module.exports = function koaClassicServer(
                         return;
                     }
                 }
+            } else {
+                // BUGFIX: When caching is disabled, explicitly prevent browser caching
+                // Without these headers, browsers may use heuristic caching and serve stale content
+                ctx.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+                ctx.set('Pragma', 'no-cache'); // HTTP 1.0 compatibility
+                ctx.set('Expires', '0'); // Proxies
             }
 
             // Verify file is still readable (race condition protection)

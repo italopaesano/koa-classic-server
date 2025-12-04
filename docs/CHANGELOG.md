@@ -5,6 +5,49 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.4] - 2025-12-04
+
+### 🐛 Fixed
+
+#### Browser Heuristic Caching Issue
+- **Problem**: When `enableCaching: false` was set, browsers still cached files using heuristic caching, causing stale content to be served
+- **Solution**: Added explicit anti-cache headers when caching is disabled:
+  - `Cache-Control: no-cache, no-store, must-revalidate`
+  - `Pragma: no-cache` (HTTP/1.0 compatibility)
+  - `Expires: 0` (for proxies)
+- **Impact**: Files are now always fresh in development environments
+- **Code**: `index.cjs:355-361`
+
+### ✅ Added
+
+#### Comprehensive Caching Test Suite
+- Added 14 new test cases for HTTP caching functionality
+- **Total tests**: 22 (was 8)
+- **Coverage includes**:
+  - Custom `cacheMaxAge` values (0, 7200, 86400 seconds)
+  - ETag generation and validation on file changes
+  - Bandwidth savings with 304 Not Modified responses
+  - Different MIME types (HTML, CSS, JS, JSON)
+  - Template rendering compatibility
+  - Concurrent request handling
+- **Result**: All 22 tests pass ✅
+- **File**: `__tests__/caching-headers.test.js`
+
+### 📚 Documentation
+
+- Added comprehensive release notes (English and Italian)
+- Added GitHub release summary
+
+### 📦 Package Changes
+
+- **Version**: `2.1.3` → `2.1.4`
+
+### 🔄 Migration
+
+**No breaking changes** - safe to upgrade from v2.1.3
+
+---
+
 ## [2.1.3] - 2025-11-25
 
 ### 🔧 Configuration Changes

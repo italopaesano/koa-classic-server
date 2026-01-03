@@ -370,6 +370,10 @@ Creates a Koa middleware for serving static files.
   // NOTE: Default is false for development. Set to true in production for better performance!
   enableCaching: false,     // Enable ETag & Last-Modified (default: false)
   cacheMaxAge: 3600,        // Cache-Control max-age in seconds (default: 3600 = 1 hour)
+
+  // URL resolution
+  useOriginalUrl: true,     // Use ctx.originalUrl (default) or ctx.url
+                            // Set false for URL rewriting middleware (i18n, routing)
 }
 ```
 
@@ -386,6 +390,48 @@ Creates a Koa middleware for serving static files.
 | `template.ext` | Array | `[]` | Extensions for template rendering |
 | `enableCaching` | Boolean | `false` | Enable HTTP caching headers (recommended: `true` in production) |
 | `cacheMaxAge` | Number | `3600` | Cache duration in seconds |
+| `useOriginalUrl` | Boolean | `true` | Use `ctx.originalUrl` (default) or `ctx.url` for URL resolution |
+
+#### useOriginalUrl (Boolean, default: true)
+
+Controls which URL property is used for file resolution:
+- **`true` (default)**: Uses `ctx.originalUrl` (immutable, reflects the original request)
+- **`false`**: Uses `ctx.url` (mutable, can be modified by middleware)
+
+**When to use `false`:**
+
+Set `useOriginalUrl: false` when using URL rewriting middleware such as i18n routers or path rewriters that modify `ctx.url`. This allows koa-classic-server to serve files based on the rewritten URL instead of the original request URL.
+
+**Example with i18n middleware:**
+
+```javascript
+const Koa = require('koa');
+const koaClassicServer = require('koa-classic-server');
+
+const app = new Koa();
+
+// i18n middleware that rewrites URLs
+app.use(async (ctx, next) => {
+  if (ctx.path.match(/^\/it\//)) {
+    ctx.url = ctx.path.replace(/^\/it/, ''); // /it/page.html → /page.html
+  }
+  await next();
+});
+
+// Serve files using rewritten URL
+app.use(koaClassicServer(__dirname + '/www', {
+  useOriginalUrl: false  // Use ctx.url (rewritten) instead of ctx.originalUrl
+}));
+
+app.listen(3000);
+```
+
+**How it works:**
+- Request: `GET /it/page.html`
+- `ctx.originalUrl`: `/it/page.html` (unchanged)
+- `ctx.url`: `/page.html` (rewritten by middleware)
+- With `useOriginalUrl: false`: Server looks for `/www/page.html` ✅
+- With `useOriginalUrl: true` (default): Server looks for `/www/it/page.html` ❌ 404
 
 ---
 

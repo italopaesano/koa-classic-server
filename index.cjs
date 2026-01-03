@@ -44,13 +44,17 @@ module.exports = function koaClassicServer(
             render: undefined, // Template rendering function: async (ctx, next, filePath) => {}
             ext: [], // File extensions to process with template.render
         },
-        cacheMaxAge: 3600, // Cache-Control max-age in seconds (default: 1 hour)
-        enableCaching: false, // Enable HTTP caching headers (ETag, Last-Modified)
-                              // NOTE: Default is false for development.
-                              // In production, it's recommended to set enableCaching: true
-                              // to reduce bandwidth usage and improve performance.
+        browserCacheMaxAge: 3600, // Browser Cache-Control max-age in seconds (default: 1 hour)
+        browserCacheEnabled: false, // Enable browser HTTP caching headers (ETag, Last-Modified)
+                                    // NOTE: Default is false for development.
+                                    // In production, it's recommended to set browserCacheEnabled: true
+                                    // to reduce bandwidth usage and improve performance.
         useOriginalUrl: true, // Use ctx.originalUrl (default) or ctx.url
                               // Set false for URL rewriting middleware (i18n, routing)
+
+        // DEPRECATED OPTIONS (maintained for backward compatibility):
+        // cacheMaxAge: use browserCacheMaxAge instead
+        // enableCaching: use browserCacheEnabled instead
     }
     */
 ) {
@@ -102,11 +106,36 @@ module.exports = function koaClassicServer(
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
 
     // OPTIMIZATION: HTTP Caching options
-    // NOTE: Default enableCaching is false for development environments.
+    // NOTE: Default browserCacheEnabled is false for development environments.
     // For production deployments, it's strongly recommended to enable caching
-    // by setting enableCaching: true to benefit from reduced bandwidth and improved performance.
-    options.cacheMaxAge = typeof options.cacheMaxAge === 'number' && options.cacheMaxAge >= 0 ? options.cacheMaxAge : 3600;
-    options.enableCaching = typeof options.enableCaching === 'boolean' ? options.enableCaching : false;
+    // by setting browserCacheEnabled: true to benefit from reduced bandwidth and improved performance.
+
+    // DEPRECATION: Handle legacy option names for backward compatibility
+    if ('cacheMaxAge' in opts && !('browserCacheMaxAge' in opts)) {
+        console.warn(
+            '\x1b[33m%s\x1b[0m',
+            '[koa-classic-server] DEPRECATION WARNING: The "cacheMaxAge" option is deprecated and will be removed in future versions.\n' +
+            '  Current usage: cacheMaxAge: ' + opts.cacheMaxAge + '\n' +
+            '  Recommended:   browserCacheMaxAge: ' + opts.cacheMaxAge + '\n' +
+            '  Please update your configuration to use the new option name.'
+        );
+        options.browserCacheMaxAge = opts.cacheMaxAge;
+    }
+
+    if ('enableCaching' in opts && !('browserCacheEnabled' in opts)) {
+        console.warn(
+            '\x1b[33m%s\x1b[0m',
+            '[koa-classic-server] DEPRECATION WARNING: The "enableCaching" option is deprecated and will be removed in future versions.\n' +
+            '  Current usage: enableCaching: ' + opts.enableCaching + '\n' +
+            '  Recommended:   browserCacheEnabled: ' + opts.enableCaching + '\n' +
+            '  Please update your configuration to use the new option name.'
+        );
+        options.browserCacheEnabled = opts.enableCaching;
+    }
+
+    // Set new option names (with defaults)
+    options.browserCacheMaxAge = typeof options.browserCacheMaxAge === 'number' && options.browserCacheMaxAge >= 0 ? options.browserCacheMaxAge : 3600;
+    options.browserCacheEnabled = typeof options.browserCacheEnabled === 'boolean' ? options.browserCacheEnabled : false;
     options.useOriginalUrl = typeof options.useOriginalUrl === 'boolean' ? options.useOriginalUrl : true;
 
     return async (ctx, next) => {
@@ -322,7 +351,7 @@ module.exports = function koaClassicServer(
             }
 
             // OPTIMIZATION: HTTP Caching Headers
-            if (options.enableCaching) {
+            if (options.browserCacheEnabled) {
                 // Generate ETag from mtime timestamp + file size
                 // This ensures ETag changes when file is modified or resized
                 const etag = `"${fileStat.mtime.getTime()}-${fileStat.size}"`;
@@ -333,7 +362,7 @@ module.exports = function koaClassicServer(
                 // Set caching headers
                 ctx.set('ETag', etag);
                 ctx.set('Last-Modified', lastModified);
-                ctx.set('Cache-Control', `public, max-age=${options.cacheMaxAge}, must-revalidate`);
+                ctx.set('Cache-Control', `public, max-age=${options.browserCacheMaxAge}, must-revalidate`);
 
                 // OPTIMIZATION: Handle conditional requests (304 Not Modified)
 

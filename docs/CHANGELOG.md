@@ -5,6 +5,71 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-01-03
+
+### 🔄 Renamed Options (with Backward Compatibility)
+
+#### Renamed Caching Options for Clarity
+- **Old Names** (DEPRECATED): `enableCaching`, `cacheMaxAge`
+- **New Names**: `browserCacheEnabled`, `browserCacheMaxAge`
+- **Reason**: Improved clarity - these options specifically control browser-side HTTP caching
+- **Backward Compatible**: Old names still work but display deprecation warnings
+
+#### Deprecation Warnings
+When using deprecated option names, a warning is displayed on the terminal:
+```
+[koa-classic-server] DEPRECATION WARNING: The "enableCaching" option is deprecated and will be removed in future versions.
+  Current usage: enableCaching: true
+  Recommended:   browserCacheEnabled: true
+  Please update your configuration to use the new option name.
+```
+
+### 📝 Documentation Updates
+
+- Updated README.md with new option names
+- Updated JSDoc comments in index.cjs
+- Added deprecation notes in Options table
+- All examples updated to use new names
+
+### 🔧 Changes
+
+- **index.cjs**: Lines 109-135 - Added backward compatibility logic with deprecation warnings
+- **index.cjs**: Lines 47-58 - Updated JSDoc comments
+- **index.cjs**: Lines 350, 361 - Updated code to use new option names
+- **README.md**: Updated all references to use new names, added deprecation notes
+- **package.json**: Version bumped from `2.2.0` to `2.3.0`
+
+### ⚠️ Migration Guide
+
+**No immediate changes required** - old option names still work.
+
+**Recommended migration:**
+
+```javascript
+// Old (still works, but deprecated)
+app.use(koaClassicServer('/public', {
+  enableCaching: true,
+  cacheMaxAge: 3600
+}));
+
+// New (recommended)
+app.use(koaClassicServer('/public', {
+  browserCacheEnabled: true,
+  browserCacheMaxAge: 3600
+}));
+```
+
+**Timeline:**
+- **v2.3.0**: Old names work with deprecation warnings
+- **Future versions**: Old names may be removed (will be announced in advance)
+
+### 📦 Package Changes
+
+- **Version**: `2.2.0` → `2.3.0`
+- **Semver**: Minor version bump (new feature names, backward compatible)
+
+---
+
 ## [2.2.0] - 2026-01-03
 
 ### ✨ Features

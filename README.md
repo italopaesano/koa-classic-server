@@ -4,37 +4,30 @@
 
 [![npm version](https://img.shields.io/npm/v/koa-classic-server.svg)](https://www.npmjs.com/package/koa-classic-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-153%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-197%20passing-brightgreen.svg)]()
 
 ---
 
-## 🎉 Version 2.1.3 - Configuration Update
+## 🎉 Version 2.X - Production-Ready Release
 
-Version 2.1.3 updates the default caching behavior for better development experience while maintaining production-ready performance.
+The 2.X series brings major performance improvements, enhanced security, and powerful new features while maintaining full backward compatibility.
 
-### What's New in 2.1.3
+### Key Features in Version 2.X
 
-✅ **Development-Friendly Defaults** - `browserCacheEnabled` now defaults to `false` for easier development
-✅ **Production Guidance** - Clear documentation on enabling caching for production environments
-✅ **Enhanced Documentation** - Comprehensive notes on caching configuration and recommendations
-
-### What's New in 2.1.2
-
+✅ **URL Rewriting Support** - Compatible with i18n and routing middleware via `useOriginalUrl` option
+✅ **Improved Caching Controls** - Clear `browserCacheEnabled` and `browserCacheMaxAge` options
+✅ **Development-Friendly Defaults** - Caching disabled by default for easier development
+✅ **Production Optimized** - Enable caching in production for 80-95% bandwidth reduction
 ✅ **Sortable Directory Columns** - Click Name/Type/Size to sort (Apache2-like)
-✅ **Navigation Bug Fixed** - Directory navigation now works correctly after sorting
 ✅ **File Size Display** - Human-readable file sizes (B, KB, MB, GB, TB)
-✅ **HTTP Caching** - 80-95% bandwidth reduction with ETag and Last-Modified
+✅ **HTTP Caching** - ETag and Last-Modified headers with 304 responses
 ✅ **Async/Await** - Non-blocking I/O for high performance
-✅ **153 Tests Passing** - Comprehensive test coverage
-✅ **Flow Documentation** - Complete execution flow diagrams
-✅ **Code Review** - Standardized operators and best practices
-
-### What's New in 2.0
-
-✅ **Performance Optimizations** - 50-70% faster directory listings
+✅ **Performance Optimized** - 50-70% faster directory listings
 ✅ **Enhanced Index Option** - Array format with RegExp support
-✅ **Template Engine Guide** - Complete documentation with examples
-✅ **Security Hardened** - Path traversal, XSS, race condition fixes
+✅ **Template Engine Support** - EJS, Pug, Handlebars, Nunjucks, and more
+✅ **Enterprise Security** - Path traversal, XSS, race condition protection
+✅ **Comprehensive Testing** - 197 tests passing with extensive coverage
+✅ **Complete Documentation** - Detailed guides and examples
 
 [See full changelog →](./docs/CHANGELOG.md)
 
@@ -563,7 +556,7 @@ npm run test:performance
 ```
 
 **Test Coverage:**
-- ✅ 153 tests passing
+- ✅ 197 tests passing
 - ✅ Security tests (path traversal, XSS, race conditions)
 - ✅ EJS template integration tests
 - ✅ Index option tests (strings, arrays, RegExp)

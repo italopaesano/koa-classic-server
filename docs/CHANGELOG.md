@@ -5,6 +5,66 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-01-03
+
+### ✨ Features
+
+#### Added useOriginalUrl Option
+- **New Option**: `useOriginalUrl` (Boolean, default: `true`)
+- **Purpose**: Controls URL resolution for file serving - use `ctx.originalUrl` (immutable) or `ctx.url` (mutable)
+- **Use Case**: Compatibility with URL rewriting middleware (i18n, routing)
+- **Backward Compatible**: Default value `true` maintains existing behavior
+
+#### URL Rewriting Middleware Support
+- **Problem Solved**: koa-classic-server previously used `ctx.href` (based on `ctx.originalUrl`), which caused 404 errors when middleware rewrites URLs by modifying `ctx.url`
+- **Solution**: Set `useOriginalUrl: false` to use the rewritten URL from `ctx.url` instead
+- **Example**: i18n middleware that strips language prefixes (`/it/page.html` → `/page.html`)
+
+### 📝 Documentation
+
+- Added comprehensive `useOriginalUrl` documentation in README.md
+- Added JSDoc comments in index.cjs
+- Included practical i18n middleware example
+- Added option to API reference table
+
+### 🔧 Changes
+
+- **index.cjs**: Line 108 - Added `useOriginalUrl` option initialization
+- **index.cjs**: Lines 117-125 - Modified URL construction logic to support both `ctx.originalUrl` and `ctx.url`
+- **README.md**: Added detailed section explaining `useOriginalUrl` with examples
+- **package.json**: Version bumped from `2.1.4` to `2.2.0`
+
+### 💡 Usage Example
+
+```javascript
+// i18n middleware example
+app.use(async (ctx, next) => {
+  if (ctx.path.match(/^\/it\//)) {
+    ctx.url = ctx.path.replace(/^\/it/, ''); // /it/page.html → /page.html
+  }
+  await next();
+});
+
+app.use(koaClassicServer('/www', {
+  useOriginalUrl: false // Use rewritten URL
+}));
+```
+
+### ⚠️ Migration Notes
+
+**No breaking changes** - this is a backward-compatible release.
+
+- **Default behavior unchanged**: `useOriginalUrl` defaults to `true`
+- **No code changes required** for existing implementations
+- **New feature**: Set `useOriginalUrl: false` if you use URL rewriting middleware
+
+### 📦 Package Changes
+
+- **Version**: `2.1.4` → `2.2.0`
+- **Semver**: Minor version bump (new feature, backward compatible)
+
+---
+
 ## [2.1.3] - 2025-11-25
 
 ### 🔧 Configuration Changes

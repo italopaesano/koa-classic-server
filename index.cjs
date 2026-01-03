@@ -49,6 +49,8 @@ module.exports = function koaClassicServer(
                               // NOTE: Default is false for development.
                               // In production, it's recommended to set enableCaching: true
                               // to reduce bandwidth usage and improve performance.
+        useOriginalUrl: true, // Use ctx.originalUrl (default) or ctx.url
+                              // Set false for URL rewriting middleware (i18n, routing)
     }
     */
 ) {
@@ -105,6 +107,7 @@ module.exports = function koaClassicServer(
     // by setting enableCaching: true to benefit from reduced bandwidth and improved performance.
     options.cacheMaxAge = typeof options.cacheMaxAge === 'number' && options.cacheMaxAge >= 0 ? options.cacheMaxAge : 3600;
     options.enableCaching = typeof options.enableCaching === 'boolean' ? options.enableCaching : false;
+    options.useOriginalUrl = typeof options.useOriginalUrl === 'boolean' ? options.useOriginalUrl : true;
 
     return async (ctx, next) => {
         // Check if method is allowed
@@ -113,12 +116,14 @@ module.exports = function koaClassicServer(
             return;
         }
 
-        // Normalize URL (remove trailing slash)
+        // Construct full URL based on useOriginalUrl option
+        const urlToUse = options.useOriginalUrl ? ctx.originalUrl : ctx.url;
+        const fullUrl = ctx.protocol + '://' + ctx.host + urlToUse;
         let pageHref = '';
-        if (ctx.href.charAt(ctx.href.length - 1) === '/') {
-            pageHref = new URL(ctx.href.slice(0, -1));
+        if (fullUrl.charAt(fullUrl.length - 1) === '/') {
+            pageHref = new URL(fullUrl.slice(0, -1));
         } else {
-            pageHref = new URL(ctx.href);
+            pageHref = new URL(fullUrl);
         }
 
         // Check URL prefix

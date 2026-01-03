@@ -14,7 +14,7 @@ Version 2.1.3 updates the default caching behavior for better development experi
 
 ### What's New in 2.1.3
 
-✅ **Development-Friendly Defaults** - `enableCaching` now defaults to `false` for easier development
+✅ **Development-Friendly Defaults** - `browserCacheEnabled` now defaults to `false` for easier development
 ✅ **Production Guidance** - Clear documentation on enabling caching for production environments
 ✅ **Enhanced Documentation** - Comprehensive notes on caching configuration and recommendations
 
@@ -101,8 +101,8 @@ app.use(koaClassicServer(__dirname + '/public', {
   showDirContents: true,
   index: ['index.html', 'index.htm'],
   urlPrefix: '/static',
-  cacheMaxAge: 3600,
-  enableCaching: true
+  browserCacheMaxAge: 3600,
+  browserCacheEnabled: true
 }));
 
 app.listen(3000);
@@ -229,14 +229,14 @@ Enable aggressive caching for static files:
 
 ```javascript
 app.use(koaClassicServer(__dirname + '/public', {
-  enableCaching: true,       // Enable ETag and Last-Modified
-  cacheMaxAge: 86400,        // Cache for 24 hours (in seconds)
+  browserCacheEnabled: true,       // Enable ETag and Last-Modified
+  browserCacheMaxAge: 86400,        // Cache for 24 hours (in seconds)
 }));
 ```
 
 **⚠️ Important: Production Recommendation**
 
-The default value for `enableCaching` is `false` to facilitate development (where you want changes to be immediately visible). **For production environments, it is strongly recommended to set `enableCaching: true`** to benefit from:
+The default value for `browserCacheEnabled` is `false` to facilitate development (where you want changes to be immediately visible). **For production environments, it is strongly recommended to set `browserCacheEnabled: true`** to benefit from:
 
 - 80-95% bandwidth reduction
 - 304 Not Modified responses for unchanged files
@@ -281,8 +281,8 @@ app.use(koaClassicServer(path.join(__dirname, 'public'), {
   index: ['index.html', 'index.htm'],
   urlPrefix: '/assets',
   urlsReserved: ['/admin', '/api', '/.git'],
-  enableCaching: true,
-  cacheMaxAge: 86400,  // 24 hours
+  browserCacheEnabled: true,
+  browserCacheMaxAge: 86400,  // 24 hours
 }));
 
 // Serve dynamic templates
@@ -366,14 +366,18 @@ Creates a Koa middleware for serving static files.
     ext: ['ejs', 'pug', 'hbs']
   },
 
-  // HTTP caching configuration
+  // Browser HTTP caching configuration
   // NOTE: Default is false for development. Set to true in production for better performance!
-  enableCaching: false,     // Enable ETag & Last-Modified (default: false)
-  cacheMaxAge: 3600,        // Cache-Control max-age in seconds (default: 3600 = 1 hour)
+  browserCacheEnabled: false,     // Enable ETag & Last-Modified (default: false)
+  browserCacheMaxAge: 3600,        // Cache-Control max-age in seconds (default: 3600 = 1 hour)
 
   // URL resolution
   useOriginalUrl: true,     // Use ctx.originalUrl (default) or ctx.url
                             // Set false for URL rewriting middleware (i18n, routing)
+
+  // DEPRECATED (use new names above):
+  // enableCaching: use browserCacheEnabled instead
+  // cacheMaxAge: use browserCacheMaxAge instead
 }
 ```
 
@@ -388,9 +392,11 @@ Creates a Koa middleware for serving static files.
 | `urlsReserved` | Array | `[]` | Reserved directory paths (first-level only) |
 | `template.render` | Function | `undefined` | Template rendering function |
 | `template.ext` | Array | `[]` | Extensions for template rendering |
-| `enableCaching` | Boolean | `false` | Enable HTTP caching headers (recommended: `true` in production) |
-| `cacheMaxAge` | Number | `3600` | Cache duration in seconds |
+| `browserCacheEnabled` | Boolean | `false` | Enable browser HTTP caching headers (recommended: `true` in production) |
+| `browserCacheMaxAge` | Number | `3600` | Browser cache duration in seconds |
 | `useOriginalUrl` | Boolean | `true` | Use `ctx.originalUrl` (default) or `ctx.url` for URL resolution |
+| ~~`enableCaching`~~ | Boolean | `false` | **DEPRECATED**: Use `browserCacheEnabled` instead |
+| ~~`cacheMaxAge`~~ | Number | `3600` | **DEPRECATED**: Use `browserCacheMaxAge` instead |
 
 #### useOriginalUrl (Boolean, default: true)
 

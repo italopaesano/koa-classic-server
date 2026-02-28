@@ -35,7 +35,7 @@
 - Navigazione parent directory con link ".. Parent Directory"
 - Indicazione chiara del tipo di risorsa (DIR, MIME type)
 - Gestione e visualizzazione cartelle riservate
-- Supporto link simbolici
+- Supporto completo link simbolici (symlink a file, directory, broken e circolari)
 
 #### 3. Supporto Template Engine
 - Integrazione flessibile con motori di template (es. EJS, Pug, Handlebars)
@@ -776,6 +776,49 @@ http://localhost:3000/file.txt/ → http://localhost:3000/file.txt
 ```
 
 Questo assicura comportamento coerente indipendentemente dal trailing slash.
+
+### Gestione dei Link Simbolici (Symlink)
+
+Il middleware supporta completamente i link simbolici (symlink). Questo è fondamentale in ambienti dove i file serviti sono symlink anziché file regolari, come ad esempio:
+
+- **NixOS con buildFHSEnv** (chroot-like): i file nella directory www/ appaiono come symlink al Nix store
+- **Docker bind mounts**: i file montati possono risultare come symlink
+- **npm link**: i pacchetti linkati sono symlink
+- **Deploy Capistrano-style**: la directory `current` è un symlink alla release attiva
+
+#### Comportamento
+
+Il middleware segue i symlink in modo trasparente tramite `fs.promises.stat()` (che risolve il symlink al target reale), ma solo quando `dirent.isSymbolicLink()` è `true`. Per i file regolari non viene effettuata alcuna chiamata aggiuntiva (zero overhead).
+
+#### Risoluzione Index File
+
+Quando il middleware cerca un file index in una directory (opzione `index`), i symlink che puntano a file regolari vengono inclusi nella ricerca, sia con pattern stringa che RegExp:
+
+```
+Directory:
+  index.ejs → /nix/store/.../index.ejs  (symlink a file)
+  style.css                              (file regolare)
+
+Config: index: ['index.ejs']
+Risultato: Serve index.ejs attraverso il symlink ✓
+```
+
+#### Directory Listing
+
+Nel directory listing, i symlink sono identificati visivamente:
+
+| Caso | Indicatore | Cliccabile | Tipo mostrato |
+|------|-----------|------------|---------------|
+| Symlink a file | `( Symlink )` | Sì | MIME type del target |
+| Symlink a directory | `( Symlink )` | Sì | `DIR` |
+| Symlink rotto/circolare | `( Broken Symlink )` | No | `unknown` |
+| File/directory regolare | nessuno | Sì | tipo reale |
+
+#### Casi Limite
+
+- **Broken symlink** (target inesistente): il GET diretto restituisce 404; nel listing il nome appare senza link
+- **Symlink circolare** (A → B → A): trattato come broken symlink, nessun loop infinito
+- **Symlink a directory**: navigabile come una directory regolare, i file al suo interno sono accessibili
 
 ### MIME Types
 
@@ -1558,8 +1601,13 @@ Contributi benvenuti! Per favore:
 
 ### Changelog
 
+#### v1.2.0
+- Fix: supporto completo link simbolici in `findIndexFile()` e directory listing
+- Nuovi helper `isFileOrSymlinkToFile()` / `isDirOrSymlinkToDir()` (zero overhead per file regolari)
+- Directory listing: indicatori `( Symlink )` e `( Broken Symlink )`, tipo effettivo (MIME/DIR) per symlink
+- 17 nuovi test per tutti gli scenari symlink (NixOS, Docker, npm link, broken, circular)
+
 #### v1.1.0
-- Versione attuale
 - Supporto conditional exports
 - Test suite completa
 

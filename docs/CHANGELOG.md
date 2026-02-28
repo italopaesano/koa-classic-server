@@ -5,6 +5,58 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-02-28
+
+### ✨ New Feature
+
+#### hideExtension - Clean URLs (mod_rewrite-like)
+- **New Option**: `hideExtension: { ext: '.ejs', redirect: 301 }`
+- **Purpose**: Hide file extensions from URLs for SEO-friendly clean URLs
+- **Clean URL Resolution**: `/about` → serves `about.ejs` (when file exists)
+- **Extension Redirect**: `/about.ejs` → 301 redirect to `/about` (preserves query string)
+- **Index File Redirect**: `/index.ejs` → redirect to `/`, `/section/index.ejs` → redirect to `/section/`
+- **Conflict Resolution**: `.ejs` file wins over both directories and extensionless files with same base name
+- **Case-Sensitive**: Extension matching is case-sensitive (`.ejs` ≠ `.EJS`)
+- **No Interference**: URLs with other extensions (`.css`, `.png`, etc.) pass through normally
+- **Trailing Slash**: `/about/` always means directory, never resolves to file
+- **Redirect uses `ctx.originalUrl`**: Preserves URL prefixes from upstream middleware (i18n, routing)
+
+#### Input Validation
+- `hideExtension: true` → throws Error (must be an object)
+- `hideExtension: {}` → throws Error (missing `ext`)
+- `hideExtension: { ext: '' }` → throws Error (empty ext)
+- `hideExtension: { ext: 'ejs' }` → warning + auto-normalizes to `.ejs`
+- `hideExtension: { ext: '.ejs', redirect: 'abc' }` → throws Error (redirect must be number)
+
+#### Integration with Existing Options
+- **urlsReserved**: Checked before `hideExtension`, no interference
+- **urlPrefix**: `hideExtension` works on path after prefix removal
+- **useOriginalUrl**: Resolution follows setting; redirect always uses `ctx.originalUrl`
+- **template**: Resolved files pass through template engine normally
+- **method**: `hideExtension` only applies to allowed HTTP methods
+
+### 🧪 Testing
+- Added `__tests__/hideExtension.test.js` with 31 tests covering:
+  - Clean URL resolution (single and multi-level paths)
+  - Extension redirect (301/302, query string preservation)
+  - Directory/file conflict resolution
+  - Trailing slash behavior
+  - Extensionless file conflict
+  - Index file redirect (`/index.ejs` → `/`)
+  - `urlsReserved` interaction
+  - `useOriginalUrl` interaction (redirect preserves prefix)
+  - Case-sensitive matching
+  - No interference with other extensions
+  - Template engine integration
+  - Input validation (7 validation tests)
+- All 278 existing tests still pass (zero regressions)
+
+### 📦 Package Changes
+- **Version**: `2.4.0` → `2.5.0`
+- **Semver**: Minor version bump (new feature, backward compatible)
+
+---
+
 ## [2.4.0] - 2026-02-28
 
 ### 🐛 Bug Fix

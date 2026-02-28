@@ -138,6 +138,40 @@ module.exports = function koaClassicServer(
     options.browserCacheEnabled = typeof options.browserCacheEnabled === 'boolean' ? options.browserCacheEnabled : false;
     options.useOriginalUrl = typeof options.useOriginalUrl === 'boolean' ? options.useOriginalUrl : true;
 
+    /**
+     * Returns true if dirent is a regular file or a symlink pointing to a regular file.
+     * Uses fs.promises.stat (which follows symlinks) only when dirent.isSymbolicLink() is true.
+     */
+    async function isFileOrSymlinkToFile(dirent, dirPath) {
+        if (dirent.isFile()) return true;
+        if (dirent.isSymbolicLink()) {
+            try {
+                const realStat = await fs.promises.stat(path.join(dirPath, dirent.name));
+                return realStat.isFile();
+            } catch {
+                return false; // Broken or circular symlink
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns true if dirent is a directory or a symlink pointing to a directory.
+     * Uses fs.promises.stat (which follows symlinks) only when dirent.isSymbolicLink() is true.
+     */
+    async function isDirOrSymlinkToDir(dirent, dirPath) {
+        if (dirent.isDirectory()) return true;
+        if (dirent.isSymbolicLink()) {
+            try {
+                const realStat = await fs.promises.stat(path.join(dirPath, dirent.name));
+                return realStat.isDirectory();
+            } catch {
+                return false; // Broken or circular symlink
+            }
+        }
+        return false;
+    }
+
     return async (ctx, next) => {
         // Check if method is allowed
         if (!options.method.includes(ctx.method)) {
@@ -259,10 +293,16 @@ module.exports = function koaClassicServer(
                 // Read directory contents
                 const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
 
-                // Filter only files (not directories)
-                const fileNames = files
-                    .filter(dirent => dirent.isFile())
-                    .map(dirent => dirent.name);
+                // Filter files, following symlinks to determine effective type
+                const fileCheckResults = await Promise.all(
+                    files.map(async dirent => ({
+                        name: dirent.name,
+                        isFile: await isFileOrSymlinkToFile(dirent, dirPath)
+                    }))
+                );
+                const fileNames = fileCheckResults
+                    .filter(entry => entry.isFile)
+                    .map(entry => entry.name);
 
                 // Search with priority order (first pattern wins)
                 for (const pattern of indexPatterns) {
@@ -542,27 +582,45 @@ module.exports = function koaClassicServer(
                         itemUri = `${baseUrl}/${encodeURIComponent(s_name)}`;
                     }
 
+                    // Resolve symlinks to their effective type
+                    let effectiveType = type;
+                    let isBrokenSymlink = false;
+                    if (type === 3) {
+                        try {
+                            const realStat = await fs.promises.stat(itemPath);
+                            if (realStat.isFile()) effectiveType = 1;
+                            else if (realStat.isDirectory()) effectiveType = 2;
+                        } catch {
+                            isBrokenSymlink = true; // Broken or circular symlink
+                        }
+                    }
+
                     // Get file size
                     let sizeStr = '-';
                     let sizeBytes = 0;
-                    try {
-                        const itemStat = await fs.promises.stat(itemPath);
-                        if (type === 1) {
-                            sizeBytes = itemStat.size;
-                            sizeStr = formatSize(sizeBytes);
-                        } else {
+                    if (!isBrokenSymlink) {
+                        try {
+                            const itemStat = await fs.promises.stat(itemPath);
+                            if (effectiveType === 1) {
+                                sizeBytes = itemStat.size;
+                                sizeStr = formatSize(sizeBytes);
+                            } else {
+                                sizeStr = '-';
+                            }
+                        } catch (error) {
                             sizeStr = '-';
                         }
-                    } catch (error) {
-                        sizeStr = '-';
                     }
 
-                    const mimeType = type === 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
-                    const isReserved = pageHrefOutPrefix.pathname === '/' && options.urlsReserved.includes('/' + s_name) && (type === 2 || type === 3);
+                    const mimeType = effectiveType === 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
+                    const isReserved = pageHrefOutPrefix.pathname === '/' && options.urlsReserved.includes('/' + s_name) && (effectiveType === 2 || type === 3);
 
                     items.push({
                         name: s_name,
                         type: type,
+                        effectiveType: effectiveType,
+                        isSymlink: type === 3,
+                        isBrokenSymlink: isBrokenSymlink,
                         mimeType: mimeType,
                         sizeStr: sizeStr,
                         sizeBytes: sizeBytes,
@@ -578,19 +636,19 @@ module.exports = function koaClassicServer(
                     if (sortBy === 'name') {
                         comparison = a.name.localeCompare(b.name);
                     } else if (sortBy === 'type') {
-                        // Sort directories first, then by mime type
-                        if (a.type === 2 && b.type !== 2) {
+                        // Sort directories first, then by mime type (using effectiveType for symlinks)
+                        if (a.effectiveType === 2 && b.effectiveType !== 2) {
                             comparison = -1;
-                        } else if (a.type !== 2 && b.type === 2) {
+                        } else if (a.effectiveType !== 2 && b.effectiveType === 2) {
                             comparison = 1;
                         } else {
                             comparison = a.mimeType.localeCompare(b.mimeType);
                         }
                     } else if (sortBy === 'size') {
-                        // Directories always at top when sorting by size
-                        if (a.type === 2 && b.type !== 2) {
+                        // Directories always at top when sorting by size (using effectiveType for symlinks)
+                        if (a.effectiveType === 2 && b.effectiveType !== 2) {
                             comparison = -1;
-                        } else if (a.type !== 2 && b.type === 2) {
+                        } else if (a.effectiveType !== 2 && b.effectiveType === 2) {
                             comparison = 1;
                         } else {
                             comparison = a.sizeBytes - b.sizeBytes;
@@ -604,16 +662,26 @@ module.exports = function koaClassicServer(
                 // Generate HTML for sorted items
                 for (const item of items) {
                     let rowStart = '';
-                    if (item.type === 1) {
+                    if (item.effectiveType === 1) {
                         rowStart = `<tr><td> FILE `;
                     } else {
                         rowStart = `<tr><td>`;
                     }
 
+                    // Symlink indicator label
+                    const symlinkLabel = item.isBrokenSymlink
+                        ? ' ( Broken Symlink )'
+                        : item.isSymlink
+                            ? ' ( Symlink )'
+                            : '';
+
                     if (item.isReserved) {
-                        parts.push(`${rowStart} ${escapeHtml(item.name)}</td> <td> DIR BUT RESERVED</td><td>${item.sizeStr}</td></tr>`);
+                        parts.push(`${rowStart} ${escapeHtml(item.name)}${symlinkLabel}</td> <td> DIR BUT RESERVED</td><td>${item.sizeStr}</td></tr>`);
+                    } else if (item.isBrokenSymlink) {
+                        // Broken symlink: name visible but not clickable
+                        parts.push(`${rowStart} ${escapeHtml(item.name)}${symlinkLabel}</td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
                     } else {
-                        parts.push(`${rowStart} <a href="${escapeHtml(item.itemUri)}">${escapeHtml(item.name)}</a> </td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
+                        parts.push(`${rowStart} <a href="${escapeHtml(item.itemUri)}">${escapeHtml(item.name)}</a>${symlinkLabel} </td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
                     }
                 }
             }

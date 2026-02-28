@@ -1537,7 +1537,7 @@ app.use(koaClassicServer(__dirname + '/public', {
 ## Informazioni Aggiuntive
 
 ### Versione
-**1.1.0**
+**2.4.0**
 
 ### Autore
 **Italo Paesano**
@@ -1628,6 +1628,6 @@ Repository con esempi completi disponibile nella cartella `customTest/` del prog
 
 ---
 
-**Documentazione generata per koa-classic-server v1.1.0**
+**Documentazione generata per koa-classic-server v2.4.0**
 
-*Ultimo aggiornamento: 2025-11-17*
+*Ultimo aggiornamento: 2026-02-28*

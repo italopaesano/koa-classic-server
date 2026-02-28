@@ -5,6 +5,41 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-02-28
+
+### 🐛 Bug Fix
+
+#### Fixed Symlink Support in Index File Discovery and Directory Listing
+- **Issue**: On systems where served files are symbolic links (NixOS buildFHSEnv, Docker bind mounts, `npm link`, Capistrano-style deploys), `findIndexFile()` failed because `dirent.isFile()` returns `false` for symlinks. This caused `GET /` to show directory listing instead of rendering the index file, and `GET /index.ejs` to return 404.
+- **Impact**: HIGH - Server unusable on NixOS/buildFHSEnv and similar environments
+- **Fix**: Added `isFileOrSymlinkToFile()` / `isDirOrSymlinkToDir()` helpers that follow symlinks via `fs.promises.stat()` only when `dirent.isSymbolicLink()` is true, adding zero overhead for regular files.
+- **Code**: `index.cjs` - new helpers + `findIndexFile()` + `show_dir()`
+
+### ✨ Improvements
+
+#### Directory Listing Symlink Indicators
+- Symlinks to files/directories show `( Symlink )` label next to the name
+- Broken/circular symlinks show `( Broken Symlink )` label (name visible but not clickable)
+- Symlinks resolved to effective type for MIME and size display (e.g. symlink to dir shows `DIR`)
+- Sorting uses effective type (symlink-to-dir sorts with directories)
+
+### 🧪 Testing
+- Added `__tests__/symlink.test.js` with 17 tests covering:
+  - Regular file as index (regression)
+  - Symlink to file as index (string and RegExp patterns)
+  - Direct GET to symlinked file
+  - EJS template via symlink
+  - Symlink to directory (listing and file access)
+  - Broken and circular symlinks
+  - Directory listing indicators (`( Symlink )`, `( Broken Symlink )`)
+  - Regular file regression (no false symlink indicator)
+- All 187 existing tests still pass (zero regressions)
+
+### 📦 Package Changes
+- **Semver**: Minor version bump (new feature, backward compatible)
+
+---
+
 ## [2.3.0] - 2026-01-03
 
 ### 🔄 Renamed Options (with Backward Compatibility)

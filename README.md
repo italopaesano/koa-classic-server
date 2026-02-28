@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/koa-classic-server.svg)](https://www.npmjs.com/package/koa-classic-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-197%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-214%20passing-brightgreen.svg)]()
 
 ---
 
@@ -26,7 +26,8 @@ The 2.X series brings major performance improvements, enhanced security, and pow
 ✅ **Enhanced Index Option** - Array format with RegExp support
 ✅ **Template Engine Support** - EJS, Pug, Handlebars, Nunjucks, and more
 ✅ **Enterprise Security** - Path traversal, XSS, race condition protection
-✅ **Comprehensive Testing** - 197 tests passing with extensive coverage
+✅ **Symlink Support** - Full symbolic link support (NixOS, Docker, npm link, Capistrano)
+✅ **Comprehensive Testing** - 214 tests passing with extensive coverage
 ✅ **Complete Documentation** - Detailed guides and examples
 
 [See full changelog →](./docs/CHANGELOG.md)
@@ -48,7 +49,8 @@ The 2.X series brings major performance improvements, enhanced security, and pow
 - 🔒 **Enterprise Security** - Path traversal, XSS, race condition protection
 - ⚙️ **Highly Configurable** - URL prefixes, reserved paths, index files
 - 🚀 **High Performance** - Async/await, non-blocking I/O, optimized algorithms
-- 🧪 **Well-Tested** - 153 passing tests with comprehensive coverage
+- 🔗 **Symlink Support** - Transparent symlink resolution with directory listing indicators
+- 🧪 **Well-Tested** - 214 passing tests with comprehensive coverage
 - 📦 **Dual Module Support** - CommonJS and ES Modules
 
 ---
@@ -462,6 +464,33 @@ Human-readable format:
 - **Click file name** - Download/view file
 - **Parent Directory** - Go up one level
 
+### Symlink Support
+
+The middleware fully supports symbolic links, which is essential for environments where served files are symlinks rather than regular files:
+
+- **NixOS buildFHSEnv** - Files in www/ appear as symlinks to the Nix store
+- **Docker bind mounts** - Mounted files may appear as symlinks
+- **npm link** - Linked packages are symlinks
+- **Capistrano-style deploys** - The `current` directory is a symlink to the active release
+
+**How it works:**
+
+Symlinks are followed transparently via `fs.promises.stat()`, but only when `dirent.isSymbolicLink()` is true. Regular files incur zero additional overhead.
+
+**Directory listing indicators:**
+
+| Entry type | Indicator | Clickable | Type shown |
+|------------|-----------|-----------|------------|
+| Symlink to file | `( Symlink )` | Yes | Target MIME type |
+| Symlink to directory | `( Symlink )` | Yes | `DIR` |
+| Broken/circular symlink | `( Broken Symlink )` | No | `unknown` |
+| Regular file/directory | none | Yes | Real type |
+
+**Edge cases handled:**
+- Broken symlinks (missing target) return 404 on direct access
+- Circular symlinks (A → B → A) are treated as broken, no infinite loops
+- Symlinks to directories are fully navigable
+
 ---
 
 ## Security
@@ -556,10 +585,11 @@ npm run test:performance
 ```
 
 **Test Coverage:**
-- ✅ 197 tests passing
+- ✅ 214 tests passing
 - ✅ Security tests (path traversal, XSS, race conditions)
 - ✅ EJS template integration tests
 - ✅ Index option tests (strings, arrays, RegExp)
+- ✅ Symlink tests (file, directory, broken, circular, indicators)
 - ✅ Performance benchmarks
 - ✅ Directory sorting tests
 

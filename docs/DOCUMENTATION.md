@@ -90,13 +90,17 @@ Il middleware segue questo flusso per ogni richiesta HTTP:
 ### Dipendenze
 
 #### Production
-- **koa** (^2.13.4): Framework web minimale per Node.js
-- **mime-types**: Riconoscimento automatico MIME types (dependency implicita)
+- **mime-types** (^2.1.35): Riconoscimento automatico MIME types
+
+#### Peer Dependencies
+- **koa** (^2.0.0 || >=3.1.2): Framework web minimale per Node.js
 
 #### Development
-- **jest** (^29.7.0): Framework di testing
-- **supertest** (^7.0.0): Testing richieste HTTP
-- **inquirer** (^12.4.1): CLI interattiva per testing manuale
+- **jest** (^30.2.0): Framework di testing
+- **supertest** (^7.2.2): Testing richieste HTTP
+- **inquirer** (^13.3.0): CLI interattiva per testing manuale
+- **autocannon** (^8.0.0): HTTP benchmarking
+- **ejs** (^3.1.10): Template engine per i test
 
 ---
 

@@ -64,8 +64,8 @@ npm install koa-classic-server
 ```
 
 **Requirements:**
-- Node.js >= 12.0.0
-- Koa >= 2.0.0
+- Node.js >= 18.0.0
+- Koa >= 2.0.0 (Koa 3 requires >= 3.1.2)
 
 ---
 

@@ -51,6 +51,10 @@ module.exports = function koaClassicServer(
                                     // to reduce bandwidth usage and improve performance.
         useOriginalUrl: true, // Use ctx.originalUrl (default) or ctx.url
                               // Set false for URL rewriting middleware (i18n, routing)
+        hideExtension: {     // Hide file extension from URLs (clean URLs like mod_rewrite)
+            ext: '.ejs',     // Extension to hide (required, string, case-sensitive, must start with '.')
+            redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301)
+        },
 
         // DEPRECATED OPTIONS (maintained for backward compatibility):
         // cacheMaxAge: use browserCacheMaxAge instead
@@ -137,6 +141,35 @@ module.exports = function koaClassicServer(
     options.browserCacheMaxAge = typeof options.browserCacheMaxAge === 'number' && options.browserCacheMaxAge >= 0 ? options.browserCacheMaxAge : 3600;
     options.browserCacheEnabled = typeof options.browserCacheEnabled === 'boolean' ? options.browserCacheEnabled : false;
     options.useOriginalUrl = typeof options.useOriginalUrl === 'boolean' ? options.useOriginalUrl : true;
+
+    // Validate and normalize hideExtension option
+    if (options.hideExtension !== undefined && options.hideExtension !== null) {
+        if (typeof options.hideExtension !== 'object' || Array.isArray(options.hideExtension)) {
+            throw new Error('[koa-classic-server] hideExtension must be an object with an "ext" property. Example: { ext: ".ejs" }');
+        }
+        if (!options.hideExtension.ext || typeof options.hideExtension.ext !== 'string') {
+            throw new Error('[koa-classic-server] hideExtension.ext is required and must be a non-empty string. Example: { ext: ".ejs" }');
+        }
+        // Normalize ext: add leading dot if missing
+        if (!options.hideExtension.ext.startsWith('.')) {
+            console.warn(
+                '\x1b[33m%s\x1b[0m',
+                '[koa-classic-server] WARNING: hideExtension.ext should start with a dot.\n' +
+                `  Current usage: ext: "${options.hideExtension.ext}"\n` +
+                `  Corrected to:  ext: ".${options.hideExtension.ext}"\n` +
+                '  Please update your configuration.'
+            );
+            options.hideExtension.ext = '.' + options.hideExtension.ext;
+        }
+        // Validate redirect code
+        if (options.hideExtension.redirect !== undefined) {
+            if (typeof options.hideExtension.redirect !== 'number') {
+                throw new Error('[koa-classic-server] hideExtension.redirect must be a number (e.g. 301, 302). Got: ' + typeof options.hideExtension.redirect);
+            }
+        } else {
+            options.hideExtension.redirect = 301;
+        }
+    }
 
     /**
      * Returns true if dirent is a regular file or a symlink pointing to a regular file.
@@ -241,6 +274,68 @@ module.exports = function koaClassicServer(
         }
 
         let toOpen = fullPath;
+
+        // hideExtension logic: redirect URLs with extension and resolve clean URLs
+        // Track if original URL had trailing slash (stripped by pageHref construction above)
+        const originalUrlPath = new URL(ctx.protocol + '://' + ctx.host + urlToUse).pathname;
+        const hadTrailingSlash = originalUrlPath.length > 1 && originalUrlPath.endsWith('/');
+
+        if (options.hideExtension) {
+            const hideExt = options.hideExtension.ext;
+            const hideRedirect = options.hideExtension.redirect;
+
+            // Check if URL ends with the configured extension → redirect to clean URL
+            // Use the original path (before trailing slash stripping) for accurate matching
+            const pathForExtCheck = hadTrailingSlash ? originalUrlPath.slice(0, -1) : requestedPath;
+            if (pathForExtCheck.endsWith(hideExt)) {
+                // Build redirect target using ctx.originalUrl (always, regardless of useOriginalUrl)
+                const originalUrlObj = new URL(ctx.protocol + '://' + ctx.host + ctx.originalUrl);
+                let redirectPath = originalUrlObj.pathname;
+
+                // Remove the extension from the path
+                redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
+
+                // Special case: /index.ejs → /, /sezione/index.ejs → /sezione/
+                const baseName = path.basename(redirectPath);
+                // Check if the remaining path points to an index file
+                if (options.index && options.index.length > 0) {
+                    for (const pattern of options.index) {
+                        if (typeof pattern === 'string' && (baseName + hideExt) === pattern) {
+                            // Redirect to the directory (with trailing slash)
+                            redirectPath = redirectPath.slice(0, redirectPath.length - baseName.length);
+                            break;
+                        }
+                    }
+                }
+
+                // Preserve query string
+                const redirectUrl = redirectPath + (originalUrlObj.search || '');
+
+                ctx.status = hideRedirect;
+                ctx.redirect(redirectUrl);
+                return;
+            }
+
+            // Check if URL has no extension → try adding the configured extension
+            // Skip if original URL had trailing slash (trailing slash = directory intent)
+            const extOfRequested = path.extname(requestedPath);
+            if (!extOfRequested && requestedPath !== '' && !requestedPath.endsWith('/') && !hadTrailingSlash) {
+                const pathWithExt = fullPath + hideExt;
+
+                // Security check: ensure resolved path is still within rootDir
+                if (pathWithExt.startsWith(normalizedRootDir)) {
+                    try {
+                        const statWithExt = await fs.promises.stat(pathWithExt);
+                        if (statWithExt.isFile()) {
+                            // File with extension exists, serve it
+                            toOpen = pathWithExt;
+                        }
+                    } catch {
+                        // File with extension doesn't exist, continue normal flow
+                    }
+                }
+            }
+        }
 
         // OPTIMIZATION: Check if file/directory exists (async, non-blocking)
         let stat;

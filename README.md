@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/koa-classic-server.svg)](https://www.npmjs.com/package/koa-classic-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-214%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-309%20passing-brightgreen.svg)]()
 
 ---
 
@@ -26,8 +26,9 @@ The 2.X series brings major performance improvements, enhanced security, and pow
 ✅ **Enhanced Index Option** - Array format with RegExp support
 ✅ **Template Engine Support** - EJS, Pug, Handlebars, Nunjucks, and more
 ✅ **Enterprise Security** - Path traversal, XSS, race condition protection
+✅ **Clean URLs** - Hide file extensions with `hideExtension` (mod_rewrite-like behavior)
 ✅ **Symlink Support** - Full symbolic link support (NixOS, Docker, npm link, Capistrano)
-✅ **Comprehensive Testing** - 214 tests passing with extensive coverage
+✅ **Comprehensive Testing** - 309 tests passing with extensive coverage
 ✅ **Complete Documentation** - Detailed guides and examples
 
 [See full changelog →](./docs/CHANGELOG.md)
@@ -50,7 +51,8 @@ The 2.X series brings major performance improvements, enhanced security, and pow
 - ⚙️ **Highly Configurable** - URL prefixes, reserved paths, index files
 - 🚀 **High Performance** - Async/await, non-blocking I/O, optimized algorithms
 - 🔗 **Symlink Support** - Transparent symlink resolution with directory listing indicators
-- 🧪 **Well-Tested** - 214 passing tests with comprehensive coverage
+- 🌐 **Clean URLs** - Hide file extensions for SEO-friendly URLs via `hideExtension`
+- 🧪 **Well-Tested** - 309 passing tests with comprehensive coverage
 - 📦 **Dual Module Support** - CommonJS and ES Modules
 
 ---
@@ -218,7 +220,51 @@ app.use(koaClassicServer(__dirname + '/views', {
 
 **See complete guide:** [Template Engine Documentation →](./docs/template-engine/TEMPLATE_ENGINE_GUIDE.md)
 
-### 6. With HTTP Caching
+### 6. Clean URLs with hideExtension
+
+Hide file extensions from URLs, similar to Apache's `mod_rewrite`:
+
+```javascript
+const ejs = require('ejs');
+
+app.use(koaClassicServer(__dirname + '/public', {
+  showDirContents: true,
+  index: ['index.ejs'],
+  hideExtension: {
+    ext: '.ejs',      // Extension to hide (required)
+    redirect: 301     // HTTP redirect code (optional, default: 301)
+  },
+  template: {
+    ext: ['ejs'],
+    render: async (ctx, next, filePath) => {
+      ctx.body = await ejs.renderFile(filePath, data);
+      ctx.type = 'text/html';
+    }
+  }
+}));
+```
+
+**URL Behavior:**
+
+| Request URL | Action | Result |
+|-------------|--------|--------|
+| `/about` | Resolves `about.ejs` | Serves file (200) |
+| `/blog/article` | Resolves `blog/article.ejs` | Serves file (200) |
+| `/about.ejs` | Redirect | 301 → `/about` |
+| `/about.ejs?lang=it` | Redirect | 301 → `/about?lang=it` |
+| `/index.ejs` | Redirect | 301 → `/` |
+| `/section/index.ejs` | Redirect | 301 → `/section/` |
+| `/style.css` | No interference | Normal flow |
+| `/about/` | No interference | Shows directory listing |
+
+**Conflict Resolution:**
+
+- **Directory vs file**: When both `about/` directory and `about.ejs` file exist, `/about` serves the file. Use `/about/` to access the directory.
+- **Extensionless vs extension**: When both `about` (no ext) and `about.ejs` exist, `/about` always serves `about.ejs`. The extensionless file becomes unreachable.
+
+> **Note**: This conflict resolution behavior differs from Apache/Nginx, where directories typically take priority over files with the same base name.
+
+### 7. With HTTP Caching
 
 Enable aggressive caching for static files:
 
@@ -240,7 +286,7 @@ The default value for `browserCacheEnabled` is `false` to facilitate development
 
 **See details:** [HTTP Caching Optimization →](./docs/OPTIMIZATION_HTTP_CACHING.md)
 
-### 7. Multiple Index Files with Priority
+### 8. Multiple Index Files with Priority
 
 Search for multiple index files with custom order:
 
@@ -257,7 +303,7 @@ app.use(koaClassicServer(__dirname + '/public', {
 
 **See details:** [Index Option Priority →](./docs/INDEX_OPTION_PRIORITY.md)
 
-### 8. Complete Production Example
+### 9. Complete Production Example
 
 Real-world configuration for production:
 
@@ -370,6 +416,12 @@ Creates a Koa middleware for serving static files.
   useOriginalUrl: true,     // Use ctx.originalUrl (default) or ctx.url
                             // Set false for URL rewriting middleware (i18n, routing)
 
+  // Clean URLs - hide file extension from URLs (mod_rewrite-like)
+  hideExtension: {
+    ext: '.ejs',            // Extension to hide (required, must start with '.')
+    redirect: 301           // HTTP redirect code (optional, default: 301)
+  },
+
   // DEPRECATED (use new names above):
   // enableCaching: use browserCacheEnabled instead
   // cacheMaxAge: use browserCacheMaxAge instead
@@ -390,6 +442,8 @@ Creates a Koa middleware for serving static files.
 | `browserCacheEnabled` | Boolean | `false` | Enable browser HTTP caching headers (recommended: `true` in production) |
 | `browserCacheMaxAge` | Number | `3600` | Browser cache duration in seconds |
 | `useOriginalUrl` | Boolean | `true` | Use `ctx.originalUrl` (default) or `ctx.url` for URL resolution |
+| `hideExtension.ext` | String | - | Extension to hide (e.g. `'.ejs'`). Enables clean URL feature |
+| `hideExtension.redirect` | Number | `301` | HTTP redirect code for URLs with extension |
 | ~~`enableCaching`~~ | Boolean | `false` | **DEPRECATED**: Use `browserCacheEnabled` instead |
 | ~~`cacheMaxAge`~~ | Number | `3600` | **DEPRECATED**: Use `browserCacheMaxAge` instead |
 
@@ -585,10 +639,11 @@ npm run test:performance
 ```
 
 **Test Coverage:**
-- ✅ 214 tests passing
+- ✅ 309 tests passing
 - ✅ Security tests (path traversal, XSS, race conditions)
 - ✅ EJS template integration tests
 - ✅ Index option tests (strings, arrays, RegExp)
+- ✅ hideExtension tests (clean URLs, redirects, conflicts, validation)
 - ✅ Symlink tests (file, directory, broken, circular, indicators)
 - ✅ Performance benchmarks
 - ✅ Directory sorting tests

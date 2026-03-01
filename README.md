@@ -326,9 +326,15 @@ app.use(koaClassicServer(path.join(__dirname, 'public'), {
   browserCacheMaxAge: 86400,  // 24 hours
 }));
 
-// Serve dynamic templates
+// Serve dynamic templates with clean URLs
 app.use(koaClassicServer(path.join(__dirname, 'views'), {
   showDirContents: false,
+  index: ['index.ejs'],
+  useOriginalUrl: false,  // Use ctx.url (for i18n or routing middleware)
+  hideExtension: {
+    ext: '.ejs',           // /about → serves about.ejs
+    redirect: 301          // /about.ejs → 301 redirect to /about
+  },
   template: {
     ext: ['ejs'],
     render: async (ctx, next, filePath) => {

@@ -264,7 +264,133 @@ app.use(koaClassicServer(__dirname + '/public', {
 
 > **Note**: This conflict resolution behavior differs from Apache/Nginx, where directories typically take priority over files with the same base name.
 
-### 7. With HTTP Caching
+### 7. URL Rewriting Support (useOriginalUrl)
+
+When using URL rewriting middleware (i18n, routing), set `useOriginalUrl: false` so koa-classic-server resolves files from the rewritten URL instead of the original one:
+
+```javascript
+const Koa = require('koa');
+const koaClassicServer = require('koa-classic-server');
+
+const app = new Koa();
+
+// i18n middleware: strips language prefix and rewrites ctx.url
+app.use(async (ctx, next) => {
+  const langMatch = ctx.path.match(/^\/(it|en|fr|de|es)\//);
+  if (langMatch) {
+    ctx.state.lang = langMatch[1];       // Save language for templates
+    ctx.url = ctx.path.replace(/^\/(it|en|fr|de|es)/, '') + ctx.search;
+  }
+  await next();
+});
+
+// Serve files using the rewritten URL
+app.use(koaClassicServer(__dirname + '/public', {
+  useOriginalUrl: false  // Use ctx.url (rewritten) instead of ctx.originalUrl
+}));
+
+app.listen(3000);
+```
+
+**How it works:**
+
+| Request | `ctx.originalUrl` | `ctx.url` (rewritten) | File resolved |
+|---------|-------------------|----------------------|---------------|
+| `/it/page.html` | `/it/page.html` | `/page.html` | `public/page.html` |
+| `/en/page.html` | `/en/page.html` | `/page.html` | `public/page.html` |
+| `/page.html` | `/page.html` | `/page.html` | `public/page.html` |
+
+- With `useOriginalUrl: true` (default): the server would look for `public/it/page.html` (which doesn't exist)
+- With `useOriginalUrl: false`: the server looks for `public/page.html` (correct)
+
+### 8. Advanced hideExtension Scenarios
+
+#### Recommended file structure
+
+```
+views/
+├── index.ejs              ← / (home page)
+├── about.ejs              ← /about
+├── contact.ejs            ← /contact
+├── blog/
+│   ├── index.ejs          ← /blog/
+│   ├── first-post.ejs     ← /blog/first-post
+│   └── second-post.ejs    ← /blog/second-post
+├── docs/
+│   ├── index.ejs          ← /docs/
+│   ├── getting-started.ejs ← /docs/getting-started
+│   └── api-reference.ejs  ← /docs/api-reference
+└── assets/
+    ├── style.css          ← /assets/style.css (served normally)
+    └── script.js          ← /assets/script.js (served normally)
+```
+
+#### hideExtension with i18n middleware
+
+Combine `hideExtension` with `useOriginalUrl: false` for multilingual sites with clean URLs:
+
+```javascript
+const Koa = require('koa');
+const koaClassicServer = require('koa-classic-server');
+const ejs = require('ejs');
+
+const app = new Koa();
+
+// i18n middleware: /it/about → ctx.url = /about, ctx.state.lang = 'it'
+app.use(async (ctx, next) => {
+  const langMatch = ctx.path.match(/^\/(it|en|fr)\//);
+  if (langMatch) {
+    ctx.state.lang = langMatch[1];
+    ctx.url = ctx.path.replace(/^\/(it|en|fr)/, '') + ctx.search;
+  } else {
+    ctx.state.lang = 'en';  // Default language
+  }
+  await next();
+});
+
+app.use(koaClassicServer(__dirname + '/views', {
+  index: ['index.ejs'],
+  useOriginalUrl: false,     // Resolve files from rewritten URL
+  hideExtension: {
+    ext: '.ejs',
+    redirect: 301
+  },
+  template: {
+    ext: ['ejs'],
+    render: async (ctx, next, filePath) => {
+      ctx.body = await ejs.renderFile(filePath, { lang: ctx.state.lang });
+      ctx.type = 'text/html';
+    }
+  }
+}));
+
+app.listen(3000);
+```
+
+**Result:**
+
+| Request | Rewritten URL | File resolved | Redirect target |
+|---------|---------------|---------------|-----------------|
+| `/it/about` | `/about` | `views/about.ejs` | — |
+| `/en/blog/first-post` | `/blog/first-post` | `views/blog/first-post.ejs` | — |
+| `/it/about.ejs` | `/about.ejs` | — | 301 → `/it/about` (preserves `/it/` prefix) |
+
+> **Note**: Redirects always use `ctx.originalUrl` to preserve the language prefix, regardless of the `useOriginalUrl` setting.
+
+#### Temporary redirect (302)
+
+Use `redirect: 302` instead of 301 when the URL mapping may change (staging, A/B testing, or during migration):
+
+```javascript
+hideExtension: {
+  ext: '.ejs',
+  redirect: 302   // Temporary redirect — browsers won't cache it
+}
+```
+
+> **When to use 302**: A 301 (permanent) tells browsers and search engines to cache the redirect. Use 302 (temporary) during development, staging, or when you're not yet sure the clean URL structure is final.
+
+### 9. With HTTP Caching
 
 Enable aggressive caching for static files:
 
@@ -286,7 +412,7 @@ The default value for `browserCacheEnabled` is `false` to facilitate development
 
 **See details:** [HTTP Caching Optimization →](./docs/OPTIMIZATION_HTTP_CACHING.md)
 
-### 8. Multiple Index Files with Priority
+### 10. Multiple Index Files with Priority
 
 Search for multiple index files with custom order:
 
@@ -303,7 +429,7 @@ app.use(koaClassicServer(__dirname + '/public', {
 
 **See details:** [Index Option Priority →](./docs/INDEX_OPTION_PRIORITY.md)
 
-### 9. Complete Production Example
+### 11. Complete Production Example
 
 Real-world configuration for production:
 

@@ -5,6 +5,23 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-03-01
+
+### 📝 Documentation
+
+- Added dedicated usage example for `useOriginalUrl` (Section 7) with realistic i18n middleware scenario (/it/, /en/, /fr/)
+- Added "Advanced hideExtension Scenarios" section (Section 8):
+  - Recommended file/directory structure (ASCII tree)
+  - Combined `hideExtension` + i18n middleware example with `useOriginalUrl: false`
+  - Temporary redirect (302) variant with guidance on 301 vs 302 usage
+- Added `hideExtension` and `useOriginalUrl` to the Complete Production Example (Section 11)
+
+### 📦 Package Changes
+- **Version**: `2.5.0` → `2.5.1`
+- **Semver**: Patch version bump (documentation only, no code changes)
+
+---
+
 ## [2.5.0] - 2026-02-28
 
 ### ✨ New Feature

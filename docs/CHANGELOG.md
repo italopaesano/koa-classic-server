@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `"engines": { "node": ">=18" }` to package.json
 - Formalizes the Node.js minimum version requirement imposed by mime-types 3
 
+#### Tightened Koa peerDependency for 2.x
+- **koa**: `"^2.0.0 || >=3.1.2"` → `"^2.16.4 || >=3.1.2"`
+- Excludes Koa 2.0.0–2.16.3 which are affected by 4 known CVEs:
+  - CVE-2025-25200: ReDoS via `X-Forwarded-Proto`/`X-Forwarded-Host` (CVSS 9.2, fixed in 2.15.4)
+  - CVE-2025-32379: XSS via `ctx.redirect()` (fixed in 2.16.1)
+  - CVE-2025-62595: Open Redirect via trailing `//` (fixed in 2.16.3)
+  - CVE-2026-27959: Host Header Injection via `ctx.hostname` (CVSS 7.5, fixed in 2.16.4)
+
 ### 🧪 Testing
 - All 309 tests pass across 11 test suites (zero regressions)
 - No code changes required — both library upgrades are API-compatible

@@ -5,6 +5,75 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-03-01
+
+### 📦 Dependency Upgrades
+
+#### mime-types: ^2.1.35 → ^3.0.2 (Major)
+- **Breaking change upstream**: New `mimeScore` algorithm for extension conflict resolution
+- **Impact on this project**: Minimal — the 11 changed MIME mappings affect only uncommon extensions
+- **Notable mapping changes**:
+  - `.wav`: `audio/wave` → `audio/wav` (equivalent, all browsers accept both)
+  - `.js`: `application/javascript` → `text/javascript` (correct per RFC 9239)
+  - `.rtf`: `text/rtf` → `application/rtf` (marginal, rare usage)
+  - `.mp4`: Unchanged in v3.0.2 — still resolves to `video/mp4`
+- **Node.js requirement**: mime-types 3 requires Node.js >= 18
+
+#### ejs: ^3.1.10 → ^4.0.0 (Major)
+- **Breaking changes upstream**: None affecting this project
+  - EJS 4 removed deprecated `with()` statement support (this project never used it)
+  - EJS 4 added stricter `exports` map in package.json
+- **API fully compatible**: `ejs.render()` and `ejs.renderFile()` work identically
+- **Security**: EJS 3.x is EOL — v4 resolves known CVEs in the 3.x line
+
+### 🔧 Configuration Changes
+
+#### Added `engines` field
+- Added `"engines": { "node": ">=18" }` to package.json
+- Formalizes the Node.js minimum version requirement imposed by mime-types 3
+
+#### Tightened Koa peerDependency for 2.x
+- **koa**: `"^2.0.0 || >=3.1.2"` → `"^2.16.4 || >=3.1.2"`
+- Excludes Koa 2.0.0–2.16.3 which are affected by 4 known CVEs:
+  - CVE-2025-25200: ReDoS via `X-Forwarded-Proto`/`X-Forwarded-Host` (CVSS 9.2, fixed in 2.15.4)
+  - CVE-2025-32379: XSS via `ctx.redirect()` (fixed in 2.16.1)
+  - CVE-2025-62595: Open Redirect via trailing `//` (fixed in 2.16.3)
+  - CVE-2026-27959: Host Header Injection via `ctx.hostname` (CVSS 7.5, fixed in 2.16.4)
+
+### 🧪 Testing
+- All 309 tests pass across 11 test suites (zero regressions)
+- No code changes required — both library upgrades are API-compatible
+
+### 📦 Package Changes
+- **Version**: `2.5.2` → `2.6.0`
+- **Semver**: Minor version bump (dependency upgrades, no API changes)
+
+---
+
+## [2.5.2] - 2026-03-01
+
+### 🔒 Security Fix
+
+#### Resolved all 11 npm audit vulnerabilities
+- **jest**: `^29.7.0` → `^30.2.0` (major — fixes minimatch ReDoS, brace-expansion ReDoS, @babel/helpers inefficient RegExp)
+- **supertest**: `^7.0.0` → `^7.2.2` (fixes critical form-data unsafe random boundary)
+- **inquirer**: `^12.4.1` → `^13.3.0` (fixes tmp arbitrary file write via symlink, external-editor chain)
+- **autocannon**: `^7.15.0` → `^8.0.0` (major)
+
+#### Updated peerDependency
+- **koa**: `"^2.0.0 || ^3.0.0"` → `"^2.0.0 || >=3.1.2"`
+- Excludes Koa 3.0.0–3.1.1 which had Host Header Injection via `ctx.hostname`
+
+### 🧪 Testing
+- All 309 tests pass across 11 test suites (zero regressions)
+- `npm audit` reports 0 vulnerabilities
+
+### 📦 Package Changes
+- **Version**: `2.5.1` → `2.5.2`
+- **Semver**: Patch version bump (security fixes only, no API changes)
+
+---
+
 ## [2.5.1] - 2026-03-01
 
 ### 📝 Documentation

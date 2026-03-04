@@ -173,7 +173,13 @@ module.exports = function koaClassicServer(
 
     /**
      * Returns true if dirent is a regular file or a symlink pointing to a regular file.
-     * Uses fs.promises.stat (which follows symlinks) only when dirent.isSymbolicLink() is true.
+     * Uses fs.promises.stat (which follows symlinks) when dirent.isSymbolicLink() is true,
+     * or when the dirent type is unknown (DT_UNKNOWN / type 0).
+     *
+     * DT_UNKNOWN occurs on overlayfs, NFS, FUSE, NixOS buildFHSEnv, ecryptfs,
+     * and any filesystem that doesn't fill d_type in the kernel's getdents64 syscall.
+     * On standard filesystems (ext4, btrfs, xfs, APFS, NTFS), d_type is always
+     * filled correctly, so the stat() fallback is never reached.
      */
     async function isFileOrSymlinkToFile(dirent, dirPath) {
         if (dirent.isFile()) return true;
@@ -185,12 +191,23 @@ module.exports = function koaClassicServer(
                 return false; // Broken or circular symlink
             }
         }
+        // DT_UNKNOWN fallback: when none of the type methods return true,
+        // the filesystem didn't report d_type — resolve via stat()
+        if (!dirent.isDirectory() && !dirent.isBlockDevice() && !dirent.isCharacterDevice() && !dirent.isFIFO() && !dirent.isSocket()) {
+            try {
+                const realStat = await fs.promises.stat(path.join(dirPath, dirent.name));
+                return realStat.isFile();
+            } catch {
+                return false;
+            }
+        }
         return false;
     }
 
     /**
      * Returns true if dirent is a directory or a symlink pointing to a directory.
-     * Uses fs.promises.stat (which follows symlinks) only when dirent.isSymbolicLink() is true.
+     * Uses fs.promises.stat (which follows symlinks) when dirent.isSymbolicLink() is true,
+     * or when the dirent type is unknown (DT_UNKNOWN / type 0).
      */
     async function isDirOrSymlinkToDir(dirent, dirPath) {
         if (dirent.isDirectory()) return true;
@@ -200,6 +217,15 @@ module.exports = function koaClassicServer(
                 return realStat.isDirectory();
             } catch {
                 return false; // Broken or circular symlink
+            }
+        }
+        // DT_UNKNOWN fallback: resolve via stat() when type is unknown
+        if (!dirent.isFile() && !dirent.isBlockDevice() && !dirent.isCharacterDevice() && !dirent.isFIFO() && !dirent.isSocket()) {
+            try {
+                const realStat = await fs.promises.stat(path.join(dirPath, dirent.name));
+                return realStat.isDirectory();
+            } catch {
+                return false;
             }
         }
         return false;
@@ -662,7 +688,7 @@ module.exports = function koaClassicServer(
                     const s_name = item.name.toString();
                     const type = item[sy_type];
 
-                    if (type !== 1 && type !== 2 && type !== 3) {
+                    if (type !== 0 && type !== 1 && type !== 2 && type !== 3) {
                         console.error("Unknown file type:", type);
                         continue;
                     }
@@ -677,16 +703,21 @@ module.exports = function koaClassicServer(
                         itemUri = `${baseUrl}/${encodeURIComponent(s_name)}`;
                     }
 
-                    // Resolve symlinks to their effective type
+                    // Resolve symlinks and DT_UNKNOWN entries to their effective type
                     let effectiveType = type;
                     let isBrokenSymlink = false;
-                    if (type === 3) {
+                    if (type === 3 || type === 0) {
+                        // type 3 = symlink, type 0 = DT_UNKNOWN (overlayfs, NFS, FUSE, NixOS buildFHSEnv, ecryptfs)
                         try {
                             const realStat = await fs.promises.stat(itemPath);
                             if (realStat.isFile()) effectiveType = 1;
                             else if (realStat.isDirectory()) effectiveType = 2;
                         } catch {
-                            isBrokenSymlink = true; // Broken or circular symlink
+                            if (type === 3) {
+                                isBrokenSymlink = true; // Broken or circular symlink
+                            } else {
+                                continue; // DT_UNKNOWN entry that can't be stat'd — skip it
+                            }
                         }
                     }
 

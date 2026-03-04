@@ -5,6 +5,40 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] - 2026-03-04
+
+### 🐛 Bug Fix
+
+#### Fixed DT_UNKNOWN Handling (type 0) on overlayfs, NFS, FUSE, NixOS buildFHSEnv, ecryptfs
+- **Issue**: On filesystems where `readdir({ withFileTypes: true })` returns dirents with `DT_UNKNOWN` (type 0), all `dirent.is*()` methods return `false`. This caused three failures:
+  1. `isFileOrSymlinkToFile()` missed valid files — `findIndexFile()` returned empty results, so `GET /` showed a directory listing instead of rendering the index file
+  2. `isDirOrSymlinkToDir()` missed valid directories — directory type resolution failed
+  3. `show_dir()` skipped entries with type 0, logging `"Unknown file type: 0"` — directory listings appeared empty or partial
+- **Affected environments**: overlayfs (Docker image layers), NFS (some implementations), FUSE filesystems (sshfs, s3fs, rclone mount), NixOS with buildFHSEnv, ecryptfs (encrypted home directories), and any filesystem that doesn't fill `d_type` in the kernel's `getdents64` syscall
+- **Impact**: HIGH — Server unusable on affected filesystems (index file not served, directory listing empty)
+- **Fix**: Added `fs.promises.stat()` fallback in all three locations when none of the `dirent.is*()` type methods return `true` (i.e., type is genuinely unknown). On standard filesystems (ext4, btrfs, xfs, APFS, NTFS), `d_type` is always filled correctly, so the `stat()` fallback is never reached — **zero performance overhead** on the fast path.
+- **Code**:
+  - `isFileOrSymlinkToFile()` — DT_UNKNOWN fallback via `stat().isFile()`
+  - `isDirOrSymlinkToDir()` — DT_UNKNOWN fallback via `stat().isDirectory()`
+  - `show_dir()` — Accept type 0 entries and resolve via `stat()` instead of skipping them
+- **Reference**: Linux `man 2 getdents` — *"Currently, only some filesystems have full support for returning the file type in d_type. All applications must properly handle a return of DT_UNKNOWN."*
+
+### 🧪 Testing
+- Added `__tests__/dt-unknown.test.js` with 20 tests covering:
+  - `isFileOrSymlinkToFile` / `isDirOrSymlinkToDir` with DT_UNKNOWN dirents
+  - `findIndexFile` with all-unknown-type entries (string and RegExp patterns)
+  - `show_dir` rendering (resolved types, no skipped entries, correct MIME types and sizes)
+  - Full integration tests (index file serving, direct file access, complete directory listing)
+  - Edge cases (mixed regular + DT_UNKNOWN dirents, index priority, Dirent type 0 verification)
+- Tests use `jest.spyOn(fs.promises, 'readdir')` to mock DT_UNKNOWN dirents via `new fs.Dirent(name, 0)` while keeping `fs.promises.stat()` working normally
+- All 329 tests pass across 12 test suites (zero regressions)
+
+### 📦 Package Changes
+- **Version**: `2.6.0` → `2.6.1`
+- **Semver**: Patch version bump (bug fix only, no API changes)
+
+---
+
 ## [2.6.0] - 2026-03-01
 
 ### 📦 Dependency Upgrades

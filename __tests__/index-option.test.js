@@ -1,12 +1,13 @@
 /**
  * Enhanced Index Option Tests
  *
- * Tests for the new index option that supports:
- * - String (backward compatible)
+ * Tests for the index option that supports:
  * - Array of strings
  * - Array of RegExp
  * - Mixed array (strings + RegExp)
  * - Priority handling (first match wins)
+ *
+ * v3.0.0: string format removed — passing a non-empty string throws an Error.
  */
 
 const Koa = require('koa');
@@ -39,21 +40,20 @@ describe('Enhanced Index Option Tests', () => {
         }
     });
 
-    describe('Backward Compatibility - String index', () => {
-        test('String: "index.html" should work as before', async () => {
-            // Create index.html
-            fs.writeFileSync(path.join(tempDir, 'index.html'), '<h1>Index HTML</h1>');
-
-            app = new Koa();
-            app.use(koaClassicServer(tempDir, { index: 'index.html' }));
-            server = app.listen();
-
-            const res = await supertest(server).get('/');
-            expect(res.status).toBe(200);
-            expect(res.text).toContain('Index HTML');
+    describe('String index — removed in v3.0.0', () => {
+        test('Non-empty string should throw an Error', () => {
+            expect(() => {
+                new Koa().use(koaClassicServer(tempDir, { index: 'index.html' }));
+            }).toThrow('"index" option no longer accepts a string in v3.0.0');
         });
 
-        test('Empty string should show directory listing', async () => {
+        test('Throw message should include migration hint', () => {
+            expect(() => {
+                new Koa().use(koaClassicServer(tempDir, { index: 'default.htm' }));
+            }).toThrow('index: ["default.htm"]');
+        });
+
+        test('Empty string should show directory listing (no throw)', async () => {
             fs.writeFileSync(path.join(tempDir, 'test.txt'), 'test');
 
             app = new Koa();

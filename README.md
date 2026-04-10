@@ -563,7 +563,7 @@ Creates a Koa middleware for serving static files.
 |--------|------|---------|-------------|
 | `method` | Array | `['GET']` | Allowed HTTP methods |
 | `showDirContents` | Boolean | `true` | Show directory listing |
-| `index` | Array/String | `[]` | Index file patterns (array format recommended) |
+| `index` | Array | `[]` | Index file patterns (strings, RegExp, or mixed) |
 | `urlPrefix` | String | `''` | URL path prefix |
 | `urlsReserved` | Array | `[]` | Reserved directory paths (first-level only) |
 | `template.render` | Function | `undefined` | Template rendering function |
@@ -769,7 +769,7 @@ npm run test:performance
 - ✅ 309 tests passing
 - ✅ Security tests (path traversal, XSS, race conditions)
 - ✅ EJS template integration tests
-- ✅ Index option tests (strings, arrays, RegExp)
+- ✅ Index option tests (arrays, RegExp)
 - ✅ hideExtension tests (clean URLs, redirects, conflicts, validation)
 - ✅ Symlink tests (file, directory, broken, circular, indicators)
 - ✅ Performance benchmarks
@@ -839,20 +839,39 @@ npm run test:performance
 
 ## Migration Guide
 
-### From v1.x to v2.x
+### From v2.x to v3.x
 
 **Breaking Changes:**
-- `index` option: String format deprecated (still works), use array format
+- `index` option: String format removed — passing a non-empty string now throws an Error
+- `cacheMaxAge` option: removed — use `browserCacheMaxAge`
+- `enableCaching` option: removed — use `browserCacheEnabled`
 
 **Migration:**
 
 ```javascript
-// v1.x (deprecated)
+// v2.x (now throws in v3)
+{ index: 'index.html' }
+
+// v3.x
+{ index: ['index.html'] }
+```
+
+---
+
+### From v1.x to v2.x
+
+**Breaking Changes:**
+- `index` option: String format deprecated (use array format)
+
+**Migration:**
+
+```javascript
+// v1.x
 {
   index: 'index.html'
 }
 
-// v2.x (recommended)
+// v2.x+
 {
   index: ['index.html']
 }

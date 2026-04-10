@@ -30,14 +30,11 @@ module.exports = function koaClassicServer(
      opts = {
         method: ['GET'], // Supported methods, otherwise next() will be called
         showDirContents: true, // Show or hide directory contents
-        index: ["index.html"], // Index file name(s) - ARRAY FORMAT (recommended):
+        index: ["index.html"], // Index file name(s) - must be an ARRAY:
                                //   - Array of strings: ["index.html", "index.htm", "default.html"]
-                               //   - Array of RegExp: [/index\.html/i, /default\.(html|htm)/i]
-                               //   - Mixed array: ["index.html", /index\.[eE][jJ][sS]/]
+                               //   - Array of RegExp:  [/index\.html/i, /default\.(html|htm)/i]
+                               //   - Mixed array:      ["index.html", /index\.[eE][jJ][sS]/]
                                // Priority is determined by array order (first match wins)
-                               //
-                               // DEPRECATED: String format "index.html" is still supported but
-                               // will be removed in future versions. Use array format instead.
         urlPrefix: "", // URL path prefix
         urlsReserved: [], // Reserved paths (first level only)
         template: {
@@ -79,18 +76,15 @@ module.exports = function koaClassicServer(
 
     // Normalize index option to array format
     if (typeof options.index === 'string') {
-        // DEPRECATION WARNING: String format is deprecated
         if (options.index) {
-            console.warn(
-                '\x1b[33m%s\x1b[0m',
-                '[koa-classic-server] DEPRECATION WARNING: Passing a string to the "index" option is deprecated and may be removed in future versions.\n' +
-                `  Current usage: index: "${options.index}"\n` +
-                `  Recommended:   index: ["${options.index}"]\n` +
-                '  Please update your configuration to use an array format.'
+            // v3.0.0: non-empty string format removed
+            throw new Error(
+                '[koa-classic-server] The "index" option no longer accepts a string in v3.0.0.\n' +
+                `  Replace with: index: ["${options.index}"]`
             );
         }
-        // Single string → convert to array with one element
-        options.index = options.index ? [options.index] : [];
+        // Empty string → silently treat as no index (empty array)
+        options.index = [];
     } else if (Array.isArray(options.index)) {
         // Already an array → validate elements are strings or RegExp
         options.index = options.index.filter(item =>

@@ -115,7 +115,7 @@ describe(` koaClassicServer options1: ${JSON.stringify(options1)}`, () => {
 const options2 = {
   method: ['GET'],
   showDirContents: false,
-  index: 'index.html',
+  index: ['index.html'],
 };
 
 describe(` koaClassicServer options2: ${JSON.stringify(options2)}`, () => {

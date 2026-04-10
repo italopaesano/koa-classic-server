@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ Breaking Changes
 
+#### Removed string format for `index` option
+- **Removed**: `index: 'index.html'` — passing a non-empty string now throws an `Error` at startup
+- **Empty string** `index: ''` is still silently treated as `[]` (no index file, show directory listing)
+- **Migration**:
+  ```js
+  // Before (v2.x — now throws)
+  app.use(koaClassicServer('/public', { index: 'index.html' }));
+
+  // After (v3.0.0)
+  app.use(koaClassicServer('/public', { index: ['index.html'] }));
+  ```
+
 #### Removed deprecated option names `cacheMaxAge` and `enableCaching`
 - **Removed**: `cacheMaxAge` — use `browserCacheMaxAge` instead
 - **Removed**: `enableCaching` — use `browserCacheEnabled` instead

@@ -32,7 +32,7 @@ const configurations = [
       urlPrefix: '/public',
       method: ['GET'],
       showDirContents: true,
-      index: 'index.html',
+      index: ['index.html'],
     },
   },
   {

@@ -56,9 +56,6 @@ module.exports = function koaClassicServer(
             redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301)
         },
 
-        // DEPRECATED OPTIONS (maintained for backward compatibility):
-        // cacheMaxAge: use browserCacheMaxAge instead
-        // enableCaching: use browserCacheEnabled instead
     }
     */
 ) {
@@ -109,35 +106,26 @@ module.exports = function koaClassicServer(
     options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
 
-    // OPTIMIZATION: HTTP Caching options
+    // HTTP Caching options
     // NOTE: Default browserCacheEnabled is false for development environments.
     // For production deployments, it's strongly recommended to enable caching
     // by setting browserCacheEnabled: true to benefit from reduced bandwidth and improved performance.
 
-    // DEPRECATION: Handle legacy option names for backward compatibility
-    if ('cacheMaxAge' in opts && !('browserCacheMaxAge' in opts)) {
-        console.warn(
-            '\x1b[33m%s\x1b[0m',
-            '[koa-classic-server] DEPRECATION WARNING: The "cacheMaxAge" option is deprecated and will be removed in future versions.\n' +
-            '  Current usage: cacheMaxAge: ' + opts.cacheMaxAge + '\n' +
-            '  Recommended:   browserCacheMaxAge: ' + opts.cacheMaxAge + '\n' +
-            '  Please update your configuration to use the new option name.'
+    // v3.0.0: removed legacy option names — throw to surface the breaking change clearly
+    if ('cacheMaxAge' in opts) {
+        throw new Error(
+            '[koa-classic-server] The "cacheMaxAge" option was removed in v3.0.0.\n' +
+            '  Replace with: browserCacheMaxAge: ' + opts.cacheMaxAge
         );
-        options.browserCacheMaxAge = opts.cacheMaxAge;
+    }
+    if ('enableCaching' in opts) {
+        throw new Error(
+            '[koa-classic-server] The "enableCaching" option was removed in v3.0.0.\n' +
+            '  Replace with: browserCacheEnabled: ' + opts.enableCaching
+        );
     }
 
-    if ('enableCaching' in opts && !('browserCacheEnabled' in opts)) {
-        console.warn(
-            '\x1b[33m%s\x1b[0m',
-            '[koa-classic-server] DEPRECATION WARNING: The "enableCaching" option is deprecated and will be removed in future versions.\n' +
-            '  Current usage: enableCaching: ' + opts.enableCaching + '\n' +
-            '  Recommended:   browserCacheEnabled: ' + opts.enableCaching + '\n' +
-            '  Please update your configuration to use the new option name.'
-        );
-        options.browserCacheEnabled = opts.enableCaching;
-    }
-
-    // Set new option names (with defaults)
+    // Set options (with defaults)
     options.browserCacheMaxAge = typeof options.browserCacheMaxAge === 'number' && options.browserCacheMaxAge >= 0 ? options.browserCacheMaxAge : 3600;
     options.browserCacheEnabled = typeof options.browserCacheEnabled === 'boolean' ? options.browserCacheEnabled : false;
     options.useOriginalUrl = typeof options.useOriginalUrl === 'boolean' ? options.useOriginalUrl : true;

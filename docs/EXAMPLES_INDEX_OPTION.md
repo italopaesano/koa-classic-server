@@ -359,8 +359,8 @@ app.use(koaClassicServer('./public', {
     ],
 
     // HTTP Caching
-    enableCaching: true,
-    cacheMaxAge: 3600,
+    browserCacheEnabled: true,
+    browserCacheMaxAge: 3600,
 
     // URL configuration
     urlPrefix: '/static',

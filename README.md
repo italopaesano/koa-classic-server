@@ -554,9 +554,6 @@ Creates a Koa middleware for serving static files.
     redirect: 301           // HTTP redirect code (optional, default: 301)
   },
 
-  // DEPRECATED (use new names above):
-  // enableCaching: use browserCacheEnabled instead
-  // cacheMaxAge: use browserCacheMaxAge instead
 }
 ```
 
@@ -576,8 +573,6 @@ Creates a Koa middleware for serving static files.
 | `useOriginalUrl` | Boolean | `true` | Use `ctx.originalUrl` (default) or `ctx.url` for URL resolution |
 | `hideExtension.ext` | String | - | Extension to hide (e.g. `'.ejs'`). Enables clean URL feature |
 | `hideExtension.redirect` | Number | `301` | HTTP redirect code for URLs with extension |
-| ~~`enableCaching`~~ | Boolean | `false` | **DEPRECATED**: Use `browserCacheEnabled` instead |
-| ~~`cacheMaxAge`~~ | Number | `3600` | **DEPRECATED**: Use `browserCacheMaxAge` instead |
 
 #### useOriginalUrl (Boolean, default: true)
 

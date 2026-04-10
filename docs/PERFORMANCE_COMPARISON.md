@@ -222,21 +222,21 @@ app.use(koaClassicServer('/public'));
 
 // Custom cache duration
 app.use(koaClassicServer('/public', {
-    cacheMaxAge: 86400  // 24 hours
+    browserCacheMaxAge: 86400  // 24 hours
 }));
 
 // Disable caching (not recommended)
 app.use(koaClassicServer('/public', {
-    enableCaching: false
+    browserCacheEnabled: false
 }));
 
 // Different strategies for different routes
 app.use(koaClassicServer('/static-assets', {
-    cacheMaxAge: 31536000  // 1 year for immutable assets
+    browserCacheMaxAge: 31536000  // 1 year for immutable assets
 }));
 
 app.use(koaClassicServer('/dynamic-content', {
-    cacheMaxAge: 60  // 1 minute for frequently updated content
+    browserCacheMaxAge: 60  // 1 minute for frequently updated content
 }));
 ```
 
@@ -320,13 +320,13 @@ app.use(koaClassicServer('/dynamic-content', {
 
 2. **No code changes required** - caching is auto-enabled with sensible defaults
 
-3. **Optional**: Configure `cacheMaxAge` for your use case:
+3. **Optional**: Configure `browserCacheMaxAge` for your use case:
    ```javascript
    // For static assets that rarely change
-   app.use(koaClassicServer('/assets', { cacheMaxAge: 31536000 }));
+   app.use(koaClassicServer('/assets', { browserCacheMaxAge: 31536000 }));
 
    // For content that updates frequently
-   app.use(koaClassicServer('/content', { cacheMaxAge: 300 }));
+   app.use(koaClassicServer('/content', { browserCacheMaxAge: 300 }));
    ```
 
 4. **Test caching** in browser DevTools:

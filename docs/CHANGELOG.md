@@ -5,6 +5,31 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - Unreleased
+
+### ⚠️ Breaking Changes
+
+#### Removed deprecated option names `cacheMaxAge` and `enableCaching`
+- **Removed**: `cacheMaxAge` — use `browserCacheMaxAge` instead
+- **Removed**: `enableCaching` — use `browserCacheEnabled` instead
+- **Behaviour**: Passing either removed option now throws an `Error` at startup with a clear migration message pointing to the new name and the current value.
+- **Migration**:
+  ```js
+  // Before (v2.x — now throws)
+  app.use(koaClassicServer('/public', {
+    enableCaching: true,
+    cacheMaxAge: 3600
+  }));
+
+  // After (v3.0.0)
+  app.use(koaClassicServer('/public', {
+    browserCacheEnabled: true,
+    browserCacheMaxAge: 3600
+  }));
+  ```
+
+---
+
 ## [2.6.1] - 2026-03-04
 
 ### 🐛 Bug Fix

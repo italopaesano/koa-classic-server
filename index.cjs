@@ -4,24 +4,6 @@ const fs = require("fs");
 const path = require("path");
 const mime = require("mime-types");
 
-// koa-classic-server - Performance optimized version
-// Version: 2.0.0
-// Optimizations applied (v2.0.0):
-// - All sync operations converted to async (non-blocking event loop)
-// - String concatenation replaced with array join (30-40% less memory)
-// - HTTP caching with ETag and Last-Modified (80-95% bandwidth reduction)
-// - Conditional requests support (304 Not Modified)
-//
-// Security fixes (from v1.2.0):
-// - Path Traversal vulnerability protection
-// - Status code 404 properly set
-// - Template rendering error handling
-// - Race condition file access protection
-// - Proper file extension extraction
-// - fs.readdir error handling
-// - Content-Disposition properly quoted
-// - XSS protection in directory listing
-
 module.exports = function koaClassicServer(
     rootDir,
     opts = {}
@@ -56,7 +38,6 @@ module.exports = function koaClassicServer(
     }
     */
 ) {
-    // Validate rootDir
     if (!rootDir || typeof rootDir !== 'string') {
         throw new TypeError('rootDir must be a non-empty string');
     }
@@ -64,10 +45,8 @@ module.exports = function koaClassicServer(
         throw new Error('rootDir must be an absolute path');
     }
 
-    // Normalize rootDir to prevent issues
     const normalizedRootDir = path.resolve(rootDir);
 
-    // Set default options
     const options = opts || {};
     options.template = opts.template || {};
 
@@ -100,11 +79,6 @@ module.exports = function koaClassicServer(
     options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
 
-    // HTTP Caching options
-    // NOTE: Default browserCacheEnabled is false for development environments.
-    // For production deployments, it's strongly recommended to enable caching
-    // by setting browserCacheEnabled: true to benefit from reduced bandwidth and improved performance.
-
     // v3.0.0: removed legacy option names — throw to surface the breaking change clearly
     if ('cacheMaxAge' in opts) {
         throw new Error(
@@ -119,7 +93,6 @@ module.exports = function koaClassicServer(
         );
     }
 
-    // Set options (with defaults)
     options.browserCacheMaxAge = typeof options.browserCacheMaxAge === 'number' && options.browserCacheMaxAge >= 0 ? options.browserCacheMaxAge : 3600;
     options.browserCacheEnabled = typeof options.browserCacheEnabled === 'boolean' ? options.browserCacheEnabled : false;
     options.useOriginalUrl = typeof options.useOriginalUrl === 'boolean' ? options.useOriginalUrl : true;
@@ -214,7 +187,6 @@ module.exports = function koaClassicServer(
     }
 
     return async (ctx, next) => {
-        // Check if method is allowed
         if (!options.method.includes(ctx.method)) {
             await next();
             return;
@@ -261,8 +233,7 @@ module.exports = function koaClassicServer(
             }
         }
 
-        // Path Traversal Protection
-        // Construct safe file path
+        // Path traversal protection: build and validate safe file path
         let requestedPath = "";
         if (pageHrefOutPrefix.pathname === "/") {
             requestedPath = "";
@@ -270,7 +241,6 @@ module.exports = function koaClassicServer(
             requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
         }
 
-        // Normalize path and prevent path traversal
         const normalizedPath = path.normalize(requestedPath);
         const fullPath = path.join(normalizedRootDir, normalizedPath);
 
@@ -300,7 +270,6 @@ module.exports = function koaClassicServer(
                 const originalUrlObj = new URL(ctx.protocol + '://' + ctx.host + ctx.originalUrl);
                 let redirectPath = originalUrlObj.pathname;
 
-                // Remove the extension from the path
                 redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
 
                 // Special case: /index.ejs → /, /sezione/index.ejs → /sezione/
@@ -345,7 +314,7 @@ module.exports = function koaClassicServer(
             }
         }
 
-        // OPTIMIZATION: Check if file/directory exists (async, non-blocking)
+        // Check if path exists
         let stat;
         try {
             stat = await fs.promises.stat(toOpen);
@@ -359,7 +328,7 @@ module.exports = function koaClassicServer(
         if (stat.isDirectory()) {
             // Handle directory
             if (options.showDirContents) {
-                // NEW: Enhanced index file search with array and RegExp support
+                // Search for index file matching configured patterns
                 if (options.index && options.index.length > 0) {
                     const indexFile = await findIndexFile(toOpen, options.index);
                     if (indexFile) {
@@ -378,7 +347,6 @@ module.exports = function koaClassicServer(
             }
             return;
         } else {
-            // Handle file
             await loadFile(toOpen, stat);
             return;
         }
@@ -393,7 +361,6 @@ module.exports = function koaClassicServer(
          */
         async function findIndexFile(dirPath, indexPatterns) {
             try {
-                // Read directory contents
                 const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
 
                 // Filter files, following symlinks to determine effective type
@@ -436,7 +403,6 @@ module.exports = function koaClassicServer(
                     }
                 }
 
-                // No match found
                 return null;
             } catch (error) {
                 console.error('Error finding index file:', error);
@@ -462,7 +428,7 @@ module.exports = function koaClassicServer(
                 `;
         }
 
-        // OPTIMIZATION: loadFile now receives stat to avoid double stat call
+        // Accepts a pre-fetched stat to avoid a redundant stat call
         async function loadFile(toOpen, fileStat) {
             // Get file stat if not provided
             if (!fileStat) {
@@ -493,21 +459,17 @@ module.exports = function koaClassicServer(
                 }
             }
 
-            // OPTIMIZATION: HTTP Caching Headers
+            // HTTP caching headers
             if (options.browserCacheEnabled) {
-                // Generate ETag from mtime timestamp + file size
-                // This ensures ETag changes when file is modified or resized
+                // ETag: mtime + size — changes on file modification or resize
                 const etag = `"${fileStat.mtime.getTime()}-${fileStat.size}"`;
 
                 // Format Last-Modified header (RFC 7231)
                 const lastModified = fileStat.mtime.toUTCString();
 
-                // Set caching headers
                 ctx.set('ETag', etag);
                 ctx.set('Last-Modified', lastModified);
                 ctx.set('Cache-Control', `public, max-age=${options.browserCacheMaxAge}, must-revalidate`);
-
-                // OPTIMIZATION: Handle conditional requests (304 Not Modified)
 
                 // Check If-None-Match header (ETag validation)
                 const clientEtag = ctx.get('If-None-Match');
@@ -531,8 +493,7 @@ module.exports = function koaClassicServer(
                     }
                 }
             } else {
-                // BUGFIX: When caching is disabled, explicitly prevent browser caching
-                // Without these headers, browsers may use heuristic caching and serve stale content
+                // Explicitly disable caching: without these headers browsers may use heuristic caching
                 ctx.set('Cache-Control', 'no-cache, no-store, must-revalidate');
                 ctx.set('Pragma', 'no-cache'); // HTTP 1.0 compatibility
                 ctx.set('Expires', '0'); // Proxies
@@ -548,7 +509,6 @@ module.exports = function koaClassicServer(
                 return;
             }
 
-            // Serve static file
             let mimeType = mime.lookup(toOpen);
             const src = fs.createReadStream(toOpen);
 
@@ -587,11 +547,9 @@ module.exports = function koaClassicServer(
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
 
-        // OPTIMIZATION: show_dir is now async and uses array join instead of string concatenation
         async function show_dir(toOpen, ctx) {
             let dir;
             try {
-                // OPTIMIZATION: Use async readdir (non-blocking)
                 dir = await fs.promises.readdir(toOpen, { withFileTypes: true });
             } catch (error) {
                 console.error('Directory read error:', error);
@@ -634,8 +592,6 @@ module.exports = function koaClassicServer(
                 return '';
             }
 
-            // OPTIMIZATION: Use array + join instead of string concatenation
-            // This reduces memory allocation from O(n²) to O(n)
             const parts = [];
             parts.push("<table>");
             parts.push("<thead>");
@@ -763,7 +719,6 @@ module.exports = function koaClassicServer(
                         }
                     }
 
-                    // Apply sort order (asc/desc)
                     return sortOrder === 'desc' ? -comparison : comparison;
                 });
 
@@ -797,7 +752,6 @@ module.exports = function koaClassicServer(
             parts.push("</tbody>");
             parts.push("</table>");
 
-            // OPTIMIZATION: Single join operation instead of multiple concatenations
             const tableHtml = parts.join('');
 
             const html = `

@@ -2,7 +2,72 @@
 const { URL } = require("url");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const mime = require("mime-types");
+
+// CSS for the directory listing page — extracted so its SHA-256 hash can be
+// computed once at module load time and placed in the Content-Security-Policy header.
+const LISTING_CSS = `
+    body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+    }
+    h1 {
+        border-bottom: 1px solid #ddd;
+        padding-bottom: 10px;
+    }
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        max-width: 800px;
+    }
+    thead {
+        background-color: #f5f5f5;
+        border-bottom: 2px solid #ddd;
+    }
+    th {
+        text-align: left;
+        padding: 10px;
+        font-weight: bold;
+        border-bottom: 2px solid #ddd;
+    }
+    td {
+        padding: 8px 10px;
+        border-bottom: 1px solid #eee;
+    }
+    tr:hover {
+        background-color: #f9f9f9;
+    }
+    a {
+        color: #0066cc;
+        text-decoration: none;
+    }
+    a:hover {
+        text-decoration: underline;
+    }
+    th:nth-child(1), td:nth-child(1) { width: 50%; }
+    th:nth-child(2), td:nth-child(2) { width: 30%; }
+    th:nth-child(3), td:nth-child(3) { width: 20%; text-align: right; }
+`;
+
+// SHA-256 hash of the listing CSS, computed once at startup (zero per-request overhead).
+const _listingCssHash = 'sha256-' + crypto.createHash('sha256').update(LISTING_CSS, 'utf8').digest('base64');
+
+// CSP for the directory listing page (has inline CSS → hash-based allowance).
+const LISTING_CSP = `default-src 'none'; style-src '${_listingCssHash}'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`;
+
+// CSP for error/404 pages (no inline CSS → fully restrictive).
+const NOT_FOUND_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+// Sets security headers on all middleware-generated HTML pages (listing + error).
+// Must NOT be called for user files served from disk.
+function setGeneratedPageHeaders(ctx, csp) {
+    ctx.set('Content-Security-Policy', csp);
+    ctx.set('X-Content-Type-Options', 'nosniff');
+    ctx.set('X-Frame-Options', 'DENY');
+    ctx.set('Referrer-Policy', 'no-referrer');
+    ctx.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+}
 
 module.exports = function koaClassicServer(
     rootDir,
@@ -410,8 +475,7 @@ module.exports = function koaClassicServer(
                 const segName = segments[i];
                 const segRelPath = segments.slice(0, i + 1).join('/');
                 if (isHiddenEntry(segName, segRelPath, true)) {
-                    ctx.status = 404;
-                    ctx.body = requestedUrlNotFound();
+                    sendNotFound(ctx);
                     return;
                 }
             }
@@ -486,8 +550,7 @@ module.exports = function koaClassicServer(
             stat = await fs.promises.stat(toOpen);
         } catch (error) {
             // File/directory doesn't exist or can't be accessed
-            ctx.status = 404;
-            ctx.body = requestedUrlNotFound();
+            sendNotFound(ctx);
             return;
         }
 
@@ -496,8 +559,7 @@ module.exports = function koaClassicServer(
             const entryName = path.basename(toOpen);
             const entryRelPath = path.relative(normalizedRootDir, toOpen).split(path.sep).join('/');
             if (isHiddenEntry(entryName, entryRelPath, stat.isDirectory())) {
-                ctx.status = 404;
-                ctx.body = requestedUrlNotFound();
+                sendNotFound(ctx);
                 return;
             }
         }
@@ -522,8 +584,7 @@ module.exports = function koaClassicServer(
                 ctx.body = await show_dir(toOpen, ctx);
             } else {
                 // Directory listing disabled
-                ctx.status = 404;
-                ctx.body = requestedUrlNotFound();
+                sendNotFound(ctx);
             }
             return;
         } else {
@@ -590,6 +651,13 @@ module.exports = function koaClassicServer(
             }
         }
 
+        // Sets 404 security headers and body in one call.
+        function sendNotFound(ctx) {
+            setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
+            ctx.status = 404;
+            ctx.body = requestedUrlNotFound();
+        }
+
         function requestedUrlNotFound() {
             return `
                 <!DOCTYPE html>
@@ -616,8 +684,7 @@ module.exports = function koaClassicServer(
                     fileStat = await fs.promises.stat(toOpen);
                 } catch (error) {
                     console.error('File stat error:', error);
-                    ctx.status = 404;
-                    ctx.body = requestedUrlNotFound();
+                    sendNotFound(ctx);
                     return;
                 }
             }
@@ -684,8 +751,7 @@ module.exports = function koaClassicServer(
                 await fs.promises.access(toOpen, fs.constants.R_OK);
             } catch (error) {
                 console.error('File access error:', error);
-                ctx.status = 404;
-                ctx.body = requestedUrlNotFound();
+                sendNotFound(ctx);
                 return;
             }
 
@@ -733,6 +799,8 @@ module.exports = function koaClassicServer(
                 dir = await fs.promises.readdir(toOpen, { withFileTypes: true });
             } catch (error) {
                 console.error('Directory read error:', error);
+                ctx.status = 500;
+                setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
                 return `
                     <!DOCTYPE html>
                     <html>
@@ -953,48 +1021,7 @@ module.exports = function koaClassicServer(
                         <meta http-equiv="X-UA-Compatible" content="IE=edge">
                         <meta name="viewport" content="width=device-width, initial-scale=1.0">
                         <title>Index of ${escapeHtml(pageHrefOutPrefix.pathname)}</title>
-                        <style>
-                            body {
-                                font-family: Arial, sans-serif;
-                                margin: 20px;
-                            }
-                            h1 {
-                                border-bottom: 1px solid #ddd;
-                                padding-bottom: 10px;
-                            }
-                            table {
-                                border-collapse: collapse;
-                                width: 100%;
-                                max-width: 800px;
-                            }
-                            thead {
-                                background-color: #f5f5f5;
-                                border-bottom: 2px solid #ddd;
-                            }
-                            th {
-                                text-align: left;
-                                padding: 10px;
-                                font-weight: bold;
-                                border-bottom: 2px solid #ddd;
-                            }
-                            td {
-                                padding: 8px 10px;
-                                border-bottom: 1px solid #eee;
-                            }
-                            tr:hover {
-                                background-color: #f9f9f9;
-                            }
-                            a {
-                                color: #0066cc;
-                                text-decoration: none;
-                            }
-                            a:hover {
-                                text-decoration: underline;
-                            }
-                            th:nth-child(1), td:nth-child(1) { width: 50%; }
-                            th:nth-child(2), td:nth-child(2) { width: 30%; }
-                            th:nth-child(3), td:nth-child(3) { width: 20%; text-align: right; }
-                        </style>
+                        <style>${LISTING_CSS}</style>
                     </head>
                     <body>
                     <h1>Index of ${escapeHtml(pageHrefOutPrefix.pathname)}</h1>
@@ -1003,6 +1030,7 @@ module.exports = function koaClassicServer(
                     </html>
                 `;
 
+            setGeneratedPageHeaders(ctx, LISTING_CSP);
             return html;
         }
 

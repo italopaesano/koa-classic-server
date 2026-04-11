@@ -34,6 +34,21 @@ module.exports = function koaClassicServer(
             ext: '.ejs',     // Extension to hide (required, string, case-sensitive, must start with '.')
             redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301)
         },
+        hidden: {            // Block files/dirs from listing and serving (HTTP 404)
+            dotFiles: {      // Dot-files (names starting with '.'): hidden by default
+                default: 'hidden',   // 'hidden' | 'visible' — system default: 'hidden'
+                whitelist: [],       // Always visible (string exact/glob or RegExp). Overrides default and alwaysHide.
+                blacklist: [],       // Always hidden (string or RegExp). Overrides whitelist.
+            },
+            dotDirs: {       // Dot-directories: visible by default
+                default: 'visible',  // 'hidden' | 'visible' — system default: 'visible'
+                whitelist: [],
+                blacklist: [],
+            },
+            alwaysHide: [],  // Path-aware patterns (string glob or RegExp) for any file/dir.
+                             // Secondary to dotFiles/dotDirs whitelist and blacklist.
+                             // Examples: ['*.secret', 'config/secrets/**', /\.key$/]
+        },
 
     }
     */
@@ -124,6 +139,143 @@ module.exports = function koaClassicServer(
         } else {
             options.hideExtension.redirect = 301;
         }
+    }
+
+    // Normalize and validate the hidden option into a clean internal structure.
+    function normalizeHiddenConfig(hidden) {
+        if (!hidden || typeof hidden !== 'object' || Array.isArray(hidden)) {
+            return {
+                dotFiles: { default: 'hidden', whitelist: [], blacklist: [] },
+                dotDirs:  { default: 'visible', whitelist: [], blacklist: [] },
+                alwaysHide: []
+            };
+        }
+
+        const filterPatternList = (arr) =>
+            Array.isArray(arr)
+                ? arr.filter(p => typeof p === 'string' || p instanceof RegExp)
+                : [];
+
+        function normalizeCategory(input, systemDefault, categoryName) {
+            if (!input || typeof input !== 'object' || Array.isArray(input)) {
+                return { default: systemDefault, whitelist: [], blacklist: [] };
+            }
+            if (input.default !== undefined && input.default !== 'hidden' && input.default !== 'visible') {
+                throw new Error(
+                    `[koa-classic-server] hidden.${categoryName}.default must be "hidden" or "visible". Got: "${input.default}"`
+                );
+            }
+            return {
+                default: input.default !== undefined ? input.default : systemDefault,
+                whitelist: filterPatternList(input.whitelist),
+                blacklist: filterPatternList(input.blacklist),
+            };
+        }
+
+        return {
+            dotFiles: normalizeCategory(hidden.dotFiles, 'hidden', 'dotFiles'),
+            dotDirs:  normalizeCategory(hidden.dotDirs,  'visible', 'dotDirs'),
+            alwaysHide: filterPatternList(hidden.alwaysHide),
+        };
+    }
+
+    const hiddenConfig = normalizeHiddenConfig(options.hidden);
+
+    // Returns true if `name` matches any pattern in the list.
+    // Patterns are matched against the bare filename (case-sensitive).
+    // Each entry can be a string (exact match or simple glob with * and ?) or a RegExp.
+    function matchesNameList(name, patterns) {
+        for (const pattern of patterns) {
+            if (pattern instanceof RegExp) {
+                if (pattern.test(name)) return true;
+            } else if (typeof pattern === 'string') {
+                if (nameGlobMatch(name, pattern)) return true;
+            }
+        }
+        return false;
+    }
+
+    // Matches a bare filename against a simple glob pattern (* = any chars except /, ? = one char).
+    function nameGlobMatch(name, pattern) {
+        if (!pattern.includes('*') && !pattern.includes('?')) {
+            return name === pattern;
+        }
+        const regexStr = '^' +
+            pattern
+                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                .replace(/\*/g, '[^/]*')
+                .replace(/\?/g, '[^/]')
+            + '$';
+        return new RegExp(regexStr).test(name);
+    }
+
+    // Returns true if `relPath` matches any pattern in the list.
+    // Patterns are matched against the full relative path from rootDir (case-sensitive).
+    // Each entry can be a string glob or a RegExp.
+    function matchesPathList(relPath, patterns) {
+        for (const pattern of patterns) {
+            if (pattern instanceof RegExp) {
+                if (pattern.test(relPath)) return true;
+            } else if (typeof pattern === 'string') {
+                if (pathGlobMatch(relPath, pattern)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Matches a relative path against a glob pattern (path-aware).
+     *   - Pattern without '/': matches the basename at any depth  (e.g. '*.secret')
+     *   - Pattern with '/':    anchored to rootDir               (e.g. 'config/secrets/**')
+     *   - '*'  matches any characters except '/'
+     *   - '**' matches any characters including '/'
+     *   - '?'  matches any single character except '/'
+     */
+    function pathGlobMatch(relPath, pattern) {
+        const hasSlash = pattern.includes('/');
+        const escaped = pattern
+            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*\*/g, '\x00')
+            .replace(/\*/g, '[^/]*')
+            .replace(/\?/g, '[^/]')
+            .replace(/\x00/g, '.*');
+
+        const regexStr = hasSlash
+            ? '^' + escaped + '($|/)'    // path-anchored from root
+            : '(^|/)' + escaped + '$';   // basename match at any depth
+
+        return new RegExp(regexStr).test(relPath);
+    }
+
+    /**
+     * Returns true if a filesystem entry should be hidden (blocked from listing and serving).
+     *
+     * Priority (highest to lowest):
+     *   1. blacklist  (dotFiles/dotDirs) — always hidden, beats everything
+     *   2. whitelist  (dotFiles/dotDirs) — always visible, overrides alwaysHide and default
+     *   3. alwaysHide                    — path-aware, overrides default
+     *   4. default    (dotFiles/dotDirs) — 'hidden' or 'visible' for unmatched dot-entries
+     *
+     * Non-dot entries are only affected by alwaysHide.
+     *
+     * @param {string}  name    - Basename of the file or directory
+     * @param {string}  relPath - Relative path from rootDir (e.g. "subdir/.env")
+     * @param {boolean} isDir   - True if the entry is a directory
+     */
+    function isHiddenEntry(name, relPath, isDir) {
+        const isDot = name.startsWith('.');
+
+        if (isDot) {
+            const category = isDir ? hiddenConfig.dotDirs : hiddenConfig.dotFiles;
+
+            if (matchesNameList(name, category.blacklist)) return true;
+            if (matchesNameList(name, category.whitelist)) return false;
+            if (matchesPathList(relPath, hiddenConfig.alwaysHide)) return true;
+
+            return category.default === 'hidden';
+        }
+
+        return matchesPathList(relPath, hiddenConfig.alwaysHide);
     }
 
     /**
@@ -251,6 +403,20 @@ module.exports = function koaClassicServer(
             return;
         }
 
+        // Hidden check: block requests that traverse a hidden directory
+        if (requestedPath !== '') {
+            const segments = normalizedPath.split(path.sep).filter(Boolean);
+            for (let i = 0; i < segments.length - 1; i++) {
+                const segName = segments[i];
+                const segRelPath = segments.slice(0, i + 1).join('/');
+                if (isHiddenEntry(segName, segRelPath, true)) {
+                    ctx.status = 404;
+                    ctx.body = requestedUrlNotFound();
+                    return;
+                }
+            }
+        }
+
         let toOpen = fullPath;
 
         // hideExtension logic: redirect URLs with extension and resolve clean URLs
@@ -325,6 +491,17 @@ module.exports = function koaClassicServer(
             return;
         }
 
+        // Hidden check: block access to the requested file or directory itself
+        if (requestedPath !== '') {
+            const entryName = path.basename(toOpen);
+            const entryRelPath = path.relative(normalizedRootDir, toOpen).split(path.sep).join('/');
+            if (isHiddenEntry(entryName, entryRelPath, stat.isDirectory())) {
+                ctx.status = 404;
+                ctx.body = requestedUrlNotFound();
+                return;
+            }
+        }
+
         if (stat.isDirectory()) {
             // Handle directory
             if (options.showDirContents) {
@@ -332,9 +509,12 @@ module.exports = function koaClassicServer(
                 if (options.index && options.index.length > 0) {
                     const indexFile = await findIndexFile(toOpen, options.index);
                     if (indexFile) {
-                        const indexPath = path.join(toOpen, indexFile.name);
-                        await loadFile(indexPath, indexFile.stat);
-                        return;
+                        const indexRelPath = path.relative(normalizedRootDir, path.join(toOpen, indexFile.name)).split(path.sep).join('/');
+                        if (!isHiddenEntry(indexFile.name, indexRelPath, false)) {
+                            const indexPath = path.join(toOpen, indexFile.name);
+                            await loadFile(indexPath, indexFile.stat);
+                            return;
+                        }
                     }
                 }
 
@@ -568,6 +748,10 @@ module.exports = function koaClassicServer(
                 `;
             }
 
+            // Relative path of this directory from rootDir (used for alwaysHide path matching)
+            const rawDirRel = path.relative(normalizedRootDir, toOpen);
+            const dirRelPath = (rawDirRel === '' || rawDirRel === '.') ? '' : rawDirRel.split(path.sep).join('/');
+
             // Get sorting parameters from query string
             const sortBy = ctx.query.sort || 'name';
             const sortOrder = ctx.query.order || 'asc';
@@ -657,6 +841,13 @@ module.exports = function koaClassicServer(
                                 continue; // DT_UNKNOWN entry that can't be stat'd — skip it
                             }
                         }
+                    }
+
+                    // Hidden check: skip entries that should not appear in directory listing
+                    {
+                        const itemIsDir = effectiveType === 2;
+                        const itemRelPath = dirRelPath ? dirRelPath + '/' + s_name : s_name;
+                        if (isHiddenEntry(s_name, itemRelPath, itemIsDir)) continue;
                     }
 
                     // Get file size

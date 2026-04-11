@@ -554,6 +554,23 @@ Creates a Koa middleware for serving static files.
     redirect: 301           // HTTP redirect code (optional, default: 301)
   },
 
+  // Block files/dirs from listing and serving (HTTP 404)
+  // Dot-files (names starting with '.') are hidden by default.
+  // Dot-directories are visible by default.
+  hidden: {
+    dotFiles: {
+      default: 'hidden',        // 'hidden' | 'visible' — system default: 'hidden'
+      whitelist: ['.well-known'], // Always visible — string (exact/glob) or RegExp
+      blacklist: [],              // Always hidden — overrides whitelist
+    },
+    dotDirs: {
+      default: 'visible',       // 'hidden' | 'visible' — system default: 'visible'
+      whitelist: [],
+      blacklist: ['.git'],
+    },
+    alwaysHide: ['*.key', /secret/i], // Path-aware patterns (string glob or RegExp)
+  },
+
 }
 ```
 
@@ -573,6 +590,13 @@ Creates a Koa middleware for serving static files.
 | `useOriginalUrl` | Boolean | `true` | Use `ctx.originalUrl` (default) or `ctx.url` for URL resolution |
 | `hideExtension.ext` | String | - | Extension to hide (e.g. `'.ejs'`). Enables clean URL feature |
 | `hideExtension.redirect` | Number | `301` | HTTP redirect code for URLs with extension |
+| `hidden.dotFiles.default` | String | `'hidden'` | Default visibility for dot-files: `'hidden'` or `'visible'` |
+| `hidden.dotFiles.whitelist` | Array | `[]` | Dot-file names always visible (string exact/glob or RegExp) |
+| `hidden.dotFiles.blacklist` | Array | `[]` | Dot-file names always hidden — overrides whitelist |
+| `hidden.dotDirs.default` | String | `'visible'` | Default visibility for dot-dirs: `'hidden'` or `'visible'` |
+| `hidden.dotDirs.whitelist` | Array | `[]` | Dot-dir names always visible |
+| `hidden.dotDirs.blacklist` | Array | `[]` | Dot-dir names always hidden — overrides whitelist |
+| `hidden.alwaysHide` | Array | `[]` | Path-aware patterns (string glob or RegExp) for any file/dir. Secondary to whitelist/blacklist. |
 
 #### useOriginalUrl (Boolean, default: true)
 
@@ -845,6 +869,8 @@ npm run test:performance
 - `index` option: String format removed — passing a non-empty string now throws an Error
 - `cacheMaxAge` option: removed — use `browserCacheMaxAge`
 - `enableCaching` option: removed — use `browserCacheEnabled`
+- **Dot-files hidden by default** — `hidden.dotFiles.default` is `'hidden'` out of the box.
+  In v2.x, dot-files like `.env` were served normally. In v3.x they return 404 unless explicitly allowed.
 
 **Migration:**
 
@@ -854,6 +880,24 @@ npm run test:performance
 
 // v3.x
 { index: ['index.html'] }
+```
+
+```javascript
+// v2.x — dot-files were served (no protection)
+// v3.x — dot-files hidden by default (recommended)
+
+// To restore v2.x behavior for dot-files:
+{
+  hidden: { dotFiles: { default: 'visible' } }
+}
+
+// Recommended v3.x — hide dot-files but expose .well-known for ACME/Let's Encrypt:
+{
+  hidden: {
+    dotFiles: { default: 'hidden', whitelist: ['.well-known'] },
+    dotDirs:  { default: 'hidden', whitelist: ['.well-known'] }
+  }
+}
 ```
 
 ---

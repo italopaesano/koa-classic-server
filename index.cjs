@@ -69,6 +69,59 @@ function setGeneratedPageHeaders(ctx, csp) {
     ctx.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
 }
 
+/**
+ * Parse a "Range: bytes=..." header against a known file size.
+ * Only single ranges are supported; multi-range requests are treated as invalid.
+ *
+ * Returns:
+ *   { start, end }   — valid range (both inclusive, 0-based)
+ *   'invalid'        — malformed or multi-range → caller should serve full 200
+ *   'unsatisfiable'  — out of bounds → caller should return 416
+ */
+function parseRangeHeader(rangeHeader, fileSize) {
+    if (!rangeHeader.startsWith('bytes=')) return 'invalid';
+
+    const spec = rangeHeader.slice(6);
+
+    // Reject multi-range (comma-separated)
+    if (spec.includes(',')) return 'invalid';
+
+    const dashIdx = spec.indexOf('-');
+    if (dashIdx === -1) return 'invalid';
+
+    const startStr = spec.slice(0, dashIdx);
+    const endStr   = spec.slice(dashIdx + 1);
+
+    let start, end;
+
+    if (startStr === '') {
+        // Suffix range: bytes=-N (last N bytes)
+        if (endStr === '') return 'invalid';
+        const suffix = parseInt(endStr, 10);
+        if (isNaN(suffix) || suffix <= 0) return 'invalid';
+        if (fileSize === 0) return 'unsatisfiable';
+        start = suffix >= fileSize ? 0 : fileSize - suffix;
+        end   = fileSize - 1;
+    } else {
+        start = parseInt(startStr, 10);
+        if (isNaN(start) || start < 0) return 'invalid';
+        if (fileSize === 0 || start >= fileSize) return 'unsatisfiable';
+
+        if (endStr === '') {
+            // Open range: bytes=N-
+            end = fileSize - 1;
+        } else {
+            end = parseInt(endStr, 10);
+            if (isNaN(end) || end < 0) return 'invalid';
+            if (start > end) return 'invalid';
+            // Clamp end to file size - 1
+            if (end >= fileSize) end = fileSize - 1;
+        }
+    }
+
+    return { start, end };
+}
+
 module.exports = function koaClassicServer(
     rootDir,
     opts = {}
@@ -679,11 +732,14 @@ module.exports = function koaClassicServer(
                 }
             }
 
+            // ETag — computed once; used by caching headers and If-Range validation
+            const etag = `"${fileStat.mtime.getTime()}-${fileStat.size}"`;
+
+            // Advertise range support on all file responses (including 304)
+            ctx.set('Accept-Ranges', 'bytes');
+
             // HTTP caching headers
             if (options.browserCacheEnabled) {
-                // ETag: mtime + size — changes on file modification or resize
-                const etag = `"${fileStat.mtime.getTime()}-${fileStat.size}"`;
-
                 // Format Last-Modified header (RFC 7231)
                 const lastModified = fileStat.mtime.toUTCString();
 
@@ -726,6 +782,58 @@ module.exports = function koaClassicServer(
                 console.error('File access error:', error);
                 sendNotFound(ctx);
                 return;
+            }
+
+            // Range request handling (HTTP 206 Partial Content)
+            const rangeHeader = ctx.get('Range');
+            if (rangeHeader) {
+                const fileSize = fileStat.size;
+                const parsed = parseRangeHeader(rangeHeader, fileSize);
+
+                if (parsed === 'unsatisfiable') {
+                    ctx.status = 416;
+                    ctx.set('Content-Range', `bytes */${fileSize}`);
+                    ctx.body = '';
+                    return;
+                }
+
+                if (parsed !== 'invalid') {
+                    // Honor If-Range: serve range only when ETag matches (or If-Range absent)
+                    const ifRange = ctx.get('If-Range');
+                    if (!ifRange || ifRange === etag) {
+                        const { start, end } = parsed;
+                        const rangeLength = end - start + 1;
+                        const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
+                        const filename = path.basename(toOpen);
+                        const safeFilename = filename.replace(/"/g, '\\"');
+
+                        ctx.status = 206;
+                        ctx.set('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+                        ctx.set('Content-Type', mimeType);
+                        ctx.set('Content-Length', String(rangeLength));
+                        ctx.set('Content-Disposition', `inline; filename="${safeFilename}"`);
+
+                        if (ctx.method !== 'HEAD') {
+                            const src = fs.createReadStream(toOpen, { start, end });
+                            src.on('error', (err) => {
+                                console.error('Stream error:', err);
+                                if (!ctx.headerSent) {
+                                    ctx.status = 500;
+                                    ctx.body = 'Error reading file';
+                                }
+                            });
+                            ctx.body = src;
+                        } else {
+                            // HEAD: send 206 headers only — body assignment resets Content-Length,
+                            // so we restore it afterwards.
+                            ctx.body = Buffer.alloc(0);
+                            ctx.set('Content-Length', String(rangeLength));
+                        }
+                        return;
+                    }
+                    // If-Range mismatch → fall through to full 200 response
+                }
+                // Invalid Range → fall through to full 200 response
             }
 
             let mimeType = mime.lookup(toOpen);

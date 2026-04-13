@@ -1,7 +1,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 //  SECURITY & BUG TESTS
-//  Questi test verificano le vulnerabilità e i bug identificati nel DEBUG_REPORT.md
+//  These tests verify the vulnerabilities and bugs identified in DEBUG_REPORT.md
 //
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -25,32 +25,32 @@ describe('Security Tests - Path Traversal', () => {
     server = app.listen();
   });
 
-  test('VULNERABILITY: Path traversal con ../ dovrebbe essere bloccato', async () => {
-    // Tenta di accedere al file package.json che è fuori da publicWwwTest
+  test('VULNERABILITY: Path traversal with ../ should be blocked', async () => {
+    // Attempts to access package.json which is outside publicWwwTest
     const res = await supertest(server).get('/../package.json');
 
-    // Il file NON dovrebbe essere accessibile
-    // ATTUALMENTE FALLISCE - questa è la vulnerabilità!
-    // expect(res.status).toBe(403); // Dovrebbe essere forbidden
-    // expect(res.text).not.toContain('"name"'); // Non dovrebbe vedere il contenuto
+    // The file should NOT be accessible
+    // CURRENTLY FAILING - this is the vulnerability!
+    // expect(res.status).toBe(403); // Should be forbidden
+    // expect(res.text).not.toContain('"name"'); // Should not see the content
 
-    // Per ora verifichiamo che la vulnerabilità esista
-    console.log('⚠️  Path Traversal Test - Status:', res.status);
-    // Se vedi status 200 e contenuto di package.json, la vulnerabilità è confermata
+    // For now we verify that the vulnerability exists
+    console.log('Path Traversal Test - Status:', res.status);
+    // If you see status 200 and package.json content, the vulnerability is confirmed
   });
 
-  test('VULNERABILITY: Path traversal con encoding dovrebbe essere bloccato', async () => {
-    // Tenta con encoding URL
+  test('VULNERABILITY: Path traversal with URL encoding should be blocked', async () => {
+    // Attempts with URL encoding
     const res = await supertest(server).get('/%2e%2e%2f%2e%2e%2fpackage.json');
 
-    console.log('⚠️  Path Traversal Encoded Test - Status:', res.status);
+    console.log('Path Traversal Encoded Test - Status:', res.status);
   });
 
-  test('VULNERABILITY: Path traversal assoluto dovrebbe essere bloccato', async () => {
-    // Tenta path assoluto
+  test('VULNERABILITY: Absolute path traversal should be blocked', async () => {
+    // Attempts absolute path
     const res = await supertest(server).get('/../../../etc/hosts');
 
-    console.log('⚠️  Path Traversal Absolute Test - Status:', res.status);
+    console.log('Path Traversal Absolute Test - Status:', res.status);
   });
 
   afterAll(() => {
@@ -70,10 +70,10 @@ describe('Bug Tests - Status Code 404', () => {
     server = app.listen();
   });
 
-  test('FIXED: File inesistente dovrebbe restituire status 404', async () => {
+  test('FIXED: Non-existent file should return status 404', async () => {
     const res = await supertest(server).get('/file-che-non-esiste-xyz123.txt');
 
-    console.log('✅ 404 Status Test - Status Code:', res.status);
+    console.log('404 Status Test - Status Code:', res.status);
     console.log('   Expected: 404, Got:', res.status);
 
     // FIXED: Now returns proper 404 status
@@ -81,7 +81,7 @@ describe('Bug Tests - Status Code 404', () => {
     expect(res.text).toContain('Not Found');
   });
 
-  test('FIXED: Directory con showDirContents=false dovrebbe restituire 404', async () => {
+  test('FIXED: Directory with showDirContents=false should return 404', async () => {
     const app2 = new Koa();
     app2.use(koaClassicServer(rootDir, {
       showDirContents: false
@@ -90,7 +90,7 @@ describe('Bug Tests - Status Code 404', () => {
 
     const res = await supertest(server2).get('/');
 
-    console.log('✅ 404 Directory Test - Status Code:', res.status);
+    console.log('404 Directory Test - Status Code:', res.status);
 
     // FIXED: Now returns proper 404 status
     expect(res.status).toBe(404);
@@ -104,10 +104,10 @@ describe('Bug Tests - Status Code 404', () => {
 });
 
 describe('Bug Tests - Template Rendering Errors', () => {
-  test('BUG: Template render error dovrebbe essere gestito, non crashare', async () => {
+  test('BUG: Template render error should be handled gracefully, not crash the server', async () => {
     const app = new Koa();
 
-    // Template che lancia errore
+    // Template that throws an error
     const brokenRender = async (ctx, next, filePath) => {
       throw new Error('Simulated template rendering error');
     };
@@ -115,29 +115,29 @@ describe('Bug Tests - Template Rendering Errors', () => {
     app.use(koaClassicServer(rootDir, {
       template: {
         render: brokenRender,
-        ext: ['txt'] // Usa .txt per test
+        ext: ['txt'] // Use .txt for testing
       }
     }));
 
     const server = app.listen();
 
-    // Crea un file .txt per il test
+    // Create a .txt file for the test
     const testFile = path.join(rootDir, 'test-template.txt');
     fs.writeFileSync(testFile, 'test content');
 
     try {
       const res = await supertest(server).get('/test-template.txt');
 
-      console.log('🐛 Template Error Test - Status:', res.status);
+      console.log('Template Error Test - Status:', res.status);
 
-      // Dovrebbe gestire l'errore e restituire 500
+      // Should handle the error and return 500
       // expect(res.status).toBe(500);
 
-      // ATTUALMENTE POTREBBE CRASHARE IL SERVER
-      // Se arriviamo qui senza crash, il test passa
+      // MAY CURRENTLY CRASH THE SERVER
+      // If we get here without a crash, the test passes
       console.log('   Server did not crash (good)');
     } catch (error) {
-      console.log('⚠️  Template error caused request to fail:', error.message);
+      console.log('Template error caused request to fail:', error.message);
     } finally {
       // Cleanup
       if (fs.existsSync(testFile)) {
@@ -172,8 +172,8 @@ describe('Bug Tests - File Extension Extraction', () => {
     server = app.listen();
   });
 
-  test('BUG: File senza estensione non dovrebbe attivare template rendering', async () => {
-    // Crea file senza estensione
+  test('BUG: File without extension should not trigger template rendering', async () => {
+    // Create file without extension
     const testFile = path.join(rootDir, 'README');
     fs.writeFileSync(testFile, 'readme content');
 
@@ -183,7 +183,7 @@ describe('Bug Tests - File Extension Extraction', () => {
       // Normalise: binary content-types yield res.body (Buffer) instead of res.text
       const responseBody = res.text !== undefined ? res.text : res.body.toString('utf8');
 
-      // Non dovrebbe essere renderizzato
+      // Should not be rendered
       expect(responseBody).not.toContain('Rendered');
     } finally {
       if (fs.existsSync(testFile)) {
@@ -192,18 +192,18 @@ describe('Bug Tests - File Extension Extraction', () => {
     }
   });
 
-  test('BUG: File nascosto Unix non dovrebbe essere trattato con estensione sbagliata', async () => {
-    // Crea file nascosto
+  test('BUG: Unix hidden file should not be treated with wrong extension', async () => {
+    // Create hidden file
     const testFile = path.join(rootDir, '.gitignore');
     fs.writeFileSync(testFile, 'node_modules/');
 
     try {
       const res = await supertest(server).get('/.gitignore');
 
-      console.log('🐛 Hidden File Test - Status:', res.status);
+      console.log('Hidden File Test - Status:', res.status);
 
-      // .gitignore non ha estensione .txt, non dovrebbe essere renderizzato
-      // Ma con il bug attuale, potrebbe essere processato come estensione "gitignore"
+      // .gitignore has no .txt extension, should not be rendered
+      // With the current bug it might be processed as extension "gitignore"
     } finally {
       if (fs.existsSync(testFile)) {
         fs.unlinkSync(testFile);
@@ -217,16 +217,16 @@ describe('Bug Tests - File Extension Extraction', () => {
 });
 
 describe('Bug Tests - Race Condition File Access', () => {
-  test('BUG: File cancellato tra check ed access dovrebbe essere gestito', async () => {
+  test('BUG: File deleted between check and access should be handled gracefully', async () => {
     const app = new Koa();
     app.use(koaClassicServer(rootDir));
     const server = app.listen();
 
-    // Crea file temporaneo
+    // Create temporary file
     const testFile = path.join(rootDir, 'temp-race-test.txt');
     fs.writeFileSync(testFile, 'temporary content');
 
-    // Simula race condition: cancella il file appena dopo la richiesta
+    // Simulate race condition: delete the file shortly after the request
     setTimeout(() => {
       if (fs.existsSync(testFile)) {
         fs.unlinkSync(testFile);
@@ -236,12 +236,12 @@ describe('Bug Tests - Race Condition File Access', () => {
     try {
       const res = await supertest(server).get('/temp-race-test.txt');
 
-      console.log('🐛 Race Condition Test - Status:', res.status);
+      console.log('Race Condition Test - Status:', res.status);
 
-      // Dovrebbe gestire l'errore gracefully
-      // expect(res.status).toBe(404) o 500;
+      // Should handle the error gracefully
+      // expect(res.status).toBe(404) or 500;
     } catch (error) {
-      console.log('⚠️  Race condition caused error:', error.message);
+      console.log('Race condition caused error:', error.message);
     } finally {
       // Cleanup
       if (fs.existsSync(testFile)) {
@@ -253,10 +253,10 @@ describe('Bug Tests - Race Condition File Access', () => {
 });
 
 describe('Bug Tests - Directory Read Errors', () => {
-  test('BUG: Errore lettura directory dovrebbe essere gestito', async () => {
+  test('BUG: Directory read error should be handled gracefully', async () => {
     const app = new Koa();
 
-    // Crea una directory temporanea
+    // Create a temporary directory
     const tempDir = path.join(rootDir, 'temp-test-dir');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir);
@@ -269,25 +269,25 @@ describe('Bug Tests - Directory Read Errors', () => {
     const server = app.listen();
 
     try {
-      // Prima richiesta normale
+      // Normal first request
       const res1 = await supertest(server).get('/temp-test-dir');
       expect(res1.status).toBe(200);
 
-      // Ora cambia i permessi (solo su Unix)
+      // Now change permissions (Unix only)
       if (process.platform !== 'win32') {
-        fs.chmodSync(tempDir, 0o000); // Nessun permesso
+        fs.chmodSync(tempDir, 0o000); // No permissions
 
         const res2 = await supertest(server).get('/temp-test-dir');
 
-        console.log('🐛 Directory Permission Test - Status:', res2.status);
+        console.log('Directory Permission Test - Status:', res2.status);
 
-        // Dovrebbe gestire l'errore
-        // expect(res2.status).toBe(500) o 403;
+        // Should handle the error
+        // expect(res2.status).toBe(500) or 403;
       }
     } catch (error) {
-      console.log('⚠️  Directory read error:', error.message);
+      console.log('Directory read error:', error.message);
     } finally {
-      // Ripristina permessi e cleanup
+      // Restore permissions and cleanup
       if (process.platform !== 'win32' && fs.existsSync(tempDir)) {
         try {
           fs.chmodSync(tempDir, 0o755);
@@ -311,8 +311,8 @@ describe('Bug Tests - Content-Disposition', () => {
     server = app.listen();
   });
 
-  test('BUG: Filename con caratteri speciali dovrebbe essere quotato', async () => {
-    // Crea file con spazi e caratteri speciali
+  test('BUG: Filename with special characters should be quoted', async () => {
+    // Create file with spaces and special characters
     const testFile = path.join(rootDir, 'file with spaces & special.txt');
     fs.writeFileSync(testFile, 'test content');
 
@@ -320,9 +320,9 @@ describe('Bug Tests - Content-Disposition', () => {
       const res = await supertest(server).get('/file%20with%20spaces%20%26%20special.txt');
 
       const contentDisp = res.headers['content-disposition'];
-      console.log('🐛 Content-Disposition:', contentDisp);
+      console.log('Content-Disposition:', contentDisp);
 
-      // Dovrebbe essere quotato
+      // Should be quoted
       // expect(contentDisp).toMatch(/"file with spaces & special.txt"/);
     } finally {
       if (fs.existsSync(testFile)) {

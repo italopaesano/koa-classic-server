@@ -281,7 +281,8 @@ describe('Enhanced Index Option Tests', () => {
 
             const res = await supertest(server).get('/');
             expect(res.status).toBe(200);
-            expect(res.text).toContain('EJS content');
+            const body = res.text !== undefined ? res.text : res.body.toString('utf8');
+            expect(body).toContain('EJS content');
         });
     });
 
@@ -362,7 +363,8 @@ describe('Enhanced Index Option Tests', () => {
 
             const res = await supertest(server).get('/');
             expect(res.status).toBe(200);
-            expect(res.text).toContain('pug content');
+            const body = res.text !== undefined ? res.text : res.body.toString('utf8');
+            expect(body).toContain('pug content');
         });
 
         test('Case-insensitive filesystem (Windows-like): matches any case', async () => {

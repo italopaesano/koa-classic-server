@@ -3,7 +3,24 @@ const { URL } = require("url");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const zlib = require("zlib");
 const mime = require("mime-types");
+
+// Default list of MIME types that benefit from compression.
+// User-provided compression.mimeTypes replaces this list entirely.
+const DEFAULT_COMPRESSIBLE_MIME_TYPES = [
+    'text/html',
+    'text/css',
+    'text/javascript',
+    'text/plain',
+    'text/xml',
+    'text/csv',
+    'application/javascript',
+    'application/json',
+    'application/xml',
+    'application/wasm',
+    'image/svg+xml',
+];
 
 // CSS for the directory listing page — extracted so its SHA-256 hash can be
 // computed once at module load time and placed in the Content-Security-Policy header.
@@ -167,6 +184,17 @@ module.exports = function koaClassicServer(
                              // Secondary to dotFiles/dotDirs whitelist and blacklist.
                              // Examples: ['*.secret', 'config/secrets/**', /\.key$/]
         },
+        compression: {       // Response compression (gzip / brotli) for text-based file types
+            enabled: true,                // master switch (false = disable all compression)
+            encodings: ['br', 'gzip'],    // algorithms in priority order; [] = disable
+            threshold: 1024,              // min file size in bytes to compress; false = no threshold
+            mimeTypes: [],                // compressible MIME types (replaces default list if provided)
+            serverCache: {
+                enabled: true,            // buffer compressed responses in RAM (Content-Length known)
+                maxSize: 52428800,        // max total cache RAM in bytes (default: 50 MB)
+            },
+        },
+        // compression: false            // shorthand to disable all compression
 
     }
     */
@@ -427,6 +455,85 @@ module.exports = function koaClassicServer(
             }
         }
         return false;
+    }
+
+    // Normalize and validate the compression option into a clean internal structure.
+    // compression: false is a valid shorthand for { enabled: false }.
+    function normalizeCompressionConfig(compression) {
+        if (compression === false) return { enabled: false };
+
+        if (!compression || typeof compression !== 'object' || Array.isArray(compression)) {
+            return {
+                enabled: true,
+                encodings: ['br', 'gzip'],      // priority order: brotli first, gzip as fallback
+                threshold: 1024,                // bytes; skip compression for files smaller than this
+                mimeTypes: DEFAULT_COMPRESSIBLE_MIME_TYPES,
+                serverCache: { enabled: true, maxSize: 52428800 },
+            };
+        }
+
+        const enabled = typeof compression.enabled === 'boolean' ? compression.enabled : true;
+        if (!enabled) return { enabled: false };
+
+        const encodings = Array.isArray(compression.encodings)
+            ? compression.encodings.filter(e => e === 'br' || e === 'gzip')
+            : ['br', 'gzip'];
+
+        const threshold = compression.threshold === false ? false
+            : (typeof compression.threshold === 'number' && compression.threshold >= 0 ? compression.threshold : 1024);
+
+        const mimeTypes = Array.isArray(compression.mimeTypes) && compression.mimeTypes.length > 0
+            ? compression.mimeTypes
+            : DEFAULT_COMPRESSIBLE_MIME_TYPES;
+
+        let serverCache = { enabled: true, maxSize: 52428800 };
+        if (compression.serverCache && typeof compression.serverCache === 'object') {
+            serverCache = {
+                enabled: typeof compression.serverCache.enabled === 'boolean' ? compression.serverCache.enabled : true,
+                maxSize: typeof compression.serverCache.maxSize === 'number' && compression.serverCache.maxSize > 0
+                    ? compression.serverCache.maxSize
+                    : 52428800,
+            };
+        }
+
+        return { enabled, encodings, threshold, mimeTypes, serverCache };
+    }
+
+    const compressionConfig = normalizeCompressionConfig(options.compression);
+
+    // In-memory cache for compressed file buffers.
+    // Key: `${absoluteFilePath}:${encoding}` — stores buffer + mtime + size for invalidation.
+    const _compressionCache = new Map();
+    let _compressionCacheTotalSize = 0; // Running total of cached compressed bytes
+
+    // Returns the client's preferred encoding based on Accept-Encoding header,
+    // filtered against the enabled encodings list. Returns null if no match.
+    function getClientEncoding(acceptEncoding) {
+        if (!acceptEncoding) return null;
+        for (const enc of compressionConfig.encodings) {
+            if (acceptEncoding.includes(enc)) return enc;
+        }
+        return null;
+    }
+
+    // Compress a Buffer using the given encoding ('br' or 'gzip').
+    // Uses maximum quality — appropriate for serverCache mode (cost paid once).
+    function compressBuffer(data, encoding) {
+        return new Promise((resolve, reject) => {
+            if (encoding === 'br') {
+                zlib.brotliCompress(
+                    data,
+                    { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 } },
+                    (err, result) => { if (err) reject(err); else resolve(result); }
+                );
+            } else {
+                zlib.gzip(
+                    data,
+                    { level: zlib.constants.Z_BEST_COMPRESSION },
+                    (err, result) => { if (err) reject(err); else resolve(result); }
+                );
+            }
+        });
     }
 
     return async (ctx, next) => {
@@ -732,47 +839,20 @@ module.exports = function koaClassicServer(
                 }
             }
 
-            // ETag — computed once; used by caching headers and If-Range validation
-            const etag = `"${fileStat.mtime.getTime()}-${fileStat.size}"`;
+            // baseEtag — encoding-independent; used only for If-Range (Range requests skip compression)
+            const baseEtag = `"${fileStat.mtime.getTime()}-${fileStat.size}"`;
 
             // Advertise range support on all file responses (including 304)
             ctx.set('Accept-Ranges', 'bytes');
 
-            // HTTP caching headers
+            // Cache-Control set early — applies to all responses (200, 206, 304)
             if (options.browserCacheEnabled) {
-                // Format Last-Modified header (RFC 7231)
-                const lastModified = fileStat.mtime.toUTCString();
-
-                ctx.set('ETag', etag);
-                ctx.set('Last-Modified', lastModified);
                 ctx.set('Cache-Control', `public, max-age=${options.browserCacheMaxAge}, must-revalidate`);
-
-                // Check If-None-Match header (ETag validation)
-                const clientEtag = ctx.get('If-None-Match');
-                if (clientEtag && clientEtag === etag) {
-                    // File hasn't changed - return 304 Not Modified
-                    ctx.status = 304;
-                    return;
-                }
-
-                // Check If-Modified-Since header (date validation)
-                const clientModifiedSince = ctx.get('If-Modified-Since');
-                if (clientModifiedSince) {
-                    const clientDate = new Date(clientModifiedSince);
-                    const fileDate = new Date(fileStat.mtime);
-
-                    // Compare timestamps (ignore milliseconds for better compatibility)
-                    if (fileDate.getTime() <= clientDate.getTime()) {
-                        // File hasn't been modified - return 304 Not Modified
-                        ctx.status = 304;
-                        return;
-                    }
-                }
             } else {
                 // Explicitly disable caching: without these headers browsers may use heuristic caching
                 ctx.set('Cache-Control', 'no-cache, no-store, must-revalidate');
                 ctx.set('Pragma', 'no-cache'); // HTTP 1.0 compatibility
-                ctx.set('Expires', '0'); // Proxies
+                ctx.set('Expires', '0');       // Proxies
             }
 
             // Verify file is still readable (race condition protection)
@@ -784,7 +864,7 @@ module.exports = function koaClassicServer(
                 return;
             }
 
-            // Range request handling (HTTP 206 Partial Content)
+            // Range request handling (HTTP 206 Partial Content — compression skipped for ranges)
             const rangeHeader = ctx.get('Range');
             if (rangeHeader) {
                 const fileSize = fileStat.size;
@@ -798,9 +878,9 @@ module.exports = function koaClassicServer(
                 }
 
                 if (parsed !== 'invalid') {
-                    // Honor If-Range: serve range only when ETag matches (or If-Range absent)
+                    // Honor If-Range: serve range only when baseEtag matches (or If-Range absent)
                     const ifRange = ctx.get('If-Range');
-                    if (!ifRange || ifRange === etag) {
+                    if (!ifRange || ifRange === baseEtag) {
                         const { start, end } = parsed;
                         const rangeLength = end - start + 1;
                         const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
@@ -836,30 +916,149 @@ module.exports = function koaClassicServer(
                 // Invalid Range → fall through to full 200 response
             }
 
-            let mimeType = mime.lookup(toOpen);
-            const src = fs.createReadStream(toOpen);
-
-            // Handle stream errors
-            src.on('error', (err) => {
-                console.error('Stream error:', err);
-                if (!ctx.headerSent) {
-                    ctx.status = 500;
-                    ctx.body = 'Error reading file';
-                }
-            });
-
-            ctx.response.set("content-type", mimeType);
-            ctx.response.set("content-length", fileStat.size);
-
-            // Content-Disposition properly quoted with only basename
+            // Determine MIME type and compression encoding for the full-file response
+            const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
             const filename = path.basename(toOpen);
             const safeFilename = filename.replace(/"/g, '\\"'); // Escape quotes
-            ctx.response.set(
-                "content-disposition",
-                `inline; filename="${safeFilename}"`
-            );
 
-            ctx.body = src;
+            // Resolve compression: enabled + compressible MIME + meets threshold + client supports it
+            let encoding = null; // 'br' | 'gzip' | null
+            if (compressionConfig.enabled && compressionConfig.encodings.length > 0) {
+                const isCompressibleMime = compressionConfig.mimeTypes.includes(mimeType);
+                const meetsThreshold = compressionConfig.threshold === false
+                    || fileStat.size >= compressionConfig.threshold;
+                if (isCompressibleMime && meetsThreshold) {
+                    encoding = getClientEncoding(ctx.get('Accept-Encoding'));
+                }
+            }
+
+            // fullEtag is encoding-specific to avoid false 304 hits across representations.
+            // Proxies use Vary: Accept-Encoding to cache separate versions per encoding.
+            const etagSuffix = encoding === 'br' ? '-br' : encoding === 'gzip' ? '-gz' : '';
+            const fullEtag = `"${fileStat.mtime.getTime()}-${fileStat.size}${etagSuffix}"`;
+
+            // ETag, Last-Modified, and 304 check — deferred until encoding is known
+            if (options.browserCacheEnabled) {
+                ctx.set('ETag', fullEtag);
+                ctx.set('Last-Modified', fileStat.mtime.toUTCString());
+
+                // Check If-None-Match (ETag validation)
+                const clientEtag = ctx.get('If-None-Match');
+                if (clientEtag && clientEtag === fullEtag) {
+                    ctx.status = 304;
+                    return;
+                }
+
+                // Check If-Modified-Since (date validation)
+                const clientModifiedSince = ctx.get('If-Modified-Since');
+                if (clientModifiedSince) {
+                    const clientDate = new Date(clientModifiedSince);
+                    if (fileStat.mtime.getTime() <= clientDate.getTime()) {
+                        ctx.status = 304;
+                        return;
+                    }
+                }
+            }
+
+            // Common response headers
+            ctx.set('Content-Type', mimeType);
+            ctx.set('Content-Disposition', `inline; filename="${safeFilename}"`);
+
+            if (encoding) {
+                // ── Compressed response ───────────────────────────────────────────────
+                ctx.set('Content-Encoding', encoding);
+                ctx.set('Vary', 'Accept-Encoding'); // Required so proxies cache per-encoding
+
+                if (compressionConfig.serverCache.enabled) {
+                    // serverCache mode: compress once → buffer in RAM → Content-Length known
+                    const cacheKey = `${toOpen}:${encoding}`;
+                    const cached = _compressionCache.get(cacheKey);
+                    const stale = !cached
+                        || cached.mtime !== fileStat.mtime.getTime()
+                        || cached.size !== fileStat.size;
+
+                    let buf;
+                    if (!stale) {
+                        buf = cached.buffer; // Serve from cache
+                    } else {
+                        try {
+                            const rawData = await fs.promises.readFile(toOpen);
+                            buf = await compressBuffer(rawData, encoding);
+
+                            // Update cache if total size stays within the configured limit
+                            const displaced = cached ? cached.buffer.length : 0;
+                            if (_compressionCacheTotalSize - displaced + buf.length <= compressionConfig.serverCache.maxSize) {
+                                _compressionCacheTotalSize -= displaced;
+                                _compressionCache.set(cacheKey, {
+                                    buffer: buf,
+                                    mtime: fileStat.mtime.getTime(),
+                                    size: fileStat.size,
+                                });
+                                _compressionCacheTotalSize += buf.length;
+                            }
+                        } catch (err) {
+                            console.error('Compression error:', err);
+                            // Fall back to uncompressed on any compression failure
+                            ctx.remove('Content-Encoding');
+                            ctx.remove('Vary');
+                            ctx.set('Content-Length', String(fileStat.size));
+                            if (ctx.method !== 'HEAD') {
+                                const src = fs.createReadStream(toOpen);
+                                src.on('error', (streamErr) => {
+                                    console.error('Stream error:', streamErr);
+                                    if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                                });
+                                ctx.body = src;
+                            } else {
+                                ctx.body = Buffer.alloc(0);
+                                ctx.set('Content-Length', String(fileStat.size));
+                            }
+                            return;
+                        }
+                    }
+
+                    ctx.set('Content-Length', String(buf.length));
+                    if (ctx.method !== 'HEAD') {
+                        ctx.body = buf;
+                    } else {
+                        // HEAD: set correct Content-Length; body assignment would reset it, restore after
+                        ctx.body = Buffer.alloc(0);
+                        ctx.set('Content-Length', String(buf.length));
+                    }
+
+                } else {
+                    // Streaming mode: pipe through zlib transform — Content-Length not known in advance
+                    if (ctx.method !== 'HEAD') {
+                        const src = fs.createReadStream(toOpen);
+                        const compress = encoding === 'br'
+                            ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
+                            : zlib.createGzip({ level: 6 });
+                        src.on('error', (err) => {
+                            console.error('Stream error:', err);
+                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                        });
+                        ctx.body = src.pipe(compress);
+                    }
+                    // HEAD + streaming: no Content-Length available; Koa sends headers only via res.end()
+                }
+
+            } else {
+                // ── Uncompressed response ─────────────────────────────────────────────
+                ctx.set('Content-Length', String(fileStat.size));
+
+                if (ctx.method !== 'HEAD') {
+                    const src = fs.createReadStream(toOpen);
+                    src.on('error', (err) => {
+                        console.error('Stream error:', err);
+                        if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                    });
+                    ctx.body = src;
+                } else {
+                    // HEAD: body assignment resets Content-Length — restore after
+                    ctx.body = Buffer.alloc(0);
+                    ctx.set('Content-Length', String(fileStat.size));
+                }
+            }
         }
 
         // Helper function to format file size in human-readable format

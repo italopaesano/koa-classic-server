@@ -180,10 +180,11 @@ describe('Bug Tests - File Extension Extraction', () => {
     try {
       const res = await supertest(server).get('/README');
 
-      console.log('🐛 No Extension Test - Render called?', res.text.includes('Rendered'));
+      // Normalise: binary content-types yield res.body (Buffer) instead of res.text
+      const responseBody = res.text !== undefined ? res.text : res.body.toString('utf8');
 
       // Non dovrebbe essere renderizzato
-      expect(res.text).not.toContain('Rendered');
+      expect(responseBody).not.toContain('Rendered');
     } finally {
       if (fs.existsSync(testFile)) {
         fs.unlinkSync(testFile);

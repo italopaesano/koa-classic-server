@@ -602,6 +602,29 @@ module.exports = function koaClassicServer(
         });
     }
 
+    /**
+     * Build a Content-Disposition header value for inline serving.
+     *
+     * Uses both the legacy quoted-string form (ASCII fallback) and the RFC 5987
+     * extended form (UTF-8 percent-encoded) for maximum browser compatibility:
+     *   inline; filename="ascii-safe"; filename*=UTF-8''percent-encoded
+     *
+     * The quoted-string form escapes only double-quotes; the RFC 5987 form
+     * percent-encodes every byte that is not an unreserved URI character.
+     * Browsers that support filename* prefer it over filename (RFC 6266 §4.1).
+     */
+    function buildContentDisposition(filename) {
+        // quoted-string fallback: escape " and \ so the value is always valid ASCII
+        const asciiSafe = filename.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+        // RFC 5987 extended value: UTF-8 percent-encode everything except
+        // unreserved chars (ALPHA / DIGIT / "-" / "." / "_" / "~")
+        const rfc5987 = encodeURIComponent(filename)
+            .replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
+        return `inline; filename="${asciiSafe}"; filename*=UTF-8''${rfc5987}`;
+    }
+
     return async (ctx, next) => {
         if (!options.method.includes(ctx.method)) {
             await next();
@@ -657,10 +680,20 @@ module.exports = function koaClassicServer(
             requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
         }
 
+        // Null byte guard: path.normalize() throws ERR_INVALID_ARG_VALUE for paths
+        // containing \0. Reject early with 400 Bad Request before it reaches fs calls.
+        if (requestedPath.includes('\0')) {
+            ctx.status = 400;
+            ctx.body = 'Bad Request';
+            return;
+        }
+
         const normalizedPath = path.normalize(requestedPath);
         const fullPath = path.join(normalizedRootDir, normalizedPath);
 
-        // Security check: ensure resolved path is within rootDir
+        // Security check: ensure resolved path is within rootDir.
+        // Covers: ../ traversal, URL-encoded variants (%2e%2e%2f), and on Windows
+        // backslash sequences (path.normalize converts \ to / before the check).
         if (!fullPath.startsWith(normalizedRootDir)) {
             ctx.status = 403;
             ctx.body = 'Forbidden';
@@ -933,8 +966,22 @@ module.exports = function koaClassicServer(
                         return;
                     } catch (error) {
                         console.error('Template rendering error:', error);
+                        setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
                         ctx.status = 500;
-                        ctx.body = 'Internal Server Error - Template Rendering Failed';
+                        ctx.body = `
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="UTF-8">
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                <title>Internal Server Error</title>
+                            </head>
+                            <body>
+                                <h1>Internal Server Error</h1>
+                                <h3>Template rendering failed for the requested resource.</h3>
+                            </body>
+                            </html>
+                        `;
                         return;
                     }
                 }
@@ -989,13 +1036,12 @@ module.exports = function koaClassicServer(
                         const rangeLength = end - start + 1;
                         const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
                         const filename = path.basename(toOpen);
-                        const safeFilename = filename.replace(/"/g, '\\"');
 
                         ctx.status = 206;
                         ctx.set('Content-Range', `bytes ${start}-${end}/${fileSize}`);
                         ctx.set('Content-Type', mimeType);
                         ctx.set('Content-Length', String(rangeLength));
-                        ctx.set('Content-Disposition', `inline; filename="${safeFilename}"`);
+                        ctx.set('Content-Disposition', buildContentDisposition(filename));
 
                         if (ctx.method !== 'HEAD') {
                             if (rawBuffer) {
@@ -1028,7 +1074,6 @@ module.exports = function koaClassicServer(
             // Determine MIME type and compression encoding for the full-file response
             const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
             const filename = path.basename(toOpen);
-            const safeFilename = filename.replace(/"/g, '\\"'); // Escape quotes
 
             // Resolve compression: enabled + compressible MIME + meets minSize + client supports it
             let encoding = null; // 'br' | 'gzip' | null
@@ -1071,7 +1116,7 @@ module.exports = function koaClassicServer(
 
             // Common response headers
             ctx.set('Content-Type', mimeType);
-            ctx.set('Content-Disposition', `inline; filename="${safeFilename}"`);
+            ctx.set('Content-Disposition', buildContentDisposition(filename));
 
             if (encoding) {
                 // ── Compressed response ───────────────────────────────────────────────

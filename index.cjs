@@ -6,6 +6,10 @@ const crypto = require("crypto");
 const zlib = require("zlib");
 const mime = require("mime-types");
 
+// Emitted at most once per process lifetime when hidden.dotFiles.default or
+// hidden.dotDirs.default are not explicitly set by the caller.
+let _hiddenDefaultWarnEmitted = false;
+
 // Default list of MIME types that benefit from compression.
 // User-provided compression.mimeTypes replaces this list entirely.
 const DEFAULT_COMPRESSIBLE_MIME_TYPES = [
@@ -335,6 +339,26 @@ module.exports = function koaClassicServer(
     }
 
     const hiddenConfig = normalizeHiddenConfig(options.hidden);
+
+    // One-time per-process warning when the caller relies on implicit defaults for
+    // hidden.dotFiles.default or hidden.dotDirs.default.  Since v3.0.0 dotFiles are
+    // hidden by default ('hidden') while dotDirs are visible by default ('visible').
+    // Explicitly declaring the values makes intent clear and silences the warning.
+    if (!_hiddenDefaultWarnEmitted) {
+        const dotFilesImplicit = opts.hidden?.dotFiles?.default === undefined;
+        const dotDirsImplicit  = opts.hidden?.dotDirs?.default  === undefined;
+        if (dotFilesImplicit || dotDirsImplicit) {
+            _hiddenDefaultWarnEmitted = true;
+            console.warn(
+                '\x1b[33m%s\x1b[0m',
+                '[koa-classic-server] WARNING: hidden.dotFiles.default and/or hidden.dotDirs.default are not explicitly set.\n' +
+                '  Since v3.0.0 the defaults are: dotFiles → "hidden", dotDirs → "visible".\n' +
+                '  To suppress this warning, add to your configuration:\n' +
+                '    hidden: { dotFiles: { default: \'hidden\' }, dotDirs: { default: \'visible\' } }\n' +
+                '  (adjust values to match your desired behaviour)'
+            );
+        }
+    }
 
     // Returns true if `name` matches any pattern in the list.
     // Patterns are matched against the bare filename (case-sensitive).

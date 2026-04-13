@@ -11,6 +11,63 @@ function createApp(hiddenOpts) {
   return app.listen();
 }
 
+// ─── Implicit default warning ─────────────────────────────────────────────────
+// This describe block MUST be first: the warning flag is module-level and fires
+// only once per Jest worker process.  Jest isolates each test FILE into its own
+// module registry, so the flag starts as false when this file loads.
+
+describe('hidden option — implicit default warning', () => {
+  let warnSpy;
+
+  beforeAll(() => {
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterAll(() => {
+    warnSpy.mockRestore();
+  });
+
+  test('warns when dotFiles.default and dotDirs.default are not explicitly set', () => {
+    warnSpy.mockClear();
+    koaClassicServer(root, {}); // no hidden config at all — both defaults implicit
+    const warnings = warnSpy.mock.calls.filter(c =>
+      c[1] && c[1].includes('dotFiles') && c[1].includes('dotDirs')
+    );
+    expect(warnings.length).toBe(1);
+    expect(warnings[0][1]).toContain('hidden.dotFiles.default');
+    expect(warnings[0][1]).toContain('v3.0.0');
+  });
+
+  test('does not warn again on subsequent calls (once per process)', () => {
+    warnSpy.mockClear();
+    koaClassicServer(root, {}); // flag already set from the test above
+    const warnings = warnSpy.mock.calls.filter(c =>
+      c[1] && c[1].includes('dotFiles')
+    );
+    expect(warnings.length).toBe(0);
+  });
+
+  test('no warning when both dotFiles.default and dotDirs.default are explicitly set', () => {
+    // Use jest.isolateModules to obtain a fresh copy of index.cjs whose flag is false,
+    // then verify that an explicit configuration emits no warning.
+    let fresh;
+    jest.isolateModules(() => {
+      fresh = require('../index.cjs');
+    });
+    warnSpy.mockClear();
+    fresh(root, {
+      hidden: {
+        dotFiles: { default: 'hidden' },
+        dotDirs:  { default: 'visible' },
+      }
+    });
+    const warnings = warnSpy.mock.calls.filter(c =>
+      c[1] && c[1].includes('dotFiles')
+    );
+    expect(warnings.length).toBe(0);
+  });
+});
+
 // ─── Option validation ────────────────────────────────────────────────────────
 
 describe('hidden option — validation', () => {

@@ -184,15 +184,24 @@ module.exports = function koaClassicServer(
                              // Secondary to dotFiles/dotDirs whitelist and blacklist.
                              // Examples: ['*.secret', 'config/secrets/**', /\.key$/]
         },
-        compression: {       // Response compression (gzip / brotli) for text-based file types
+        serverCache: {       // Server-side in-memory caches (independent of browser HTTP caching)
+            rawFile: {
+                enabled: false,               // enable in-memory cache of raw file buffers
+                maxSize: 52428800,            // max total RAM used by this cache (bytes; default: 50 MB)
+                maxFileSize: 1048576,         // files larger than this are never cached (bytes; default: 1 MB)
+                warnInterval: 60000,          // ms between "maxSize reached" warnings; 0 = always; false = never
+            },
+            compressedFile: {                 // cache for HTTP br/gzip responses — not for .zip/.tar files on disk
+                enabled: true,               // enable in-memory cache of compressed response buffers
+                maxSize: 104857600,          // max total RAM used by this cache (bytes; default: 100 MB)
+                warnInterval: 60000,         // ms between "maxSize reached" warnings; 0 = always; false = never
+            },
+        },
+        compression: {       // Response compression (gzip / brotli) — to enable/disable caching → serverCache.compressedFile
             enabled: true,                // master switch (false = disable all compression)
             encodings: ['br', 'gzip'],    // algorithms in priority order; [] = disable
-            threshold: 1024,              // min file size in bytes to compress; false = no threshold
+            minSize: 1024,                // min file size in bytes to compress; false = no minimum
             mimeTypes: [],                // compressible MIME types (replaces default list if provided)
-            serverCache: {
-                enabled: true,            // buffer compressed responses in RAM (Content-Length known)
-                maxSize: 52428800,        // max total cache RAM in bytes (default: 50 MB)
-            },
         },
         // compression: false            // shorthand to disable all compression
 
@@ -465,10 +474,9 @@ module.exports = function koaClassicServer(
         if (!compression || typeof compression !== 'object' || Array.isArray(compression)) {
             return {
                 enabled: true,
-                encodings: ['br', 'gzip'],      // priority order: brotli first, gzip as fallback
-                threshold: 1024,                // bytes; skip compression for files smaller than this
+                encodings: ['br', 'gzip'],              // priority order: brotli first, gzip as fallback
+                minSize: 1024,                          // bytes; skip compression for files smaller than this
                 mimeTypes: DEFAULT_COMPRESSIBLE_MIME_TYPES,
-                serverCache: { enabled: true, maxSize: 52428800 },
             };
         }
 
@@ -479,32 +487,90 @@ module.exports = function koaClassicServer(
             ? compression.encodings.filter(e => e === 'br' || e === 'gzip')
             : ['br', 'gzip'];
 
-        const threshold = compression.threshold === false ? false
-            : (typeof compression.threshold === 'number' && compression.threshold >= 0 ? compression.threshold : 1024);
+        const minSize = compression.minSize === false ? false
+            : (typeof compression.minSize === 'number' && compression.minSize >= 0 ? compression.minSize : 1024);
 
         const mimeTypes = Array.isArray(compression.mimeTypes) && compression.mimeTypes.length > 0
             ? compression.mimeTypes
             : DEFAULT_COMPRESSIBLE_MIME_TYPES;
 
-        let serverCache = { enabled: true, maxSize: 52428800 };
-        if (compression.serverCache && typeof compression.serverCache === 'object') {
-            serverCache = {
-                enabled: typeof compression.serverCache.enabled === 'boolean' ? compression.serverCache.enabled : true,
-                maxSize: typeof compression.serverCache.maxSize === 'number' && compression.serverCache.maxSize > 0
-                    ? compression.serverCache.maxSize
-                    : 52428800,
-            };
+        return { enabled, encodings, minSize, mimeTypes };
+    }
+
+    // Normalize and validate the serverCache option into a clean internal structure.
+    function normalizeServerCacheConfig(serverCache) {
+        const defaultRawFile = {
+            enabled: false,
+            maxSize: 52428800,      // 50 MB
+            maxFileSize: 1048576,   // 1 MB
+            warnInterval: 60000,
+        };
+        const defaultCompressedFile = {
+            enabled: true,
+            maxSize: 104857600,     // 100 MB
+            warnInterval: 60000,
+        };
+
+        if (!serverCache || typeof serverCache !== 'object' || Array.isArray(serverCache)) {
+            return { rawFile: defaultRawFile, compressedFile: defaultCompressedFile };
         }
 
-        return { enabled, encodings, threshold, mimeTypes, serverCache };
+        const rf = serverCache.rawFile;
+        const rawFile = (!rf || typeof rf !== 'object' || Array.isArray(rf)) ? defaultRawFile : {
+            enabled: typeof rf.enabled === 'boolean' ? rf.enabled : false,
+            maxSize: typeof rf.maxSize === 'number' && rf.maxSize > 0 ? rf.maxSize : 52428800,
+            maxFileSize: typeof rf.maxFileSize === 'number' && rf.maxFileSize > 0 ? rf.maxFileSize : 1048576,
+            warnInterval: rf.warnInterval === false ? false : (typeof rf.warnInterval === 'number' ? rf.warnInterval : 60000),
+        };
+
+        const cf = serverCache.compressedFile;
+        const compressedFile = (!cf || typeof cf !== 'object' || Array.isArray(cf)) ? defaultCompressedFile : {
+            enabled: typeof cf.enabled === 'boolean' ? cf.enabled : true,
+            maxSize: typeof cf.maxSize === 'number' && cf.maxSize > 0 ? cf.maxSize : 104857600,
+            warnInterval: cf.warnInterval === false ? false : (typeof cf.warnInterval === 'number' ? cf.warnInterval : 60000),
+        };
+
+        return { rawFile, compressedFile };
     }
 
     const compressionConfig = normalizeCompressionConfig(options.compression);
+    const serverCacheConfig = normalizeServerCacheConfig(options.serverCache);
 
-    // In-memory cache for compressed file buffers.
-    // Key: `${absoluteFilePath}:${encoding}` — stores buffer + mtime + size for invalidation.
-    const _compressionCache = new Map();
-    let _compressionCacheTotalSize = 0; // Running total of cached compressed bytes
+    // In-memory cache for raw file buffers (serverCache.rawFile).
+    // Key: absoluteFilePath — stores buffer + mtime + size for invalidation + hits for LFU eviction.
+    const _rawFileCache = new Map();
+    let _rawFileCacheTotalSize = 0;
+    let _rawFileCacheLastWarnAt = 0;
+
+    // In-memory cache for compressed file buffers (serverCache.compressedFile).
+    // Key: `${absoluteFilePath}:${encoding}` — stores buffer + mtime + size + hits.
+    const _compressedFileCache = new Map();
+    let _compressedFileCacheTotalSize = 0;
+    let _compressedFileCacheLastWarnAt = 0;
+
+    // Evict the LFU (least frequently used) entry from a cache map.
+    // Emits a throttled warning when eviction occurs.
+    function evictLFU(cache, totalSizeRef, lastWarnRef, warnInterval, cacheLabel) {
+        let minHits = Infinity;
+        let minKey = null;
+        for (const [key, entry] of cache) {
+            if (entry.hits < minHits) {
+                minHits = entry.hits;
+                minKey = key;
+            }
+        }
+        if (minKey !== null) {
+            totalSizeRef.value -= cache.get(minKey).buffer.length;
+            cache.delete(minKey);
+            if (warnInterval !== false) {
+                const now = Date.now();
+                if (now - lastWarnRef.value >= warnInterval) {
+                    console.warn(`[koa-classic-server] serverCache.${cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
+                    lastWarnRef.value = now;
+                }
+            }
+        }
+    }
 
     // Returns the client's preferred encoding based on Accept-Encoding header,
     // filtered against the enabled encodings list. Returns null if no match.
@@ -822,13 +888,48 @@ module.exports = function koaClassicServer(
                 }
             }
 
-            // Template rendering
+            // Populate rawFile cache (before template check so buffer is available as 4th param to render).
+            // Only for files within maxFileSize; large files are always streamed.
+            let rawBuffer = null;
+            if (serverCacheConfig.rawFile.enabled && fileStat.size <= serverCacheConfig.rawFile.maxFileSize) {
+                const cached = _rawFileCache.get(toOpen);
+                if (cached && cached.mtime === fileStat.mtime.getTime() && cached.size === fileStat.size) {
+                    cached.hits++;
+                    rawBuffer = cached.buffer;
+                } else {
+                    try {
+                        rawBuffer = await fs.promises.readFile(toOpen);
+                        // Evict LFU entries until the new buffer fits within maxSize
+                        const sizeRef = { value: _rawFileCacheTotalSize };
+                        const warnRef = { value: _rawFileCacheLastWarnAt };
+                        while (sizeRef.value + rawBuffer.length > serverCacheConfig.rawFile.maxSize && _rawFileCache.size > 0) {
+                            evictLFU(_rawFileCache, sizeRef, warnRef, serverCacheConfig.rawFile.warnInterval, 'rawFile');
+                        }
+                        _rawFileCacheTotalSize = sizeRef.value;
+                        _rawFileCacheLastWarnAt = warnRef.value;
+                        if (_rawFileCacheTotalSize + rawBuffer.length <= serverCacheConfig.rawFile.maxSize) {
+                            _rawFileCache.set(toOpen, {
+                                buffer: rawBuffer,
+                                mtime: fileStat.mtime.getTime(),
+                                size: fileStat.size,
+                                hits: 1,
+                            });
+                            _rawFileCacheTotalSize += rawBuffer.length;
+                        }
+                    } catch {
+                        rawBuffer = null; // Fall through to disk reads later
+                    }
+                }
+            }
+
+            // Template rendering — rawBuffer passed as optional 4th param so render functions
+            // can skip their own fs.readFile() call when the file is already in memory.
             if (options.template.ext.length > 0 && options.template.render) {
                 const fileExt = path.extname(toOpen).slice(1); // Remove leading dot
 
                 if (fileExt && options.template.ext.includes(fileExt)) {
                     try {
-                        await options.template.render(ctx, next, toOpen);
+                        await options.template.render(ctx, next, toOpen, rawBuffer);
                         return;
                     } catch (error) {
                         console.error('Template rendering error:', error);
@@ -855,13 +956,16 @@ module.exports = function koaClassicServer(
                 ctx.set('Expires', '0');       // Proxies
             }
 
-            // Verify file is still readable (race condition protection)
-            try {
-                await fs.promises.access(toOpen, fs.constants.R_OK);
-            } catch (error) {
-                console.error('File access error:', error);
-                sendNotFound(ctx);
-                return;
+            // Verify file is still readable (race condition protection).
+            // Skip if rawBuffer already loaded — the successful readFile() is equivalent proof.
+            if (!rawBuffer) {
+                try {
+                    await fs.promises.access(toOpen, fs.constants.R_OK);
+                } catch (error) {
+                    console.error('File access error:', error);
+                    sendNotFound(ctx);
+                    return;
+                }
             }
 
             // Range request handling (HTTP 206 Partial Content — compression skipped for ranges)
@@ -894,15 +998,20 @@ module.exports = function koaClassicServer(
                         ctx.set('Content-Disposition', `inline; filename="${safeFilename}"`);
 
                         if (ctx.method !== 'HEAD') {
-                            const src = fs.createReadStream(toOpen, { start, end });
-                            src.on('error', (err) => {
-                                console.error('Stream error:', err);
-                                if (!ctx.headerSent) {
-                                    ctx.status = 500;
-                                    ctx.body = 'Error reading file';
-                                }
-                            });
-                            ctx.body = src;
+                            if (rawBuffer) {
+                                // Serve range slice from in-memory buffer — zero disk I/O
+                                ctx.body = rawBuffer.slice(start, end + 1);
+                            } else {
+                                const src = fs.createReadStream(toOpen, { start, end });
+                                src.on('error', (err) => {
+                                    console.error('Stream error:', err);
+                                    if (!ctx.headerSent) {
+                                        ctx.status = 500;
+                                        ctx.body = 'Error reading file';
+                                    }
+                                });
+                                ctx.body = src;
+                            }
                         } else {
                             // HEAD: send 206 headers only — body assignment resets Content-Length,
                             // so we restore it afterwards.
@@ -921,13 +1030,13 @@ module.exports = function koaClassicServer(
             const filename = path.basename(toOpen);
             const safeFilename = filename.replace(/"/g, '\\"'); // Escape quotes
 
-            // Resolve compression: enabled + compressible MIME + meets threshold + client supports it
+            // Resolve compression: enabled + compressible MIME + meets minSize + client supports it
             let encoding = null; // 'br' | 'gzip' | null
             if (compressionConfig.enabled && compressionConfig.encodings.length > 0) {
                 const isCompressibleMime = compressionConfig.mimeTypes.includes(mimeType);
-                const meetsThreshold = compressionConfig.threshold === false
-                    || fileStat.size >= compressionConfig.threshold;
-                if (isCompressibleMime && meetsThreshold) {
+                const meetsMinSize = compressionConfig.minSize === false
+                    || fileStat.size >= compressionConfig.minSize;
+                if (isCompressibleMime && meetsMinSize) {
                     encoding = getClientEncoding(ctx.get('Accept-Encoding'));
                 }
             }
@@ -969,49 +1078,68 @@ module.exports = function koaClassicServer(
                 ctx.set('Content-Encoding', encoding);
                 ctx.set('Vary', 'Accept-Encoding'); // Required so proxies cache per-encoding
 
-                if (compressionConfig.serverCache.enabled) {
-                    // serverCache mode: compress once → buffer in RAM → Content-Length known
+                if (serverCacheConfig.compressedFile.enabled) {
+                    // compressedFile cache mode: compress once → buffer in RAM → Content-Length known
                     const cacheKey = `${toOpen}:${encoding}`;
-                    const cached = _compressionCache.get(cacheKey);
+                    const cached = _compressedFileCache.get(cacheKey);
                     const stale = !cached
                         || cached.mtime !== fileStat.mtime.getTime()
                         || cached.size !== fileStat.size;
 
                     let buf;
                     if (!stale) {
+                        cached.hits++;
                         buf = cached.buffer; // Serve from cache
                     } else {
                         try {
-                            const rawData = await fs.promises.readFile(toOpen);
+                            // Use rawFile buffer if available — avoids redundant disk read
+                            const rawData = rawBuffer || await fs.promises.readFile(toOpen);
                             buf = await compressBuffer(rawData, encoding);
 
-                            // Update cache if total size stays within the configured limit
+                            // Evict LFU entries until the compressed buffer fits within maxSize
                             const displaced = cached ? cached.buffer.length : 0;
-                            if (_compressionCacheTotalSize - displaced + buf.length <= compressionConfig.serverCache.maxSize) {
-                                _compressionCacheTotalSize -= displaced;
-                                _compressionCache.set(cacheKey, {
+                            const sizeRef = { value: _compressedFileCacheTotalSize - displaced };
+                            const warnRef = { value: _compressedFileCacheLastWarnAt };
+                            while (sizeRef.value + buf.length > serverCacheConfig.compressedFile.maxSize && _compressedFileCache.size > (cached ? 1 : 0)) {
+                                evictLFU(_compressedFileCache, sizeRef, warnRef, serverCacheConfig.compressedFile.warnInterval, 'compressedFile');
+                            }
+                            _compressedFileCacheTotalSize = sizeRef.value;
+                            _compressedFileCacheLastWarnAt = warnRef.value;
+                            if (_compressedFileCacheTotalSize + buf.length <= serverCacheConfig.compressedFile.maxSize) {
+                                _compressedFileCache.set(cacheKey, {
                                     buffer: buf,
                                     mtime: fileStat.mtime.getTime(),
                                     size: fileStat.size,
+                                    hits: 1,
                                 });
-                                _compressionCacheTotalSize += buf.length;
+                                _compressedFileCacheTotalSize += buf.length;
                             }
                         } catch (err) {
                             console.error('Compression error:', err);
                             // Fall back to uncompressed on any compression failure
                             ctx.remove('Content-Encoding');
                             ctx.remove('Vary');
-                            ctx.set('Content-Length', String(fileStat.size));
-                            if (ctx.method !== 'HEAD') {
-                                const src = fs.createReadStream(toOpen);
-                                src.on('error', (streamErr) => {
-                                    console.error('Stream error:', streamErr);
-                                    if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
-                                });
-                                ctx.body = src;
+                            if (rawBuffer) {
+                                ctx.set('Content-Length', String(rawBuffer.length));
+                                if (ctx.method !== 'HEAD') {
+                                    ctx.body = rawBuffer;
+                                } else {
+                                    ctx.body = Buffer.alloc(0);
+                                    ctx.set('Content-Length', String(rawBuffer.length));
+                                }
                             } else {
-                                ctx.body = Buffer.alloc(0);
                                 ctx.set('Content-Length', String(fileStat.size));
+                                if (ctx.method !== 'HEAD') {
+                                    const src = fs.createReadStream(toOpen);
+                                    src.on('error', (streamErr) => {
+                                        console.error('Stream error:', streamErr);
+                                        if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                                    });
+                                    ctx.body = src;
+                                } else {
+                                    ctx.body = Buffer.alloc(0);
+                                    ctx.set('Content-Length', String(fileStat.size));
+                                }
                             }
                             return;
                         }
@@ -1029,34 +1157,51 @@ module.exports = function koaClassicServer(
                 } else {
                     // Streaming mode: pipe through zlib transform — Content-Length not known in advance
                     if (ctx.method !== 'HEAD') {
-                        const src = fs.createReadStream(toOpen);
                         const compress = encoding === 'br'
                             ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
                             : zlib.createGzip({ level: 6 });
-                        src.on('error', (err) => {
-                            console.error('Stream error:', err);
-                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
-                        });
-                        ctx.body = src.pipe(compress);
+                        if (rawBuffer) {
+                            // Compress from in-memory buffer — no disk I/O
+                            const { Readable } = require('stream');
+                            const src = Readable.from(rawBuffer);
+                            ctx.body = src.pipe(compress);
+                        } else {
+                            const src = fs.createReadStream(toOpen);
+                            src.on('error', (err) => {
+                                console.error('Stream error:', err);
+                                if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                            });
+                            ctx.body = src.pipe(compress);
+                        }
                     }
                     // HEAD + streaming: no Content-Length available; Koa sends headers only via res.end()
                 }
 
             } else {
                 // ── Uncompressed response ─────────────────────────────────────────────
-                ctx.set('Content-Length', String(fileStat.size));
-
-                if (ctx.method !== 'HEAD') {
-                    const src = fs.createReadStream(toOpen);
-                    src.on('error', (err) => {
-                        console.error('Stream error:', err);
-                        if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
-                    });
-                    ctx.body = src;
+                if (rawBuffer) {
+                    // Serve directly from in-memory buffer — zero disk I/O
+                    ctx.set('Content-Length', String(rawBuffer.length));
+                    if (ctx.method !== 'HEAD') {
+                        ctx.body = rawBuffer;
+                    } else {
+                        ctx.body = Buffer.alloc(0);
+                        ctx.set('Content-Length', String(rawBuffer.length));
+                    }
                 } else {
-                    // HEAD: body assignment resets Content-Length — restore after
-                    ctx.body = Buffer.alloc(0);
                     ctx.set('Content-Length', String(fileStat.size));
+                    if (ctx.method !== 'HEAD') {
+                        const src = fs.createReadStream(toOpen);
+                        src.on('error', (err) => {
+                            console.error('Stream error:', err);
+                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                        });
+                        ctx.body = src;
+                    } else {
+                        // HEAD: body assignment resets Content-Length — restore after
+                        ctx.body = Buffer.alloc(0);
+                        ctx.set('Content-Length', String(fileStat.size));
+                    }
                 }
             }
         }

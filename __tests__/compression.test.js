@@ -100,8 +100,8 @@ describe('Compression — threshold (default 1024 bytes)', () => {
         expect(res.headers['content-encoding']).toBe('gzip');
     });
 
-    test('threshold: false → compress regardless of size', async () => {
-        const s = createApp({ compression: { threshold: false } });
+    test('minSize: false → compress regardless of size', async () => {
+        const s = createApp({ compression: { minSize: false } });
         const res = await supertest(s)
             .get('/small.txt')
             .set('Accept-Encoding', 'gzip');
@@ -224,12 +224,12 @@ describe('Compression — encoding-specific ETag', () => {
     });
 });
 
-// ─── serverCache disabled (streaming mode) ────────────────────────────────────
+// ─── serverCache.compressedFile disabled (streaming mode) ────────────────────
 
-describe('Compression — serverCache: false (streaming)', () => {
+describe('Compression — serverCache.compressedFile disabled (streaming)', () => {
     let server;
     beforeAll(() => {
-        server = createApp({ compression: { serverCache: { enabled: false } } });
+        server = createApp({ serverCache: { compressedFile: { enabled: false } } });
     });
     afterAll(() => server.close());
 

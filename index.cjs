@@ -376,33 +376,6 @@ module.exports = function koaClassicServer(
         return false;
     }
 
-    /**
-     * Returns true if dirent is a directory or a symlink pointing to a directory.
-     * Uses fs.promises.stat (which follows symlinks) when dirent.isSymbolicLink() is true,
-     * or when the dirent type is unknown (DT_UNKNOWN / type 0).
-     */
-    async function isDirOrSymlinkToDir(dirent, dirPath) {
-        if (dirent.isDirectory()) return true;
-        if (dirent.isSymbolicLink()) {
-            try {
-                const realStat = await fs.promises.stat(path.join(dirPath, dirent.name));
-                return realStat.isDirectory();
-            } catch {
-                return false; // Broken or circular symlink
-            }
-        }
-        // DT_UNKNOWN fallback: resolve via stat() when type is unknown
-        if (!dirent.isFile() && !dirent.isBlockDevice() && !dirent.isCharacterDevice() && !dirent.isFIFO() && !dirent.isSocket()) {
-            try {
-                const realStat = await fs.promises.stat(path.join(dirPath, dirent.name));
-                return realStat.isDirectory();
-            } catch {
-                return false;
-            }
-        }
-        return false;
-    }
-
     return async (ctx, next) => {
         if (!options.method.includes(ctx.method)) {
             await next();
@@ -548,7 +521,7 @@ module.exports = function koaClassicServer(
         let stat;
         try {
             stat = await fs.promises.stat(toOpen);
-        } catch (error) {
+        } catch {
             // File/directory doesn't exist or can't be accessed
             sendNotFound(ctx);
             return;
@@ -637,7 +610,7 @@ module.exports = function koaClassicServer(
                             if (fileStat.isFile()) {
                                 return { name: matchedFile, stat: fileStat };
                             }
-                        } catch (error) {
+                        } catch {
                             // File was deleted between readdir and stat, continue to next pattern
                             continue;
                         }
@@ -930,7 +903,7 @@ module.exports = function koaClassicServer(
                             } else {
                                 sizeStr = '-';
                             }
-                        } catch (error) {
+                        } catch {
                             sizeStr = '-';
                         }
                     }

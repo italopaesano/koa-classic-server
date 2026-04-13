@@ -9,6 +9,8 @@
   },
   "scripts": {
     "start": "node index.cjs",
+    "lint": "eslint index.cjs index.mjs",
+    "pretest": "npm run lint",
     "test": "jest",
     "test:security": "jest __tests__/security.test.js",
     "test:performance": "jest __tests__/performance.test.js --runInBand",
@@ -45,6 +47,7 @@
   "devDependencies": {
     "autocannon": "^8.0.0",
     "ejs": "^4.0.0",
+    "eslint": "^9.39.4",
     "inquirer": "^13.3.0",
     "jest": "^30.2.0",
     "supertest": "^7.2.2"

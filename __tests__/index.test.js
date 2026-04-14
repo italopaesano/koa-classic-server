@@ -115,7 +115,7 @@ describe(` koaClassicServer options1: ${JSON.stringify(options1)}`, () => {
 const options2 = {
   method: ['GET'],
   showDirContents: false,
-  index: 'index.html',
+  index: ['index.html'],
 };
 
 describe(` koaClassicServer options2: ${JSON.stringify(options2)}`, () => {
@@ -213,7 +213,7 @@ function getFilesRecursivelySync(dir) {
       results = results.concat(getFilesRecursivelySync(fullPath));
     } else if (entry.isFile()) {
       // Se l'entry è un file, lo aggiungiamo all'array dei risultati
-      const mimeType = mime.lookup(entry.name) || 'false';//false --> mimetype non riconosciuto , cosi lo trasmette il server , da approfondire
+      const mimeType = mime.lookup(entry.name) || 'application/octet-stream'; // fallback for unknown MIME types
       entry.type = 'file';
       entry.mimeType = mimeType;
       results.push(entry);
@@ -263,7 +263,10 @@ function testAllPathByFileList(filesAndDirArray, getServer, options) {
             expect(res.status).toBe(200);
             const content = fs.readFileSync(entry.fullPath, 'utf8');
             expect(res.type).toBe(entry.mimeType);
-            expect(res.text).toBe(content);
+            // For binary content-types (e.g. application/octet-stream), supertest populates
+            // res.body (Buffer) instead of res.text — normalise to string for comparison
+            const responseBody = res.text !== undefined ? res.text : res.body.toString('utf8');
+            expect(responseBody).toBe(content);
           } else {//è una directory
             if( options.showDirContents === false ){
               // FIX: Quando directory listing è disabilitato, restituisce 404
@@ -328,7 +331,8 @@ function testAllPathByFileList(filesAndDirArray, getServer, options) {
           if (entry.type === 'file') {
             const content = fs.readFileSync(entry.fullPath, 'utf8');
             expect(res.type).toBe(entry.mimeType);
-            expect(res.text).toBe(content);
+            const responseBody = res.text !== undefined ? res.text : res.body.toString('utf8');
+            expect(responseBody).toBe(content);
           } else {
             expect(res.type).toBe('text/html');
             expect(res.text).toContain('<!DOCTYPE html>');

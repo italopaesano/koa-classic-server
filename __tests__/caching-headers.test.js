@@ -2,8 +2,8 @@
  * HTTP Caching Headers Test
  *
  * Tests to verify correct caching behavior:
- * - When enableCaching: true -> proper cache headers
- * - When enableCaching: false -> anti-cache headers
+ * - When browserCacheEnabled: true -> proper cache headers
+ * - When browserCacheEnabled: false -> anti-cache headers
  */
 
 const Koa = require('koa');
@@ -30,7 +30,7 @@ describe('HTTP Caching Headers', () => {
         }
     });
 
-    describe('When caching is DISABLED (enableCaching: false)', () => {
+    describe('When caching is DISABLED (browserCacheEnabled: false)', () => {
         let app;
         let server;
         let request;
@@ -38,7 +38,7 @@ describe('HTTP Caching Headers', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: false
+                browserCacheEnabled: false
             }));
             server = app.listen();
             request = supertest(server);
@@ -89,7 +89,7 @@ describe('HTTP Caching Headers', () => {
         });
     });
 
-    describe('When caching is ENABLED (enableCaching: true)', () => {
+    describe('When caching is ENABLED (browserCacheEnabled: true)', () => {
         let app;
         let server;
         let request;
@@ -97,8 +97,8 @@ describe('HTTP Caching Headers', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true,
-                cacheMaxAge: 3600
+                browserCacheEnabled: true,
+                browserCacheMaxAge: 3600
             }));
             server = app.listen();
             request = supertest(server);
@@ -173,7 +173,7 @@ describe('HTTP Caching Headers', () => {
 
         beforeAll(() => {
             app = new Koa();
-            // No options provided - should default to enableCaching: false
+            // No options provided - should default to browserCacheEnabled: false
             app.use(koaClassicServer(TEST_DIR));
             server = app.listen();
             request = supertest(server);
@@ -193,12 +193,12 @@ describe('HTTP Caching Headers', () => {
         });
     });
 
-    describe('Custom cacheMaxAge values', () => {
-        test('Should respect custom cacheMaxAge: 7200', async () => {
+    describe('Custom browserCacheMaxAge values', () => {
+        test('Should respect custom browserCacheMaxAge: 7200', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true,
-                cacheMaxAge: 7200
+                browserCacheEnabled: true,
+                browserCacheMaxAge: 7200
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -211,11 +211,11 @@ describe('HTTP Caching Headers', () => {
             server.close();
         });
 
-        test('Should respect custom cacheMaxAge: 0 (no browser cache)', async () => {
+        test('Should respect custom browserCacheMaxAge: 0 (no browser cache)', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true,
-                cacheMaxAge: 0
+                browserCacheEnabled: true,
+                browserCacheMaxAge: 0
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -230,11 +230,11 @@ describe('HTTP Caching Headers', () => {
             server.close();
         });
 
-        test('Should respect custom cacheMaxAge: 86400 (1 day)', async () => {
+        test('Should respect custom browserCacheMaxAge: 86400 (1 day)', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true,
-                cacheMaxAge: 86400
+                browserCacheEnabled: true,
+                browserCacheMaxAge: 86400
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -255,7 +255,7 @@ describe('HTTP Caching Headers', () => {
 
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -290,7 +290,7 @@ describe('HTTP Caching Headers', () => {
 
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -318,7 +318,7 @@ describe('HTTP Caching Headers', () => {
         test('304 response should have no body', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -348,7 +348,7 @@ describe('HTTP Caching Headers', () => {
         test('Should save bandwidth on multiple 304 responses', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -394,7 +394,7 @@ describe('HTTP Caching Headers', () => {
         test('HTML files should have cache headers', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -411,7 +411,7 @@ describe('HTTP Caching Headers', () => {
         test('JSON files should have cache headers', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -427,7 +427,7 @@ describe('HTTP Caching Headers', () => {
         test('CSS files should have cache headers', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -443,7 +443,7 @@ describe('HTTP Caching Headers', () => {
         test('JavaScript files should have cache headers', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -466,8 +466,8 @@ describe('HTTP Caching Headers', () => {
 
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true,
-                cacheMaxAge: 3600,
+                browserCacheEnabled: true,
+                browserCacheMaxAge: 3600,
                 template: {
                     ext: ['ejs'],
                     render: async (ctx, next, filePath) => {
@@ -499,7 +499,7 @@ describe('HTTP Caching Headers', () => {
         test('Multiple concurrent requests should handle caching correctly', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -528,7 +528,7 @@ describe('HTTP Caching Headers', () => {
         test('Concurrent 304 responses should work correctly', async () => {
             const app = new Koa();
             app.use(koaClassicServer(TEST_DIR, {
-                enableCaching: true
+                browserCacheEnabled: true
             }));
             const server = app.listen();
             const request = supertest(server);

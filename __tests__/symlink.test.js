@@ -161,8 +161,9 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
         test('GET / serves symlinked index.ejs, not directory listing', async () => {
             const res = await request.get('/');
             expect(res.status).toBe(200);
-            expect(res.text).toContain('EJS via Symlink');
-            expect(res.text).not.toContain('Index of');
+            const body = res.text !== undefined ? res.text : res.body.toString('utf8');
+            expect(body).toContain('EJS via Symlink');
+            expect(body).not.toContain('Index of');
         });
     });
 
@@ -187,7 +188,8 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
         test('GET /index.ejs via symlink returns 200', async () => {
             const res = await request.get('/index.ejs');
             expect(res.status).toBe(200);
-            expect(res.text).toContain('EJS via Symlink');
+            const body = res.text !== undefined ? res.text : res.body.toString('utf8');
+            expect(body).toContain('EJS via Symlink');
         });
 
         test('GET /linked-style.css via symlink returns 200 with correct mime', async () => {
@@ -431,8 +433,9 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
         test('GET / finds symlinked index.ejs via RegExp pattern', async () => {
             const res = await request.get('/');
             expect(res.status).toBe(200);
-            expect(res.text).toContain('EJS via Symlink');
-            expect(res.text).not.toContain('Index of');
+            const body = res.text !== undefined ? res.text : res.body.toString('utf8');
+            expect(body).toContain('EJS via Symlink');
+            expect(body).not.toContain('Index of');
         });
     });
 });

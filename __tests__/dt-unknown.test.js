@@ -254,8 +254,9 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             try {
                 const res = await request.get('/');
                 expect(res.status).toBe(200);
-                expect(res.text).toContain('EJS DT_UNKNOWN');
-                expect(res.text).not.toContain('Index of');
+                const body = res.text !== undefined ? res.text : res.body.toString('utf8');
+                expect(body).toContain('EJS DT_UNKNOWN');
+                expect(body).not.toContain('Index of');
             } finally {
                 server.close();
                 spy.mockRestore();
@@ -276,8 +277,9 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             try {
                 const res = await request.get('/');
                 expect(res.status).toBe(200);
-                expect(res.text).toContain('EJS DT_UNKNOWN');
-                expect(res.text).not.toContain('Index of');
+                const body = res.text !== undefined ? res.text : res.body.toString('utf8');
+                expect(body).toContain('EJS DT_UNKNOWN');
+                expect(body).not.toContain('Index of');
             } finally {
                 server.close();
                 spy.mockRestore();

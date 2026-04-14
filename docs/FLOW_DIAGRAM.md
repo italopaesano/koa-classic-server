@@ -141,13 +141,13 @@ module.exports = function koaClassicServer(rootDir, opts = {}) {
         : [];
 
     // 7. Configure HTTP caching
-    options.cacheMaxAge = typeof options.cacheMaxAge === 'number' &&
-                          options.cacheMaxAge >= 0
-        ? options.cacheMaxAge
+    options.browserCacheMaxAge = typeof options.browserCacheMaxAge === 'number' &&
+                                 options.browserCacheMaxAge >= 0
+        ? options.browserCacheMaxAge
         : 3600;
-    options.enableCaching = typeof options.enableCaching === 'boolean'
-        ? options.enableCaching
-        : true;
+    options.browserCacheEnabled = typeof options.browserCacheEnabled === 'boolean'
+        ? options.browserCacheEnabled
+        : false;
 
     // 8. Return Koa middleware function
     return async (ctx, next) => {
@@ -172,8 +172,8 @@ START
   │   ├─ urlsReserved: []
   │   ├─ template.render: undefined
   │   ├─ template.ext: []
-  │   ├─ cacheMaxAge: 3600 (1 hour)
-  │   └─ enableCaching: true
+  │   ├─ browserCacheMaxAge: 3600 (1 hour)
+  │   └─ browserCacheEnabled: false
   │
   └─> Return async middleware function
 ```
@@ -415,7 +415,7 @@ Handles serving individual files with caching, template rendering, and streaming
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  3. HTTP Caching (if enableCaching = true)                      │
+│  3. HTTP Caching (if browserCacheEnabled = true)                │
 │     Generate ETag: "mtime-size"                                 │
 │     Set Last-Modified: mtime.toUTCString()                      │
 │     Set Cache-Control: public, max-age=3600                     │
@@ -492,7 +492,7 @@ fileExt in template.ext? → YES
 ### Code Example: HTTP Caching
 ```javascript
 // index.cjs:313-350
-if (options.enableCaching) {
+if (options.browserCacheEnabled) {
     // Generate ETag
     const etag = `"${fileStat.mtime.getTime()}-${fileStat.size}"`;
 
@@ -502,7 +502,7 @@ if (options.enableCaching) {
     // Set headers
     ctx.set('ETag', etag);
     ctx.set('Last-Modified', lastModified);
-    ctx.set('Cache-Control', `public, max-age=${options.cacheMaxAge}, must-revalidate`);
+    ctx.set('Cache-Control', `public, max-age=${options.browserCacheMaxAge}, must-revalidate`);
 
     // Check If-None-Match (ETag validation)
     const clientEtag = ctx.get('If-None-Match');
@@ -782,8 +782,8 @@ app.use(koaClassicServer('/var/www/public', {
     },
 
     // HTTP caching (1 hour)
-    cacheMaxAge: 3600,
-    enableCaching: true
+    browserCacheMaxAge: 3600,
+    browserCacheEnabled: true
 }));
 
 app.listen(3000);

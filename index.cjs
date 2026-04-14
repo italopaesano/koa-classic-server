@@ -2,25 +2,146 @@
 const { URL } = require("url");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const zlib = require("zlib");
 const mime = require("mime-types");
 
-// koa-classic-server - Performance optimized version
-// Version: 2.0.0
-// Optimizations applied (v2.0.0):
-// - All sync operations converted to async (non-blocking event loop)
-// - String concatenation replaced with array join (30-40% less memory)
-// - HTTP caching with ETag and Last-Modified (80-95% bandwidth reduction)
-// - Conditional requests support (304 Not Modified)
-//
-// Security fixes (from v1.2.0):
-// - Path Traversal vulnerability protection
-// - Status code 404 properly set
-// - Template rendering error handling
-// - Race condition file access protection
-// - Proper file extension extraction
-// - fs.readdir error handling
-// - Content-Disposition properly quoted
-// - XSS protection in directory listing
+// Emitted at most once per process lifetime when hidden.dotFiles.default or
+// hidden.dotDirs.default are not explicitly set by the caller.
+let _hiddenDefaultWarnEmitted = false;
+
+// Default list of MIME types that benefit from compression.
+// User-provided compression.mimeTypes replaces this list entirely.
+const DEFAULT_COMPRESSIBLE_MIME_TYPES = [
+    'text/html',
+    'text/css',
+    'text/javascript',
+    'text/plain',
+    'text/xml',
+    'text/csv',
+    'application/javascript',
+    'application/json',
+    'application/xml',
+    'application/wasm',
+    'image/svg+xml',
+];
+
+// CSS for the directory listing page — extracted so its SHA-256 hash can be
+// computed once at module load time and placed in the Content-Security-Policy header.
+const LISTING_CSS = `
+    body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+    }
+    h1 {
+        border-bottom: 1px solid #ddd;
+        padding-bottom: 10px;
+    }
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        max-width: 800px;
+    }
+    thead {
+        background-color: #f5f5f5;
+        border-bottom: 2px solid #ddd;
+    }
+    th {
+        text-align: left;
+        padding: 10px;
+        font-weight: bold;
+        border-bottom: 2px solid #ddd;
+    }
+    td {
+        padding: 8px 10px;
+        border-bottom: 1px solid #eee;
+    }
+    tr:hover {
+        background-color: #f9f9f9;
+    }
+    a {
+        color: #0066cc;
+        text-decoration: none;
+    }
+    a:hover {
+        text-decoration: underline;
+    }
+    th:nth-child(1), td:nth-child(1) { width: 50%; }
+    th:nth-child(2), td:nth-child(2) { width: 30%; }
+    th:nth-child(3), td:nth-child(3) { width: 20%; text-align: right; }
+`;
+
+// SHA-256 hash of the listing CSS, computed once at startup (zero per-request overhead).
+const _listingCssHash = 'sha256-' + crypto.createHash('sha256').update(LISTING_CSS, 'utf8').digest('base64');
+
+// CSP for the directory listing page (has inline CSS → hash-based allowance).
+const LISTING_CSP = `default-src 'none'; style-src '${_listingCssHash}'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`;
+
+// CSP for error/404 pages (no inline CSS → fully restrictive).
+const NOT_FOUND_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+// Sets security headers on all middleware-generated HTML pages (listing + error).
+// Must NOT be called for user files served from disk.
+function setGeneratedPageHeaders(ctx, csp) {
+    ctx.set('Content-Security-Policy', csp);
+    ctx.set('X-Content-Type-Options', 'nosniff');
+    ctx.set('X-Frame-Options', 'DENY');
+    ctx.set('Referrer-Policy', 'no-referrer');
+    ctx.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+}
+
+/**
+ * Parse a "Range: bytes=..." header against a known file size.
+ * Only single ranges are supported; multi-range requests are treated as invalid.
+ *
+ * Returns:
+ *   { start, end }   — valid range (both inclusive, 0-based)
+ *   'invalid'        — malformed or multi-range → caller should serve full 200
+ *   'unsatisfiable'  — out of bounds → caller should return 416
+ */
+function parseRangeHeader(rangeHeader, fileSize) {
+    if (!rangeHeader.startsWith('bytes=')) return 'invalid';
+
+    const spec = rangeHeader.slice(6);
+
+    // Reject multi-range (comma-separated)
+    if (spec.includes(',')) return 'invalid';
+
+    const dashIdx = spec.indexOf('-');
+    if (dashIdx === -1) return 'invalid';
+
+    const startStr = spec.slice(0, dashIdx);
+    const endStr   = spec.slice(dashIdx + 1);
+
+    let start, end;
+
+    if (startStr === '') {
+        // Suffix range: bytes=-N (last N bytes)
+        if (endStr === '') return 'invalid';
+        const suffix = parseInt(endStr, 10);
+        if (isNaN(suffix) || suffix <= 0) return 'invalid';
+        if (fileSize === 0) return 'unsatisfiable';
+        start = suffix >= fileSize ? 0 : fileSize - suffix;
+        end   = fileSize - 1;
+    } else {
+        start = parseInt(startStr, 10);
+        if (isNaN(start) || start < 0) return 'invalid';
+        if (fileSize === 0 || start >= fileSize) return 'unsatisfiable';
+
+        if (endStr === '') {
+            // Open range: bytes=N-
+            end = fileSize - 1;
+        } else {
+            end = parseInt(endStr, 10);
+            if (isNaN(end) || end < 0) return 'invalid';
+            if (start > end) return 'invalid';
+            // Clamp end to file size - 1
+            if (end >= fileSize) end = fileSize - 1;
+        }
+    }
+
+    return { start, end };
+}
 
 module.exports = function koaClassicServer(
     rootDir,
@@ -30,14 +151,11 @@ module.exports = function koaClassicServer(
      opts = {
         method: ['GET'], // Supported methods, otherwise next() will be called
         showDirContents: true, // Show or hide directory contents
-        index: ["index.html"], // Index file name(s) - ARRAY FORMAT (recommended):
+        index: ["index.html"], // Index file name(s) - must be an ARRAY:
                                //   - Array of strings: ["index.html", "index.htm", "default.html"]
-                               //   - Array of RegExp: [/index\.html/i, /default\.(html|htm)/i]
-                               //   - Mixed array: ["index.html", /index\.[eE][jJ][sS]/]
+                               //   - Array of RegExp:  [/index\.html/i, /default\.(html|htm)/i]
+                               //   - Mixed array:      ["index.html", /index\.[eE][jJ][sS]/]
                                // Priority is determined by array order (first match wins)
-                               //
-                               // DEPRECATED: String format "index.html" is still supported but
-                               // will be removed in future versions. Use array format instead.
         urlPrefix: "", // URL path prefix
         urlsReserved: [], // Reserved paths (first level only)
         template: {
@@ -55,14 +173,45 @@ module.exports = function koaClassicServer(
             ext: '.ejs',     // Extension to hide (required, string, case-sensitive, must start with '.')
             redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301)
         },
+        hidden: {            // Block files/dirs from listing and serving (HTTP 404)
+            dotFiles: {      // Dot-files (names starting with '.'): hidden by default
+                default: 'hidden',   // 'hidden' | 'visible' — system default: 'hidden'
+                whitelist: [],       // Always visible (string exact/glob or RegExp). Overrides default and alwaysHide.
+                blacklist: [],       // Always hidden (string or RegExp). Overrides whitelist.
+            },
+            dotDirs: {       // Dot-directories: visible by default
+                default: 'visible',  // 'hidden' | 'visible' — system default: 'visible'
+                whitelist: [],
+                blacklist: [],
+            },
+            alwaysHide: [],  // Path-aware patterns (string glob or RegExp) for any file/dir.
+                             // Secondary to dotFiles/dotDirs whitelist and blacklist.
+                             // Examples: ['*.secret', 'config/secrets/**', /\.key$/]
+        },
+        serverCache: {       // Server-side in-memory caches (independent of browser HTTP caching)
+            rawFile: {
+                enabled: false,               // enable in-memory cache of raw file buffers
+                maxSize: 52428800,            // max total RAM used by this cache (bytes; default: 50 MB)
+                maxFileSize: 1048576,         // files larger than this are never cached (bytes; default: 1 MB)
+                warnInterval: 60000,          // ms between "maxSize reached" warnings; 0 = always; false = never
+            },
+            compressedFile: {                 // cache for HTTP br/gzip responses — not for .zip/.tar files on disk
+                enabled: true,               // enable in-memory cache of compressed response buffers
+                maxSize: 104857600,          // max total RAM used by this cache (bytes; default: 100 MB)
+                warnInterval: 60000,         // ms between "maxSize reached" warnings; 0 = always; false = never
+            },
+        },
+        compression: {       // Response compression (gzip / brotli) — to enable/disable caching → serverCache.compressedFile
+            enabled: true,                // master switch (false = disable all compression)
+            encodings: ['br', 'gzip'],    // algorithms in priority order; [] = disable
+            minSize: 1024,                // min file size in bytes to compress; false = no minimum
+            mimeTypes: [],                // compressible MIME types (replaces default list if provided)
+        },
+        // compression: false            // shorthand to disable all compression
 
-        // DEPRECATED OPTIONS (maintained for backward compatibility):
-        // cacheMaxAge: use browserCacheMaxAge instead
-        // enableCaching: use browserCacheEnabled instead
     }
     */
 ) {
-    // Validate rootDir
     if (!rootDir || typeof rootDir !== 'string') {
         throw new TypeError('rootDir must be a non-empty string');
     }
@@ -70,10 +219,8 @@ module.exports = function koaClassicServer(
         throw new Error('rootDir must be an absolute path');
     }
 
-    // Normalize rootDir to prevent issues
     const normalizedRootDir = path.resolve(rootDir);
 
-    // Set default options
     const options = opts || {};
     options.template = opts.template || {};
 
@@ -82,18 +229,15 @@ module.exports = function koaClassicServer(
 
     // Normalize index option to array format
     if (typeof options.index === 'string') {
-        // DEPRECATION WARNING: String format is deprecated
         if (options.index) {
-            console.warn(
-                '\x1b[33m%s\x1b[0m',
-                '[koa-classic-server] DEPRECATION WARNING: Passing a string to the "index" option is deprecated and may be removed in future versions.\n' +
-                `  Current usage: index: "${options.index}"\n` +
-                `  Recommended:   index: ["${options.index}"]\n` +
-                '  Please update your configuration to use an array format.'
+            // v3.0.0: non-empty string format removed
+            throw new Error(
+                '[koa-classic-server] The "index" option no longer accepts a string in v3.0.0.\n' +
+                `  Replace with: index: ["${options.index}"]`
             );
         }
-        // Single string → convert to array with one element
-        options.index = options.index ? [options.index] : [];
+        // Empty string → silently treat as no index (empty array)
+        options.index = [];
     } else if (Array.isArray(options.index)) {
         // Already an array → validate elements are strings or RegExp
         options.index = options.index.filter(item =>
@@ -109,35 +253,20 @@ module.exports = function koaClassicServer(
     options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
 
-    // OPTIMIZATION: HTTP Caching options
-    // NOTE: Default browserCacheEnabled is false for development environments.
-    // For production deployments, it's strongly recommended to enable caching
-    // by setting browserCacheEnabled: true to benefit from reduced bandwidth and improved performance.
-
-    // DEPRECATION: Handle legacy option names for backward compatibility
-    if ('cacheMaxAge' in opts && !('browserCacheMaxAge' in opts)) {
-        console.warn(
-            '\x1b[33m%s\x1b[0m',
-            '[koa-classic-server] DEPRECATION WARNING: The "cacheMaxAge" option is deprecated and will be removed in future versions.\n' +
-            '  Current usage: cacheMaxAge: ' + opts.cacheMaxAge + '\n' +
-            '  Recommended:   browserCacheMaxAge: ' + opts.cacheMaxAge + '\n' +
-            '  Please update your configuration to use the new option name.'
+    // v3.0.0: removed legacy option names — throw to surface the breaking change clearly
+    if ('cacheMaxAge' in opts) {
+        throw new Error(
+            '[koa-classic-server] The "cacheMaxAge" option was removed in v3.0.0.\n' +
+            '  Replace with: browserCacheMaxAge: ' + opts.cacheMaxAge
         );
-        options.browserCacheMaxAge = opts.cacheMaxAge;
+    }
+    if ('enableCaching' in opts) {
+        throw new Error(
+            '[koa-classic-server] The "enableCaching" option was removed in v3.0.0.\n' +
+            '  Replace with: browserCacheEnabled: ' + opts.enableCaching
+        );
     }
 
-    if ('enableCaching' in opts && !('browserCacheEnabled' in opts)) {
-        console.warn(
-            '\x1b[33m%s\x1b[0m',
-            '[koa-classic-server] DEPRECATION WARNING: The "enableCaching" option is deprecated and will be removed in future versions.\n' +
-            '  Current usage: enableCaching: ' + opts.enableCaching + '\n' +
-            '  Recommended:   browserCacheEnabled: ' + opts.enableCaching + '\n' +
-            '  Please update your configuration to use the new option name.'
-        );
-        options.browserCacheEnabled = opts.enableCaching;
-    }
-
-    // Set new option names (with defaults)
     options.browserCacheMaxAge = typeof options.browserCacheMaxAge === 'number' && options.browserCacheMaxAge >= 0 ? options.browserCacheMaxAge : 3600;
     options.browserCacheEnabled = typeof options.browserCacheEnabled === 'boolean' ? options.browserCacheEnabled : false;
     options.useOriginalUrl = typeof options.useOriginalUrl === 'boolean' ? options.useOriginalUrl : true;
@@ -169,6 +298,163 @@ module.exports = function koaClassicServer(
         } else {
             options.hideExtension.redirect = 301;
         }
+    }
+
+    // Normalize and validate the hidden option into a clean internal structure.
+    function normalizeHiddenConfig(hidden) {
+        if (!hidden || typeof hidden !== 'object' || Array.isArray(hidden)) {
+            return {
+                dotFiles: { default: 'hidden', whitelist: [], blacklist: [] },
+                dotDirs:  { default: 'visible', whitelist: [], blacklist: [] },
+                alwaysHide: []
+            };
+        }
+
+        const filterPatternList = (arr) =>
+            Array.isArray(arr)
+                ? arr.filter(p => typeof p === 'string' || p instanceof RegExp)
+                : [];
+
+        function normalizeCategory(input, systemDefault, categoryName) {
+            if (!input || typeof input !== 'object' || Array.isArray(input)) {
+                return { default: systemDefault, whitelist: [], blacklist: [] };
+            }
+            if (input.default !== undefined && input.default !== 'hidden' && input.default !== 'visible') {
+                throw new Error(
+                    `[koa-classic-server] hidden.${categoryName}.default must be "hidden" or "visible". Got: "${input.default}"`
+                );
+            }
+            return {
+                default: input.default !== undefined ? input.default : systemDefault,
+                whitelist: filterPatternList(input.whitelist),
+                blacklist: filterPatternList(input.blacklist),
+            };
+        }
+
+        return {
+            dotFiles: normalizeCategory(hidden.dotFiles, 'hidden', 'dotFiles'),
+            dotDirs:  normalizeCategory(hidden.dotDirs,  'visible', 'dotDirs'),
+            alwaysHide: filterPatternList(hidden.alwaysHide),
+        };
+    }
+
+    const hiddenConfig = normalizeHiddenConfig(options.hidden);
+
+    // One-time per-process warning when the caller relies on implicit defaults for
+    // hidden.dotFiles.default or hidden.dotDirs.default.  Since v3.0.0 dotFiles are
+    // hidden by default ('hidden') while dotDirs are visible by default ('visible').
+    // Explicitly declaring the values makes intent clear and silences the warning.
+    if (!_hiddenDefaultWarnEmitted) {
+        const dotFilesImplicit = opts.hidden?.dotFiles?.default === undefined;
+        const dotDirsImplicit  = opts.hidden?.dotDirs?.default  === undefined;
+        if (dotFilesImplicit || dotDirsImplicit) {
+            _hiddenDefaultWarnEmitted = true;
+            console.warn(
+                '\x1b[33m%s\x1b[0m',
+                '[koa-classic-server] WARNING: hidden.dotFiles.default and/or hidden.dotDirs.default are not explicitly set.\n' +
+                '  Since v3.0.0 the defaults are: dotFiles → "hidden", dotDirs → "visible".\n' +
+                '  To suppress this warning, add to your configuration:\n' +
+                '    hidden: { dotFiles: { default: \'hidden\' }, dotDirs: { default: \'visible\' } }\n' +
+                '  (adjust values to match your desired behaviour)'
+            );
+        }
+    }
+
+    // Returns true if `name` matches any pattern in the list.
+    // Patterns are matched against the bare filename (case-sensitive).
+    // Each entry can be a string (exact match or simple glob with * and ?) or a RegExp.
+    function matchesNameList(name, patterns) {
+        for (const pattern of patterns) {
+            if (pattern instanceof RegExp) {
+                if (pattern.test(name)) return true;
+            } else if (typeof pattern === 'string') {
+                if (nameGlobMatch(name, pattern)) return true;
+            }
+        }
+        return false;
+    }
+
+    // Matches a bare filename against a simple glob pattern (* = any chars except /, ? = one char).
+    function nameGlobMatch(name, pattern) {
+        if (!pattern.includes('*') && !pattern.includes('?')) {
+            return name === pattern;
+        }
+        const regexStr = '^' +
+            pattern
+                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                .replace(/\*/g, '[^/]*')
+                .replace(/\?/g, '[^/]')
+            + '$';
+        return new RegExp(regexStr).test(name);
+    }
+
+    // Returns true if `relPath` matches any pattern in the list.
+    // Patterns are matched against the full relative path from rootDir (case-sensitive).
+    // Each entry can be a string glob or a RegExp.
+    function matchesPathList(relPath, patterns) {
+        for (const pattern of patterns) {
+            if (pattern instanceof RegExp) {
+                if (pattern.test(relPath)) return true;
+            } else if (typeof pattern === 'string') {
+                if (pathGlobMatch(relPath, pattern)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Matches a relative path against a glob pattern (path-aware).
+     *   - Pattern without '/': matches the basename at any depth  (e.g. '*.secret')
+     *   - Pattern with '/':    anchored to rootDir               (e.g. 'config/secrets/**')
+     *   - '*'  matches any characters except '/'
+     *   - '**' matches any characters including '/'
+     *   - '?'  matches any single character except '/'
+     */
+    function pathGlobMatch(relPath, pattern) {
+        const hasSlash = pattern.includes('/');
+        const escaped = pattern
+            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*\*/g, '\x00')
+            .replace(/\*/g, '[^/]*')
+            .replace(/\?/g, '[^/]')
+            .replace(/\x00/g, '.*');
+
+        const regexStr = hasSlash
+            ? '^' + escaped + '($|/)'    // path-anchored from root
+            : '(^|/)' + escaped + '$';   // basename match at any depth
+
+        return new RegExp(regexStr).test(relPath);
+    }
+
+    /**
+     * Returns true if a filesystem entry should be hidden (blocked from listing and serving).
+     *
+     * Priority (highest to lowest):
+     *   1. blacklist  (dotFiles/dotDirs) — always hidden, beats everything
+     *   2. whitelist  (dotFiles/dotDirs) — always visible, overrides alwaysHide and default
+     *   3. alwaysHide                    — path-aware, overrides default
+     *   4. default    (dotFiles/dotDirs) — 'hidden' or 'visible' for unmatched dot-entries
+     *
+     * Non-dot entries are only affected by alwaysHide.
+     *
+     * @param {string}  name    - Basename of the file or directory
+     * @param {string}  relPath - Relative path from rootDir (e.g. "subdir/.env")
+     * @param {boolean} isDir   - True if the entry is a directory
+     */
+    function isHiddenEntry(name, relPath, isDir) {
+        const isDot = name.startsWith('.');
+
+        if (isDot) {
+            const category = isDir ? hiddenConfig.dotDirs : hiddenConfig.dotFiles;
+
+            if (matchesNameList(name, category.blacklist)) return true;
+            if (matchesNameList(name, category.whitelist)) return false;
+            if (matchesPathList(relPath, hiddenConfig.alwaysHide)) return true;
+
+            return category.default === 'hidden';
+        }
+
+        return matchesPathList(relPath, hiddenConfig.alwaysHide);
     }
 
     /**
@@ -204,35 +490,166 @@ module.exports = function koaClassicServer(
         return false;
     }
 
+    // Normalize and validate the compression option into a clean internal structure.
+    // compression: false is a valid shorthand for { enabled: false }.
+    function normalizeCompressionConfig(compression) {
+        if (compression === false) return { enabled: false };
+
+        if (!compression || typeof compression !== 'object' || Array.isArray(compression)) {
+            return {
+                enabled: true,
+                encodings: ['br', 'gzip'],              // priority order: brotli first, gzip as fallback
+                minSize: 1024,                          // bytes; skip compression for files smaller than this
+                mimeTypes: DEFAULT_COMPRESSIBLE_MIME_TYPES,
+            };
+        }
+
+        const enabled = typeof compression.enabled === 'boolean' ? compression.enabled : true;
+        if (!enabled) return { enabled: false };
+
+        const encodings = Array.isArray(compression.encodings)
+            ? compression.encodings.filter(e => e === 'br' || e === 'gzip')
+            : ['br', 'gzip'];
+
+        const minSize = compression.minSize === false ? false
+            : (typeof compression.minSize === 'number' && compression.minSize >= 0 ? compression.minSize : 1024);
+
+        const mimeTypes = Array.isArray(compression.mimeTypes) && compression.mimeTypes.length > 0
+            ? compression.mimeTypes
+            : DEFAULT_COMPRESSIBLE_MIME_TYPES;
+
+        return { enabled, encodings, minSize, mimeTypes };
+    }
+
+    // Normalize and validate the serverCache option into a clean internal structure.
+    function normalizeServerCacheConfig(serverCache) {
+        const defaultRawFile = {
+            enabled: false,
+            maxSize: 52428800,      // 50 MB
+            maxFileSize: 1048576,   // 1 MB
+            warnInterval: 60000,
+        };
+        const defaultCompressedFile = {
+            enabled: true,
+            maxSize: 104857600,     // 100 MB
+            warnInterval: 60000,
+        };
+
+        if (!serverCache || typeof serverCache !== 'object' || Array.isArray(serverCache)) {
+            return { rawFile: defaultRawFile, compressedFile: defaultCompressedFile };
+        }
+
+        const rf = serverCache.rawFile;
+        const rawFile = (!rf || typeof rf !== 'object' || Array.isArray(rf)) ? defaultRawFile : {
+            enabled: typeof rf.enabled === 'boolean' ? rf.enabled : false,
+            maxSize: typeof rf.maxSize === 'number' && rf.maxSize > 0 ? rf.maxSize : 52428800,
+            maxFileSize: typeof rf.maxFileSize === 'number' && rf.maxFileSize > 0 ? rf.maxFileSize : 1048576,
+            warnInterval: rf.warnInterval === false ? false : (typeof rf.warnInterval === 'number' ? rf.warnInterval : 60000),
+        };
+
+        const cf = serverCache.compressedFile;
+        const compressedFile = (!cf || typeof cf !== 'object' || Array.isArray(cf)) ? defaultCompressedFile : {
+            enabled: typeof cf.enabled === 'boolean' ? cf.enabled : true,
+            maxSize: typeof cf.maxSize === 'number' && cf.maxSize > 0 ? cf.maxSize : 104857600,
+            warnInterval: cf.warnInterval === false ? false : (typeof cf.warnInterval === 'number' ? cf.warnInterval : 60000),
+        };
+
+        return { rawFile, compressedFile };
+    }
+
+    const compressionConfig = normalizeCompressionConfig(options.compression);
+    const serverCacheConfig = normalizeServerCacheConfig(options.serverCache);
+
+    // In-memory cache for raw file buffers (serverCache.rawFile).
+    // Key: absoluteFilePath — stores buffer + mtime + size for invalidation + hits for LFU eviction.
+    const _rawFileCache = new Map();
+    let _rawFileCacheTotalSize = 0;
+    let _rawFileCacheLastWarnAt = 0;
+
+    // In-memory cache for compressed file buffers (serverCache.compressedFile).
+    // Key: `${absoluteFilePath}:${encoding}` — stores buffer + mtime + size + hits.
+    const _compressedFileCache = new Map();
+    let _compressedFileCacheTotalSize = 0;
+    let _compressedFileCacheLastWarnAt = 0;
+
+    // Evict the LFU (least frequently used) entry from a cache map.
+    // Emits a throttled warning when eviction occurs.
+    function evictLFU(cache, totalSizeRef, lastWarnRef, warnInterval, cacheLabel) {
+        let minHits = Infinity;
+        let minKey = null;
+        for (const [key, entry] of cache) {
+            if (entry.hits < minHits) {
+                minHits = entry.hits;
+                minKey = key;
+            }
+        }
+        if (minKey !== null) {
+            totalSizeRef.value -= cache.get(minKey).buffer.length;
+            cache.delete(minKey);
+            if (warnInterval !== false) {
+                const now = Date.now();
+                if (now - lastWarnRef.value >= warnInterval) {
+                    console.warn(`[koa-classic-server] serverCache.${cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
+                    lastWarnRef.value = now;
+                }
+            }
+        }
+    }
+
+    // Returns the client's preferred encoding based on Accept-Encoding header,
+    // filtered against the enabled encodings list. Returns null if no match.
+    function getClientEncoding(acceptEncoding) {
+        if (!acceptEncoding) return null;
+        for (const enc of compressionConfig.encodings) {
+            if (acceptEncoding.includes(enc)) return enc;
+        }
+        return null;
+    }
+
+    // Compress a Buffer using the given encoding ('br' or 'gzip').
+    // Uses maximum quality — appropriate for serverCache mode (cost paid once).
+    function compressBuffer(data, encoding) {
+        return new Promise((resolve, reject) => {
+            if (encoding === 'br') {
+                zlib.brotliCompress(
+                    data,
+                    { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 } },
+                    (err, result) => { if (err) reject(err); else resolve(result); }
+                );
+            } else {
+                zlib.gzip(
+                    data,
+                    { level: zlib.constants.Z_BEST_COMPRESSION },
+                    (err, result) => { if (err) reject(err); else resolve(result); }
+                );
+            }
+        });
+    }
+
     /**
-     * Returns true if dirent is a directory or a symlink pointing to a directory.
-     * Uses fs.promises.stat (which follows symlinks) when dirent.isSymbolicLink() is true,
-     * or when the dirent type is unknown (DT_UNKNOWN / type 0).
+     * Build a Content-Disposition header value for inline serving.
+     *
+     * Uses both the legacy quoted-string form (ASCII fallback) and the RFC 5987
+     * extended form (UTF-8 percent-encoded) for maximum browser compatibility:
+     *   inline; filename="ascii-safe"; filename*=UTF-8''percent-encoded
+     *
+     * The quoted-string form escapes only double-quotes; the RFC 5987 form
+     * percent-encodes every byte that is not an unreserved URI character.
+     * Browsers that support filename* prefer it over filename (RFC 6266 §4.1).
      */
-    async function isDirOrSymlinkToDir(dirent, dirPath) {
-        if (dirent.isDirectory()) return true;
-        if (dirent.isSymbolicLink()) {
-            try {
-                const realStat = await fs.promises.stat(path.join(dirPath, dirent.name));
-                return realStat.isDirectory();
-            } catch {
-                return false; // Broken or circular symlink
-            }
-        }
-        // DT_UNKNOWN fallback: resolve via stat() when type is unknown
-        if (!dirent.isFile() && !dirent.isBlockDevice() && !dirent.isCharacterDevice() && !dirent.isFIFO() && !dirent.isSocket()) {
-            try {
-                const realStat = await fs.promises.stat(path.join(dirPath, dirent.name));
-                return realStat.isDirectory();
-            } catch {
-                return false;
-            }
-        }
-        return false;
+    function buildContentDisposition(filename) {
+        // quoted-string fallback: escape " and \ so the value is always valid ASCII
+        const asciiSafe = filename.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+        // RFC 5987 extended value: UTF-8 percent-encode everything except
+        // unreserved chars (ALPHA / DIGIT / "-" / "." / "_" / "~")
+        const rfc5987 = encodeURIComponent(filename)
+            .replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
+        return `inline; filename="${asciiSafe}"; filename*=UTF-8''${rfc5987}`;
     }
 
     return async (ctx, next) => {
-        // Check if method is allowed
         if (!options.method.includes(ctx.method)) {
             await next();
             return;
@@ -279,8 +696,7 @@ module.exports = function koaClassicServer(
             }
         }
 
-        // Path Traversal Protection
-        // Construct safe file path
+        // Path traversal protection: build and validate safe file path
         let requestedPath = "";
         if (pageHrefOutPrefix.pathname === "/") {
             requestedPath = "";
@@ -288,15 +704,37 @@ module.exports = function koaClassicServer(
             requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
         }
 
-        // Normalize path and prevent path traversal
+        // Null byte guard: path.normalize() throws ERR_INVALID_ARG_VALUE for paths
+        // containing \0. Reject early with 400 Bad Request before it reaches fs calls.
+        if (requestedPath.includes('\0')) {
+            ctx.status = 400;
+            ctx.body = 'Bad Request';
+            return;
+        }
+
         const normalizedPath = path.normalize(requestedPath);
         const fullPath = path.join(normalizedRootDir, normalizedPath);
 
-        // Security check: ensure resolved path is within rootDir
+        // Security check: ensure resolved path is within rootDir.
+        // Covers: ../ traversal, URL-encoded variants (%2e%2e%2f), and on Windows
+        // backslash sequences (path.normalize converts \ to / before the check).
         if (!fullPath.startsWith(normalizedRootDir)) {
             ctx.status = 403;
             ctx.body = 'Forbidden';
             return;
+        }
+
+        // Hidden check: block requests that traverse a hidden directory
+        if (requestedPath !== '') {
+            const segments = normalizedPath.split(path.sep).filter(Boolean);
+            for (let i = 0; i < segments.length - 1; i++) {
+                const segName = segments[i];
+                const segRelPath = segments.slice(0, i + 1).join('/');
+                if (isHiddenEntry(segName, segRelPath, true)) {
+                    sendNotFound(ctx);
+                    return;
+                }
+            }
         }
 
         let toOpen = fullPath;
@@ -318,7 +756,6 @@ module.exports = function koaClassicServer(
                 const originalUrlObj = new URL(ctx.protocol + '://' + ctx.host + ctx.originalUrl);
                 let redirectPath = originalUrlObj.pathname;
 
-                // Remove the extension from the path
                 redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
 
                 // Special case: /index.ejs → /, /sezione/index.ejs → /sezione/
@@ -363,27 +800,39 @@ module.exports = function koaClassicServer(
             }
         }
 
-        // OPTIMIZATION: Check if file/directory exists (async, non-blocking)
+        // Check if path exists
         let stat;
         try {
             stat = await fs.promises.stat(toOpen);
-        } catch (error) {
+        } catch {
             // File/directory doesn't exist or can't be accessed
-            ctx.status = 404;
-            ctx.body = requestedUrlNotFound();
+            sendNotFound(ctx);
             return;
+        }
+
+        // Hidden check: block access to the requested file or directory itself
+        if (requestedPath !== '') {
+            const entryName = path.basename(toOpen);
+            const entryRelPath = path.relative(normalizedRootDir, toOpen).split(path.sep).join('/');
+            if (isHiddenEntry(entryName, entryRelPath, stat.isDirectory())) {
+                sendNotFound(ctx);
+                return;
+            }
         }
 
         if (stat.isDirectory()) {
             // Handle directory
             if (options.showDirContents) {
-                // NEW: Enhanced index file search with array and RegExp support
+                // Search for index file matching configured patterns
                 if (options.index && options.index.length > 0) {
                     const indexFile = await findIndexFile(toOpen, options.index);
                     if (indexFile) {
-                        const indexPath = path.join(toOpen, indexFile.name);
-                        await loadFile(indexPath, indexFile.stat);
-                        return;
+                        const indexRelPath = path.relative(normalizedRootDir, path.join(toOpen, indexFile.name)).split(path.sep).join('/');
+                        if (!isHiddenEntry(indexFile.name, indexRelPath, false)) {
+                            const indexPath = path.join(toOpen, indexFile.name);
+                            await loadFile(indexPath, indexFile.stat);
+                            return;
+                        }
                     }
                 }
 
@@ -391,12 +840,10 @@ module.exports = function koaClassicServer(
                 ctx.body = await show_dir(toOpen, ctx);
             } else {
                 // Directory listing disabled
-                ctx.status = 404;
-                ctx.body = requestedUrlNotFound();
+                sendNotFound(ctx);
             }
             return;
         } else {
-            // Handle file
             await loadFile(toOpen, stat);
             return;
         }
@@ -411,7 +858,6 @@ module.exports = function koaClassicServer(
          */
         async function findIndexFile(dirPath, indexPatterns) {
             try {
-                // Read directory contents
                 const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
 
                 // Filter files, following symlinks to determine effective type
@@ -447,19 +893,25 @@ module.exports = function koaClassicServer(
                             if (fileStat.isFile()) {
                                 return { name: matchedFile, stat: fileStat };
                             }
-                        } catch (error) {
+                        } catch {
                             // File was deleted between readdir and stat, continue to next pattern
                             continue;
                         }
                     }
                 }
 
-                // No match found
                 return null;
             } catch (error) {
                 console.error('Error finding index file:', error);
                 return null;
             }
+        }
+
+        // Sets 404 security headers and body in one call.
+        function sendNotFound(ctx) {
+            setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
+            ctx.status = 404;
+            ctx.body = requestedUrlNotFound();
         }
 
         function requestedUrlNotFound() {
@@ -480,7 +932,7 @@ module.exports = function koaClassicServer(
                 `;
         }
 
-        // OPTIMIZATION: loadFile now receives stat to avoid double stat call
+        // Accepts a pre-fetched stat to avoid a redundant stat call
         async function loadFile(toOpen, fileStat) {
             // Get file stat if not provided
             if (!fileStat) {
@@ -488,109 +940,339 @@ module.exports = function koaClassicServer(
                     fileStat = await fs.promises.stat(toOpen);
                 } catch (error) {
                     console.error('File stat error:', error);
-                    ctx.status = 404;
-                    ctx.body = requestedUrlNotFound();
+                    sendNotFound(ctx);
                     return;
                 }
             }
 
-            // Template rendering
+            // Populate rawFile cache (before template check so buffer is available as 4th param to render).
+            // Only for files within maxFileSize; large files are always streamed.
+            let rawBuffer = null;
+            if (serverCacheConfig.rawFile.enabled && fileStat.size <= serverCacheConfig.rawFile.maxFileSize) {
+                const cached = _rawFileCache.get(toOpen);
+                if (cached && cached.mtime === fileStat.mtime.getTime() && cached.size === fileStat.size) {
+                    cached.hits++;
+                    rawBuffer = cached.buffer;
+                } else {
+                    try {
+                        rawBuffer = await fs.promises.readFile(toOpen);
+                        // Evict LFU entries until the new buffer fits within maxSize
+                        const sizeRef = { value: _rawFileCacheTotalSize };
+                        const warnRef = { value: _rawFileCacheLastWarnAt };
+                        while (sizeRef.value + rawBuffer.length > serverCacheConfig.rawFile.maxSize && _rawFileCache.size > 0) {
+                            evictLFU(_rawFileCache, sizeRef, warnRef, serverCacheConfig.rawFile.warnInterval, 'rawFile');
+                        }
+                        _rawFileCacheTotalSize = sizeRef.value;
+                        _rawFileCacheLastWarnAt = warnRef.value;
+                        if (_rawFileCacheTotalSize + rawBuffer.length <= serverCacheConfig.rawFile.maxSize) {
+                            _rawFileCache.set(toOpen, {
+                                buffer: rawBuffer,
+                                mtime: fileStat.mtime.getTime(),
+                                size: fileStat.size,
+                                hits: 1,
+                            });
+                            _rawFileCacheTotalSize += rawBuffer.length;
+                        }
+                    } catch {
+                        rawBuffer = null; // Fall through to disk reads later
+                    }
+                }
+            }
+
+            // Template rendering — rawBuffer passed as optional 4th param so render functions
+            // can skip their own fs.readFile() call when the file is already in memory.
             if (options.template.ext.length > 0 && options.template.render) {
                 const fileExt = path.extname(toOpen).slice(1); // Remove leading dot
 
                 if (fileExt && options.template.ext.includes(fileExt)) {
                     try {
-                        await options.template.render(ctx, next, toOpen);
+                        await options.template.render(ctx, next, toOpen, rawBuffer);
                         return;
                     } catch (error) {
                         console.error('Template rendering error:', error);
+                        setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
                         ctx.status = 500;
-                        ctx.body = 'Internal Server Error - Template Rendering Failed';
+                        ctx.body = `
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="UTF-8">
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                <title>Internal Server Error</title>
+                            </head>
+                            <body>
+                                <h1>Internal Server Error</h1>
+                                <h3>Template rendering failed for the requested resource.</h3>
+                            </body>
+                            </html>
+                        `;
                         return;
                     }
                 }
             }
 
-            // OPTIMIZATION: HTTP Caching Headers
+            // baseEtag — encoding-independent; used only for If-Range (Range requests skip compression)
+            const baseEtag = `"${fileStat.mtime.getTime()}-${fileStat.size}"`;
+
+            // Advertise range support on all file responses (including 304)
+            ctx.set('Accept-Ranges', 'bytes');
+
+            // Cache-Control set early — applies to all responses (200, 206, 304)
             if (options.browserCacheEnabled) {
-                // Generate ETag from mtime timestamp + file size
-                // This ensures ETag changes when file is modified or resized
-                const etag = `"${fileStat.mtime.getTime()}-${fileStat.size}"`;
-
-                // Format Last-Modified header (RFC 7231)
-                const lastModified = fileStat.mtime.toUTCString();
-
-                // Set caching headers
-                ctx.set('ETag', etag);
-                ctx.set('Last-Modified', lastModified);
                 ctx.set('Cache-Control', `public, max-age=${options.browserCacheMaxAge}, must-revalidate`);
+            } else {
+                // Explicitly disable caching: without these headers browsers may use heuristic caching
+                ctx.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+                ctx.set('Pragma', 'no-cache'); // HTTP 1.0 compatibility
+                ctx.set('Expires', '0');       // Proxies
+            }
 
-                // OPTIMIZATION: Handle conditional requests (304 Not Modified)
+            // Verify file is still readable (race condition protection).
+            // Skip if rawBuffer already loaded — the successful readFile() is equivalent proof.
+            if (!rawBuffer) {
+                try {
+                    await fs.promises.access(toOpen, fs.constants.R_OK);
+                } catch (error) {
+                    console.error('File access error:', error);
+                    sendNotFound(ctx);
+                    return;
+                }
+            }
 
-                // Check If-None-Match header (ETag validation)
+            // Range request handling (HTTP 206 Partial Content — compression skipped for ranges)
+            const rangeHeader = ctx.get('Range');
+            if (rangeHeader) {
+                const fileSize = fileStat.size;
+                const parsed = parseRangeHeader(rangeHeader, fileSize);
+
+                if (parsed === 'unsatisfiable') {
+                    ctx.status = 416;
+                    ctx.set('Content-Range', `bytes */${fileSize}`);
+                    ctx.body = '';
+                    return;
+                }
+
+                if (parsed !== 'invalid') {
+                    // Honor If-Range: serve range only when baseEtag matches (or If-Range absent)
+                    const ifRange = ctx.get('If-Range');
+                    if (!ifRange || ifRange === baseEtag) {
+                        const { start, end } = parsed;
+                        const rangeLength = end - start + 1;
+                        const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
+                        const filename = path.basename(toOpen);
+
+                        ctx.status = 206;
+                        ctx.set('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+                        ctx.set('Content-Type', mimeType);
+                        ctx.set('Content-Length', String(rangeLength));
+                        ctx.set('Content-Disposition', buildContentDisposition(filename));
+
+                        if (ctx.method !== 'HEAD') {
+                            if (rawBuffer) {
+                                // Serve range slice from in-memory buffer — zero disk I/O
+                                ctx.body = rawBuffer.slice(start, end + 1);
+                            } else {
+                                const src = fs.createReadStream(toOpen, { start, end });
+                                src.on('error', (err) => {
+                                    console.error('Stream error:', err);
+                                    if (!ctx.headerSent) {
+                                        ctx.status = 500;
+                                        ctx.body = 'Error reading file';
+                                    }
+                                });
+                                ctx.body = src;
+                            }
+                        } else {
+                            // HEAD: send 206 headers only — body assignment resets Content-Length,
+                            // so we restore it afterwards.
+                            ctx.body = Buffer.alloc(0);
+                            ctx.set('Content-Length', String(rangeLength));
+                        }
+                        return;
+                    }
+                    // If-Range mismatch → fall through to full 200 response
+                }
+                // Invalid Range → fall through to full 200 response
+            }
+
+            // Determine MIME type and compression encoding for the full-file response
+            const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
+            const filename = path.basename(toOpen);
+
+            // Resolve compression: enabled + compressible MIME + meets minSize + client supports it
+            let encoding = null; // 'br' | 'gzip' | null
+            if (compressionConfig.enabled && compressionConfig.encodings.length > 0) {
+                const isCompressibleMime = compressionConfig.mimeTypes.includes(mimeType);
+                const meetsMinSize = compressionConfig.minSize === false
+                    || fileStat.size >= compressionConfig.minSize;
+                if (isCompressibleMime && meetsMinSize) {
+                    encoding = getClientEncoding(ctx.get('Accept-Encoding'));
+                }
+            }
+
+            // fullEtag is encoding-specific to avoid false 304 hits across representations.
+            // Proxies use Vary: Accept-Encoding to cache separate versions per encoding.
+            const etagSuffix = encoding === 'br' ? '-br' : encoding === 'gzip' ? '-gz' : '';
+            const fullEtag = `"${fileStat.mtime.getTime()}-${fileStat.size}${etagSuffix}"`;
+
+            // ETag, Last-Modified, and 304 check — deferred until encoding is known
+            if (options.browserCacheEnabled) {
+                ctx.set('ETag', fullEtag);
+                ctx.set('Last-Modified', fileStat.mtime.toUTCString());
+
+                // Check If-None-Match (ETag validation)
                 const clientEtag = ctx.get('If-None-Match');
-                if (clientEtag && clientEtag === etag) {
-                    // File hasn't changed - return 304 Not Modified
+                if (clientEtag && clientEtag === fullEtag) {
                     ctx.status = 304;
                     return;
                 }
 
-                // Check If-Modified-Since header (date validation)
+                // Check If-Modified-Since (date validation)
                 const clientModifiedSince = ctx.get('If-Modified-Since');
                 if (clientModifiedSince) {
                     const clientDate = new Date(clientModifiedSince);
-                    const fileDate = new Date(fileStat.mtime);
-
-                    // Compare timestamps (ignore milliseconds for better compatibility)
-                    if (fileDate.getTime() <= clientDate.getTime()) {
-                        // File hasn't been modified - return 304 Not Modified
+                    if (fileStat.mtime.getTime() <= clientDate.getTime()) {
                         ctx.status = 304;
                         return;
                     }
                 }
-            } else {
-                // BUGFIX: When caching is disabled, explicitly prevent browser caching
-                // Without these headers, browsers may use heuristic caching and serve stale content
-                ctx.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-                ctx.set('Pragma', 'no-cache'); // HTTP 1.0 compatibility
-                ctx.set('Expires', '0'); // Proxies
             }
 
-            // Verify file is still readable (race condition protection)
-            try {
-                await fs.promises.access(toOpen, fs.constants.R_OK);
-            } catch (error) {
-                console.error('File access error:', error);
-                ctx.status = 404;
-                ctx.body = requestedUrlNotFound();
-                return;
-            }
+            // Common response headers
+            ctx.set('Content-Type', mimeType);
+            ctx.set('Content-Disposition', buildContentDisposition(filename));
 
-            // Serve static file
-            let mimeType = mime.lookup(toOpen);
-            const src = fs.createReadStream(toOpen);
+            if (encoding) {
+                // ── Compressed response ───────────────────────────────────────────────
+                ctx.set('Content-Encoding', encoding);
+                ctx.set('Vary', 'Accept-Encoding'); // Required so proxies cache per-encoding
 
-            // Handle stream errors
-            src.on('error', (err) => {
-                console.error('Stream error:', err);
-                if (!ctx.headerSent) {
-                    ctx.status = 500;
-                    ctx.body = 'Error reading file';
+                if (serverCacheConfig.compressedFile.enabled) {
+                    // compressedFile cache mode: compress once → buffer in RAM → Content-Length known
+                    const cacheKey = `${toOpen}:${encoding}`;
+                    const cached = _compressedFileCache.get(cacheKey);
+                    const stale = !cached
+                        || cached.mtime !== fileStat.mtime.getTime()
+                        || cached.size !== fileStat.size;
+
+                    let buf;
+                    if (!stale) {
+                        cached.hits++;
+                        buf = cached.buffer; // Serve from cache
+                    } else {
+                        try {
+                            // Use rawFile buffer if available — avoids redundant disk read
+                            const rawData = rawBuffer || await fs.promises.readFile(toOpen);
+                            buf = await compressBuffer(rawData, encoding);
+
+                            // Evict LFU entries until the compressed buffer fits within maxSize
+                            const displaced = cached ? cached.buffer.length : 0;
+                            const sizeRef = { value: _compressedFileCacheTotalSize - displaced };
+                            const warnRef = { value: _compressedFileCacheLastWarnAt };
+                            while (sizeRef.value + buf.length > serverCacheConfig.compressedFile.maxSize && _compressedFileCache.size > (cached ? 1 : 0)) {
+                                evictLFU(_compressedFileCache, sizeRef, warnRef, serverCacheConfig.compressedFile.warnInterval, 'compressedFile');
+                            }
+                            _compressedFileCacheTotalSize = sizeRef.value;
+                            _compressedFileCacheLastWarnAt = warnRef.value;
+                            if (_compressedFileCacheTotalSize + buf.length <= serverCacheConfig.compressedFile.maxSize) {
+                                _compressedFileCache.set(cacheKey, {
+                                    buffer: buf,
+                                    mtime: fileStat.mtime.getTime(),
+                                    size: fileStat.size,
+                                    hits: 1,
+                                });
+                                _compressedFileCacheTotalSize += buf.length;
+                            }
+                        } catch (err) {
+                            console.error('Compression error:', err);
+                            // Fall back to uncompressed on any compression failure
+                            ctx.remove('Content-Encoding');
+                            ctx.remove('Vary');
+                            if (rawBuffer) {
+                                ctx.set('Content-Length', String(rawBuffer.length));
+                                if (ctx.method !== 'HEAD') {
+                                    ctx.body = rawBuffer;
+                                } else {
+                                    ctx.body = Buffer.alloc(0);
+                                    ctx.set('Content-Length', String(rawBuffer.length));
+                                }
+                            } else {
+                                ctx.set('Content-Length', String(fileStat.size));
+                                if (ctx.method !== 'HEAD') {
+                                    const src = fs.createReadStream(toOpen);
+                                    src.on('error', (streamErr) => {
+                                        console.error('Stream error:', streamErr);
+                                        if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                                    });
+                                    ctx.body = src;
+                                } else {
+                                    ctx.body = Buffer.alloc(0);
+                                    ctx.set('Content-Length', String(fileStat.size));
+                                }
+                            }
+                            return;
+                        }
+                    }
+
+                    ctx.set('Content-Length', String(buf.length));
+                    if (ctx.method !== 'HEAD') {
+                        ctx.body = buf;
+                    } else {
+                        // HEAD: set correct Content-Length; body assignment would reset it, restore after
+                        ctx.body = Buffer.alloc(0);
+                        ctx.set('Content-Length', String(buf.length));
+                    }
+
+                } else {
+                    // Streaming mode: pipe through zlib transform — Content-Length not known in advance
+                    if (ctx.method !== 'HEAD') {
+                        const compress = encoding === 'br'
+                            ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
+                            : zlib.createGzip({ level: 6 });
+                        if (rawBuffer) {
+                            // Compress from in-memory buffer — no disk I/O
+                            const { Readable } = require('stream');
+                            const src = Readable.from(rawBuffer);
+                            ctx.body = src.pipe(compress);
+                        } else {
+                            const src = fs.createReadStream(toOpen);
+                            src.on('error', (err) => {
+                                console.error('Stream error:', err);
+                                if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                            });
+                            ctx.body = src.pipe(compress);
+                        }
+                    }
+                    // HEAD + streaming: no Content-Length available; Koa sends headers only via res.end()
                 }
-            });
 
-            ctx.response.set("content-type", mimeType);
-            ctx.response.set("content-length", fileStat.size);
-
-            // Content-Disposition properly quoted with only basename
-            const filename = path.basename(toOpen);
-            const safeFilename = filename.replace(/"/g, '\\"'); // Escape quotes
-            ctx.response.set(
-                "content-disposition",
-                `inline; filename="${safeFilename}"`
-            );
-
-            ctx.body = src;
+            } else {
+                // ── Uncompressed response ─────────────────────────────────────────────
+                if (rawBuffer) {
+                    // Serve directly from in-memory buffer — zero disk I/O
+                    ctx.set('Content-Length', String(rawBuffer.length));
+                    if (ctx.method !== 'HEAD') {
+                        ctx.body = rawBuffer;
+                    } else {
+                        ctx.body = Buffer.alloc(0);
+                        ctx.set('Content-Length', String(rawBuffer.length));
+                    }
+                } else {
+                    ctx.set('Content-Length', String(fileStat.size));
+                    if (ctx.method !== 'HEAD') {
+                        const src = fs.createReadStream(toOpen);
+                        src.on('error', (err) => {
+                            console.error('Stream error:', err);
+                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                        });
+                        ctx.body = src;
+                    } else {
+                        // HEAD: body assignment resets Content-Length — restore after
+                        ctx.body = Buffer.alloc(0);
+                        ctx.set('Content-Length', String(fileStat.size));
+                    }
+                }
+            }
         }
 
         // Helper function to format file size in human-readable format
@@ -605,14 +1287,14 @@ module.exports = function koaClassicServer(
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
 
-        // OPTIMIZATION: show_dir is now async and uses array join instead of string concatenation
         async function show_dir(toOpen, ctx) {
             let dir;
             try {
-                // OPTIMIZATION: Use async readdir (non-blocking)
                 dir = await fs.promises.readdir(toOpen, { withFileTypes: true });
             } catch (error) {
                 console.error('Directory read error:', error);
+                ctx.status = 500;
+                setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
                 return `
                     <!DOCTYPE html>
                     <html>
@@ -627,6 +1309,10 @@ module.exports = function koaClassicServer(
                     </html>
                 `;
             }
+
+            // Relative path of this directory from rootDir (used for alwaysHide path matching)
+            const rawDirRel = path.relative(normalizedRootDir, toOpen);
+            const dirRelPath = (rawDirRel === '' || rawDirRel === '.') ? '' : rawDirRel.split(path.sep).join('/');
 
             // Get sorting parameters from query string
             const sortBy = ctx.query.sort || 'name';
@@ -652,8 +1338,6 @@ module.exports = function koaClassicServer(
                 return '';
             }
 
-            // OPTIMIZATION: Use array + join instead of string concatenation
-            // This reduces memory allocation from O(n²) to O(n)
             const parts = [];
             parts.push("<table>");
             parts.push("<thead>");
@@ -721,6 +1405,13 @@ module.exports = function koaClassicServer(
                         }
                     }
 
+                    // Hidden check: skip entries that should not appear in directory listing
+                    {
+                        const itemIsDir = effectiveType === 2;
+                        const itemRelPath = dirRelPath ? dirRelPath + '/' + s_name : s_name;
+                        if (isHiddenEntry(s_name, itemRelPath, itemIsDir)) continue;
+                    }
+
                     // Get file size
                     let sizeStr = '-';
                     let sizeBytes = 0;
@@ -733,7 +1424,7 @@ module.exports = function koaClassicServer(
                             } else {
                                 sizeStr = '-';
                             }
-                        } catch (error) {
+                        } catch {
                             sizeStr = '-';
                         }
                     }
@@ -781,7 +1472,6 @@ module.exports = function koaClassicServer(
                         }
                     }
 
-                    // Apply sort order (asc/desc)
                     return sortOrder === 'desc' ? -comparison : comparison;
                 });
 
@@ -815,7 +1505,6 @@ module.exports = function koaClassicServer(
             parts.push("</tbody>");
             parts.push("</table>");
 
-            // OPTIMIZATION: Single join operation instead of multiple concatenations
             const tableHtml = parts.join('');
 
             const html = `
@@ -826,48 +1515,7 @@ module.exports = function koaClassicServer(
                         <meta http-equiv="X-UA-Compatible" content="IE=edge">
                         <meta name="viewport" content="width=device-width, initial-scale=1.0">
                         <title>Index of ${escapeHtml(pageHrefOutPrefix.pathname)}</title>
-                        <style>
-                            body {
-                                font-family: Arial, sans-serif;
-                                margin: 20px;
-                            }
-                            h1 {
-                                border-bottom: 1px solid #ddd;
-                                padding-bottom: 10px;
-                            }
-                            table {
-                                border-collapse: collapse;
-                                width: 100%;
-                                max-width: 800px;
-                            }
-                            thead {
-                                background-color: #f5f5f5;
-                                border-bottom: 2px solid #ddd;
-                            }
-                            th {
-                                text-align: left;
-                                padding: 10px;
-                                font-weight: bold;
-                                border-bottom: 2px solid #ddd;
-                            }
-                            td {
-                                padding: 8px 10px;
-                                border-bottom: 1px solid #eee;
-                            }
-                            tr:hover {
-                                background-color: #f9f9f9;
-                            }
-                            a {
-                                color: #0066cc;
-                                text-decoration: none;
-                            }
-                            a:hover {
-                                text-decoration: underline;
-                            }
-                            th:nth-child(1), td:nth-child(1) { width: 50%; }
-                            th:nth-child(2), td:nth-child(2) { width: 30%; }
-                            th:nth-child(3), td:nth-child(3) { width: 20%; text-align: right; }
-                        </style>
+                        <style>${LISTING_CSS}</style>
                     </head>
                     <body>
                     <h1>Index of ${escapeHtml(pageHrefOutPrefix.pathname)}</h1>
@@ -876,6 +1524,7 @@ module.exports = function koaClassicServer(
                     </html>
                 `;
 
+            setGeneratedPageHeaders(ctx, LISTING_CSP);
             return html;
         }
 

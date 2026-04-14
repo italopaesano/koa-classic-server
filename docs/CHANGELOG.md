@@ -5,6 +5,90 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - Unreleased
+
+### 🆕 New Features
+
+#### `hidden` option — protect dot-files, dot-dirs and custom patterns (Fase 1 + Fase 2)
+
+A new `hidden` option controls which files and directories are blocked from both directory listing and direct HTTP access (returning **404**). Applies recursively to the entire directory tree.
+
+**Default behavior (secure out of the box):**
+- Dot-files (names starting with `.`) → **hidden by default** (`dotFiles.default: 'hidden'`)
+- Dot-directories → **visible by default** (`dotDirs.default: 'visible'`)
+
+```js
+app.use(koaClassicServer('/public', {
+  hidden: {
+    dotFiles: {
+      default: 'hidden',          // 'hidden' | 'visible'
+      whitelist: ['.well-known'], // Always visible (string exact/glob or RegExp)
+      blacklist: [],              // Always hidden — overrides whitelist
+    },
+    dotDirs: {
+      default: 'visible',
+      whitelist: [],
+      blacklist: ['.git', /^\.svn/],
+    },
+    alwaysHide: ['*.secret', 'config/secrets/**', /\.key$/], // Path-aware patterns
+  }
+}));
+```
+
+**Priority (highest to lowest):**
+1. `blacklist` — always hidden, beats everything
+2. `whitelist` — always visible, overrides `alwaysHide` and `default`
+3. `alwaysHide` — path-aware patterns, beats `default`
+4. `default` — fallback behavior for unmatched dot-entries
+
+**`alwaysHide` pattern rules:**
+- String without `/`: matches basename at any depth (e.g. `*.secret` hides `a/b/file.secret`)
+- String with `/`: path-anchored from root (e.g. `config/secrets/**`)
+- RegExp: tested against the full relative path
+
+**Blocked dot-dirs block sub-paths too:**
+`GET /.git/config` returns 404 if `.git` is in `dotDirs.blacklist`.
+
+### ⚠️ Breaking Changes
+
+#### Dot-files hidden by default
+`hidden.dotFiles.default` is `'hidden'` by default. In v2.x, dot-files (`.env`, `.gitignore`, etc.) were served normally. In v3.x they return 404 unless explicitly allowed.
+
+To restore v2.x behavior: `hidden: { dotFiles: { default: 'visible' } }`
+
+#### Removed string format for `index` option
+- **Removed**: `index: 'index.html'` — passing a non-empty string now throws an `Error` at startup
+- **Empty string** `index: ''` is still silently treated as `[]` (no index file, show directory listing)
+- **Migration**:
+  ```js
+  // Before (v2.x — now throws)
+  app.use(koaClassicServer('/public', { index: 'index.html' }));
+
+  // After (v3.0.0)
+  app.use(koaClassicServer('/public', { index: ['index.html'] }));
+  ```
+
+#### Removed deprecated option names `cacheMaxAge` and `enableCaching`
+- **Removed**: `cacheMaxAge` — use `browserCacheMaxAge` instead
+- **Removed**: `enableCaching` — use `browserCacheEnabled` instead
+- **Behaviour**: Passing either removed option now throws an `Error` at startup with a clear migration message pointing to the new name and the current value.
+- **Migration**:
+  ```js
+  // Before (v2.x — now throws)
+  app.use(koaClassicServer('/public', {
+    enableCaching: true,
+    cacheMaxAge: 3600
+  }));
+
+  // After (v3.0.0)
+  app.use(koaClassicServer('/public', {
+    browserCacheEnabled: true,
+    browserCacheMaxAge: 3600
+  }));
+  ```
+
+---
+
 ## [2.6.1] - 2026-03-04
 
 ### 🐛 Bug Fix

@@ -662,7 +662,8 @@ module.exports = function koaClassicServer(
 
         // Construct full URL based on useOriginalUrl option
         const urlToUse = options.useOriginalUrl ? ctx.originalUrl : ctx.url;
-        const fullUrl = ctx.protocol + '://' + ctx.host + urlToUse;
+        const _origin  = ctx.protocol + '://' + ctx.host;
+        const fullUrl  = _origin + urlToUse;
         let pageHref = '';
         if (fullUrl.charAt(fullUrl.length - 1) === '/') {
             pageHref = new URL(fullUrl.slice(0, -1));
@@ -744,20 +745,20 @@ module.exports = function koaClassicServer(
         let toOpen = fullPath;
 
         // hideExtension logic: redirect URLs with extension and resolve clean URLs
-        // Track if original URL had trailing slash (stripped by pageHref construction above)
-        const originalUrlPath = new URL(ctx.protocol + '://' + ctx.host + urlToUse).pathname;
-        const hadTrailingSlash = originalUrlPath.length > 1 && originalUrlPath.endsWith('/');
-
         if (options.hideExtension) {
             const hideExt = options.hideExtension.ext;
             const hideRedirect = options.hideExtension.redirect;
 
+            // Trailing slash check via string — avoids a full new URL() construction
+            const rawPath = urlToUse.split('?')[0];
+            const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
+
             // Check if URL ends with the configured extension → redirect to clean URL
             // Use the original path (before trailing slash stripping) for accurate matching
-            const pathForExtCheck = hadTrailingSlash ? originalUrlPath.slice(0, -1) : requestedPath;
+            const pathForExtCheck = hadTrailingSlash ? rawPath.slice(0, -1) : requestedPath;
             if (pathForExtCheck.endsWith(hideExt)) {
                 // Build redirect target using ctx.originalUrl (always, regardless of useOriginalUrl)
-                const originalUrlObj = new URL(ctx.protocol + '://' + ctx.host + ctx.originalUrl);
+                const originalUrlObj = new URL(_origin + ctx.originalUrl);
                 let redirectPath = originalUrlObj.pathname;
 
                 redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);

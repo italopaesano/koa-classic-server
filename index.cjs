@@ -94,6 +94,57 @@ function setGeneratedPageHeaders(ctx, csp) {
     ctx.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
 }
 
+// Pre-computed 404 HTML body — identical on every call, no need to regenerate.
+const _NOT_FOUND_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>URL not found</title>
+</head>
+<body>
+  <h1>Not Found</h1>
+  <h3>The requested URL was not found on this server.</h3>
+</body>
+</html>`;
+
+function sendNotFound(ctx) {
+    setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
+    ctx.status = 404;
+    ctx.body = _NOT_FOUND_HTML;
+}
+
+// Single-pass HTML escaping — one regex scan, one allocation, lookup table compiled once.
+const _HTML_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+const _HTML_ESCAPE_RE  = /[&<>"']/g;
+
+function escapeHtml(unsafe) {
+    if (typeof unsafe !== 'string') return unsafe;
+    return unsafe.replace(_HTML_ESCAPE_RE, c => _HTML_ESCAPE_MAP[c]);
+}
+
+// Pure helper — depends only on _LOG_1024 (module scope), safe to hoist.
+function formatSize(bytes) {
+    if (bytes === 0) return '0 B';
+    if (bytes === undefined || bytes === null) return '-';
+
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / _LOG_1024);
+
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Returns the dirent numeric type using the official Node.js API instead of
+// the internal Symbol hack: 1=file, 2=dir, 3=symlink, 0=DT_UNKNOWN.
+function getDirentType(dirent) {
+    if (dirent.isFile())        return 1;
+    if (dirent.isDirectory())   return 2;
+    if (dirent.isSymbolicLink()) return 3;
+    return 0;
+}
+
 /**
  * Parse a "Range: bytes=..." header against a known file size.
  * Only single ranges are supported; multi-range requests are treated as invalid.
@@ -912,31 +963,6 @@ module.exports = function koaClassicServer(
             }
         }
 
-        // Sets 404 security headers and body in one call.
-        function sendNotFound(ctx) {
-            setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
-            ctx.status = 404;
-            ctx.body = requestedUrlNotFound();
-        }
-
-        function requestedUrlNotFound() {
-            return `
-                <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="UTF-8">
-                        <meta http-equiv="X-UA-Compatible" content="IE=edge">
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <title>URL not found</title>
-                    </head>
-                    <body>
-                    <h1>Not Found</h1>
-                    <h3>The requested URL was not found on this server.</h3>
-                    </body>
-                    </html>
-                `;
-        }
-
         // Accepts a pre-fetched stat to avoid a redundant stat call
         async function loadFile(toOpen, fileStat) {
             // Get file stat if not provided
@@ -1279,17 +1305,6 @@ module.exports = function koaClassicServer(
             }
         }
 
-        // Helper function to format file size in human-readable format
-        function formatSize(bytes) {
-            if (bytes === 0) return '0 B';
-            if (bytes === undefined || bytes === null) return '-';
-
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(bytes) / _LOG_1024);
-
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-        }
 
         async function show_dir(toOpen, ctx) {
             let dir;
@@ -1367,21 +1382,13 @@ module.exports = function koaClassicServer(
             if (dir.length === 0) {
                 parts.push(`<tr><td>empty folder</td><td></td><td></td></tr>`);
             } else {
-                let a_sy = Object.getOwnPropertySymbols(dir[0]);
-                const sy_type = a_sy[0];
-
                 // Collect all items data first (for sorting)
                 const items = [];
                 const _listingBaseUrl = pageHref.origin + pageHref.pathname;
                 const _listingOriginPrefix = pageHref.origin + options.urlPrefix;
                 for (const item of dir) {
                     const s_name = item.name.toString();
-                    const type = item[sy_type];
-
-                    if (type !== 0 && type !== 1 && type !== 2 && type !== 3) {
-                        console.error("Unknown file type:", type);
-                        continue;
-                    }
+                    const type = getDirentType(item);
 
                     const itemPath = path.join(toOpen, s_name);
                     let itemUri = "";
@@ -1533,17 +1540,5 @@ module.exports = function koaClassicServer(
             return html;
         }
 
-        // Helper function to escape HTML and prevent XSS
-        function escapeHtml(unsafe) {
-            if (typeof unsafe !== 'string') {
-                return unsafe;
-            }
-            return unsafe
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        }
     };
 };

@@ -5,6 +5,10 @@ const path = require("path");
 const crypto = require("crypto");
 const zlib = require("zlib");
 const mime = require("mime-types");
+const { Readable } = require('stream');
+
+// Pre-computed module-level constants
+const _LOG_1024 = Math.log(1024);
 
 // Emitted at most once per process lifetime when hidden.dotFiles.default or
 // hidden.dotDirs.default are not explicitly set by the caller.
@@ -249,6 +253,7 @@ module.exports = function koaClassicServer(
     }
 
     options.urlPrefix = typeof options.urlPrefix === 'string' ? options.urlPrefix : "";
+    const _urlPrefixParts = options.urlPrefix.split("/");
     options.urlsReserved = Array.isArray(options.urlsReserved) ? options.urlsReserved : [];
     options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
@@ -667,10 +672,9 @@ module.exports = function koaClassicServer(
 
         // Check URL prefix
         const a_pathname = pageHref.pathname.split("/");
-        const a_urlPrefix = options.urlPrefix.split("/");
 
-        for (const key in a_urlPrefix) {
-            if (a_urlPrefix[key] !== a_pathname[key]) {
+        for (let i = 0; i < _urlPrefixParts.length; i++) {
+            if (_urlPrefixParts[i] !== a_pathname[i]) {
                 await next();
                 return;
             }
@@ -679,7 +683,7 @@ module.exports = function koaClassicServer(
         // Create pageHrefOutPrefix without URL prefix
         let pageHrefOutPrefix = pageHref;
         if (options.urlPrefix !== "") {
-            let a_pathnameOutPrefix = a_pathname.slice(a_urlPrefix.length);
+            let a_pathnameOutPrefix = a_pathname.slice(_urlPrefixParts.length);
             let s_pathnameOutPrefix = a_pathnameOutPrefix.join("/");
             let hrefOutPrefix = pageHref.origin + '/' + s_pathnameOutPrefix;
             pageHrefOutPrefix = new URL(hrefOutPrefix);
@@ -1231,7 +1235,6 @@ module.exports = function koaClassicServer(
                             : zlib.createGzip({ level: 6 });
                         if (rawBuffer) {
                             // Compress from in-memory buffer — no disk I/O
-                            const { Readable } = require('stream');
                             const src = Readable.from(rawBuffer);
                             ctx.body = src.pipe(compress);
                         } else {
@@ -1282,7 +1285,7 @@ module.exports = function koaClassicServer(
 
             const k = 1024;
             const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            const i = Math.floor(Math.log(bytes) / _LOG_1024);
 
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
@@ -1368,6 +1371,8 @@ module.exports = function koaClassicServer(
 
                 // Collect all items data first (for sorting)
                 const items = [];
+                const _listingBaseUrl = pageHref.origin + pageHref.pathname;
+                const _listingOriginPrefix = pageHref.origin + options.urlPrefix;
                 for (const item of dir) {
                     const s_name = item.name.toString();
                     const type = item[sy_type];
@@ -1380,11 +1385,10 @@ module.exports = function koaClassicServer(
                     const itemPath = path.join(toOpen, s_name);
                     let itemUri = "";
                     // Build item URI without query parameters
-                    const baseUrl = pageHref.origin + pageHref.pathname;
-                    if (baseUrl === pageHref.origin + options.urlPrefix + "/" || baseUrl === pageHref.origin + options.urlPrefix) {
-                        itemUri = `${pageHref.origin + options.urlPrefix}/${encodeURIComponent(s_name)}`;
+                    if (_listingBaseUrl === _listingOriginPrefix + "/" || _listingBaseUrl === _listingOriginPrefix) {
+                        itemUri = `${_listingOriginPrefix}/${encodeURIComponent(s_name)}`;
                     } else {
-                        itemUri = `${baseUrl}/${encodeURIComponent(s_name)}`;
+                        itemUri = `${_listingBaseUrl}/${encodeURIComponent(s_name)}`;
                     }
 
                     // Resolve symlinks and DT_UNKNOWN entries to their effective type

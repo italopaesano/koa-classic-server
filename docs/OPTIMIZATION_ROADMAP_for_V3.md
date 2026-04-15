@@ -17,28 +17,28 @@
    - 2.1 Tabella dei 15 punti
    - 2.2 Mappa visiva fase → punti → impatto
 3. [FASE 1 — Precomputation al factory time](#3-fase-1--precomputation-al-factory-time)
-   - [ ] 3.1 #2 — `urlPrefix.split()` precompilato
-   - [ ] 3.2 #11 — `require('stream')` → top-level
-   - [ ] 3.3 #12 — `Math.log(1024)` → costante di modulo
-   - [ ] 3.4 #14 — `for...in` su array → loop indicizzato
-   - [ ] 3.5 #15 — `pageHref.origin+pathname` estratto prima del loop
+   - [x] 3.1 #2 — `urlPrefix.split()` precompilato
+   - [x] 3.2 #11 — `require('stream')` → top-level
+   - [x] 3.3 #12 — `Math.log(1024)` → costante di modulo
+   - [x] 3.4 #14 — `for...in` su array → loop indicizzato
+   - [x] 3.5 #15 — `pageHref.origin+pathname` estratto prima del loop
 4. [FASE 2 — Riduzione costruzioni new URL()](#4-fase-2--riduzione-costruzioni-new-url)
-   - [ ] 4.1 #1a — `new URL()` a riga 744 incondizionata
-   - [ ] 4.2 #1b — Estrazione `_origin` per evitare concatenazioni ripetute
+   - [x] 4.1 #1a — `new URL()` a riga 744 incondizionata
+   - [x] 4.2 #1b — Estrazione `_origin` per evitare concatenazioni ripetute
 5. [FASE 3 — Helper puri → scope modulo + string single-pass](#5-fase-3--helper-puri--scope-modulo--string-single-pass)
-   - [ ] 5.1 #8 — `escapeHtml` e `formatSize` → scope modulo
-   - [ ] 5.2 #9 — `escapeHtml`: 5 `replace()` → regex single-pass + lookup table
-   - [ ] 5.3 #10 — HTML 404 → costante pre-calcolata
-   - [ ] 5.4 #13 — `item[sy_type]` Symbol hack → API dirent ufficiale
+   - [x] 5.1 #8 — `escapeHtml` e `formatSize` → scope modulo
+   - [x] 5.2 #9 — `escapeHtml`: 5 `replace()` → regex single-pass + lookup table
+   - [x] 5.3 #10 — HTML 404 → costante pre-calcolata
+   - [x] 5.4 #13 — `item[sy_type]` Symbol hack → API dirent ufficiale
 6. [FASE 4 — Strutture dati: Array → Set](#6-fase-4--strutture-dati-array--set)
-   - [ ] 6.1 #7 — `mimeTypes` `Array.includes()` O(n) → `Set.has()` O(1)
+   - [x] 6.1 #7 — `mimeTypes` `Array.includes()` O(n) → `Set.has()` O(1)
 7. [FASE 5 — Directory listing: I/O parallelo](#7-fase-5--directory-listing-io-parallelo)
-   - [ ] 7.1 #4 — Eliminare doppia `stat()` per symlink
-   - [ ] 7.2 #3 — Loop `for...of` `await` → `Promise.all` per stat parallele
+   - [x] 7.1 #4 — Eliminare doppia `stat()` per symlink
+   - [x] 7.2 #3 — Loop `for...of` `await` → `Promise.all` per stat parallele
 8. [FASE 6 — findIndexFile fast-path](#8-fase-6--findindexfile-fast-path)
-   - [ ] 8.1 #5 — `stat()` diretto per pattern stringa, `readdir` solo per RegExp
+   - [x] 8.1 #5 — `stat()` diretto per pattern stringa, `readdir` solo per RegExp
 9. [FASE 7 — LFU cache: eviction O(1)](#9-fase-7--lfu-cache-eviction-o1)
-   - [ ] 9.1 #6 — Struttura LFU classica con bucket di frequenza
+   - [x] 9.1 #6 — Struttura LFU classica con bucket di frequenza
 10. [Stima impatto complessivo atteso](#10-stima-impatto-complessivo-atteso)
     - 10.1 File serving (rawFile cache warm)
     - 10.2 Directory listing su disco locale
@@ -125,7 +125,7 @@ verificabili con i test esistenti senza aggiungerne di nuovi.
 
 ---
 
-### [ ] 3.1 — #2: `urlPrefix.split("/")` precompilato
+### [x] 3.1 — #2: `urlPrefix.split("/")` precompilato
 
 **Riga:** `670`  
 **Problema:**
@@ -147,7 +147,7 @@ const _urlPrefixParts = options.urlPrefix.split("/");
 
 ---
 
-### [ ] 3.2 — #11: `require('stream')` → top-level
+### [x] 3.2 — #11: `require('stream')` → top-level
 
 **Riga:** `1234`  
 **Problema:**
@@ -167,7 +167,7 @@ const { Readable } = require('stream');
 
 ---
 
-### [ ] 3.3 — #12: `Math.log(1024)` → costante di modulo
+### [x] 3.3 — #12: `Math.log(1024)` → costante di modulo
 
 **Riga:** `1285`  
 **Problema:**
@@ -191,7 +191,7 @@ const i = Math.floor(Math.log(bytes) / _LOG_1024);
 
 ---
 
-### [ ] 3.4 — #14: `for...in` su array → loop indicizzato
+### [x] 3.4 — #14: `for...in` su array → loop indicizzato
 
 **Riga:** `672`  
 **Problema:**
@@ -219,7 +219,7 @@ for (let i = 0; i < _urlPrefixParts.length; i++) {
 
 ---
 
-### [ ] 3.5 — #15: `pageHref.origin + pageHref.pathname` estratto prima del loop
+### [x] 3.5 — #15: `pageHref.origin + pageHref.pathname` estratto prima del loop
 
 **Righe:** `1383–1387`  
 **Problema:**
@@ -258,7 +258,7 @@ una costruzione; in certi path ne subisce 3–4.
 
 ---
 
-### [ ] 4.1 — #1a: `new URL()` a riga 744 — incondizionata anche senza `hideExtension`
+### [x] 4.1 — #1a: `new URL()` a riga 744 — incondizionata anche senza `hideExtension`
 
 **Riga:** `744`  
 **Problema:**
@@ -292,7 +292,7 @@ const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
 
 ---
 
-### [ ] 4.2 — #1b: `ctx.protocol + '://' + ctx.host` ripetuto 3+ volte
+### [x] 4.2 — #1b: `ctx.protocol + '://' + ctx.host` ripetuto 3+ volte
 
 **Righe:** `660, 744, 756`  
 **Problema:**
@@ -327,7 +327,7 @@ funzioni pure a scope di modulo elimina questa allocazione sistematica.
 
 ---
 
-### [ ] 5.1 — #8: `escapeHtml` e `formatSize` → scope di modulo
+### [x] 5.1 — #8: `escapeHtml` e `formatSize` → scope di modulo
 
 **Righe:** `1280` (formatSize), `1532` (escapeHtml)  
 **Problema:** entrambe le funzioni sono dichiarate dentro la closure dell'handler.
@@ -343,7 +343,7 @@ volte con un oggetto-funzione nato e morto insieme alla richiesta.
 
 ---
 
-### [ ] 5.2 — #9: `escapeHtml` single-pass con lookup table
+### [x] 5.2 — #9: `escapeHtml` single-pass con lookup table
 
 **Righe:** `1536–1541`  
 **Problema:**
@@ -376,7 +376,7 @@ Un solo passaggio, una sola stringa allocata, regex compilata una volta.
 
 ---
 
-### [ ] 5.3 — #10: HTML 404 → costante pre-calcolata
+### [x] 5.3 — #10: HTML 404 → costante pre-calcolata
 
 **Righe:** `917–933`  
 **Problema:**
@@ -418,7 +418,7 @@ function sendNotFound(ctx) {
 
 ---
 
-### [ ] 5.4 — #13: `item[sy_type]` Symbol interno → API dirent ufficiale
+### [x] 5.4 — #13: `item[sy_type]` Symbol interno → API dirent ufficiale
 
 **Righe:** `1366–1373`  
 **Problema:**
@@ -462,7 +462,7 @@ di valori è fisso e costruito una volta sola all'inizializzazione.
 
 ---
 
-### [ ] 6.1 — #7: `mimeTypes` Array → Set
+### [x] 6.1 — #7: `mimeTypes` Array → Set
 
 **Riga:** `1105`  
 **Problema:**
@@ -500,7 +500,7 @@ Su NFS o filesystem di rete l'impatto è ordini di grandezza.
 
 ---
 
-### [ ] 7.1 — #4: Eliminare doppia `stat()` per symlink — riutilizzare `realStat`
+### [x] 7.1 — #4: Eliminare doppia `stat()` per symlink — riutilizzare `realStat`
 
 **Righe:** `1396–1420`  
 **Problema:** per ogni entry che è un symlink o `DT_UNKNOWN`, la funzione fa
@@ -546,7 +546,7 @@ if (!isBrokenSymlink) {
 
 ---
 
-### [ ] 7.2 — #3: Loop `for...of` con `await` → `Promise.all` per stat parallele
+### [x] 7.2 — #3: Loop `for...of` con `await` → `Promise.all` per stat parallele
 
 **Righe:** `1371–1430`  
 **Problema:** il loop raccoglie i dati di ogni entry in modo sequenziale.
@@ -638,7 +638,7 @@ efficiente tentare una `stat` diretta sul file candidato.
 
 ---
 
-### [ ] 8.1 — #5: `stat()` diretto per pattern stringa, `readdir` solo per RegExp
+### [x] 8.1 — #5: `stat()` diretto per pattern stringa, `readdir` solo per RegExp
 
 **Righe:** `859–908`  
 **Problema attuale:**
@@ -698,7 +698,7 @@ sul `maxSize`, questo degrada a O(n) per eviction, O(n²) ammortizzato.
 
 ---
 
-### [ ] 9.1 — #6: Struttura LFU classica con bucket di frequenza
+### [x] 9.1 — #6: Struttura LFU classica con bucket di frequenza
 
 **Righe:** `577–597`  
 **Problema attuale:**

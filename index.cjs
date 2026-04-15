@@ -5,6 +5,10 @@ const path = require("path");
 const crypto = require("crypto");
 const zlib = require("zlib");
 const mime = require("mime-types");
+const { Readable } = require('stream');
+
+// Pre-computed module-level constants
+const _LOG_1024 = Math.log(1024);
 
 // Emitted at most once per process lifetime when hidden.dotFiles.default or
 // hidden.dotDirs.default are not explicitly set by the caller.
@@ -90,6 +94,57 @@ function setGeneratedPageHeaders(ctx, csp) {
     ctx.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
 }
 
+// Pre-computed 404 HTML body — identical on every call, no need to regenerate.
+const _NOT_FOUND_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>URL not found</title>
+</head>
+<body>
+  <h1>Not Found</h1>
+  <h3>The requested URL was not found on this server.</h3>
+</body>
+</html>`;
+
+function sendNotFound(ctx) {
+    setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
+    ctx.status = 404;
+    ctx.body = _NOT_FOUND_HTML;
+}
+
+// Single-pass HTML escaping — one regex scan, one allocation, lookup table compiled once.
+const _HTML_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+const _HTML_ESCAPE_RE  = /[&<>"']/g;
+
+function escapeHtml(unsafe) {
+    if (typeof unsafe !== 'string') return unsafe;
+    return unsafe.replace(_HTML_ESCAPE_RE, c => _HTML_ESCAPE_MAP[c]);
+}
+
+// Pure helper — depends only on _LOG_1024 (module scope), safe to hoist.
+function formatSize(bytes) {
+    if (bytes === 0) return '0 B';
+    if (bytes === undefined || bytes === null) return '-';
+
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / _LOG_1024);
+
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Returns the dirent numeric type using the official Node.js API instead of
+// the internal Symbol hack: 1=file, 2=dir, 3=symlink, 0=DT_UNKNOWN.
+function getDirentType(dirent) {
+    if (dirent.isFile())        return 1;
+    if (dirent.isDirectory())   return 2;
+    if (dirent.isSymbolicLink()) return 3;
+    return 0;
+}
+
 /**
  * Parse a "Range: bytes=..." header against a known file size.
  * Only single ranges are supported; multi-range requests are treated as invalid.
@@ -141,6 +196,108 @@ function parseRangeHeader(rangeHeader, fileSize) {
     }
 
     return { start, end };
+}
+
+// LFU cache with O(1) eviction using frequency buckets.
+// peek(key)  — read without touching frequency (for staleness checks)
+// get(key)   — read and increment frequency
+// set(key, entry) — insert, evicting LFU entries if needed
+// delete(key) — remove explicitly (e.g. stale entry before re-insert)
+class LFUCache {
+    constructor(maxSize, warnInterval, cacheLabel) {
+        this.maxSize     = maxSize;
+        this.warnInterval = warnInterval;
+        this.cacheLabel  = cacheLabel;
+        this.currentSize = 0;
+        this._keyMap     = new Map(); // key → { buffer, mtime, size, freq }
+        this._freqMap    = new Map(); // freq → Set<key>
+        this._minFreq    = 0;
+        this._lastWarnAt = 0;
+    }
+
+    get size() { return this._keyMap.size; }
+
+    // Returns entry without incrementing frequency — safe for staleness checks.
+    peek(key) {
+        return this._keyMap.get(key);
+    }
+
+    // Returns entry and increments its frequency.
+    get(key) {
+        if (!this._keyMap.has(key)) return undefined;
+        this._incrementFreq(key);
+        return this._keyMap.get(key);
+    }
+
+    set(key, entry) {
+        while (this.currentSize + entry.buffer.length > this.maxSize && this._keyMap.size > 0) {
+            this._evictOne();
+        }
+        if (this.currentSize + entry.buffer.length > this.maxSize) return; // entry too large for cache
+
+        this._keyMap.set(key, { ...entry, freq: 1 });
+        this._addToFreqBucket(key, 1);
+        this.currentSize += entry.buffer.length;
+        this._minFreq = 1;
+    }
+
+    delete(key) {
+        if (!this._keyMap.has(key)) return;
+        const { freq, buffer } = this._keyMap.get(key);
+        this.currentSize -= buffer.length;
+        this._keyMap.delete(key);
+        const bucket = this._freqMap.get(freq);
+        if (bucket) {
+            bucket.delete(key);
+            if (bucket.size === 0) this._freqMap.delete(freq);
+        }
+        // _minFreq may be stale after external delete — reset to 1 on next set()
+    }
+
+    _incrementFreq(key) {
+        const entry   = this._keyMap.get(key);
+        const oldFreq = entry.freq;
+        const newFreq = oldFreq + 1;
+        entry.freq = newFreq;
+        const oldBucket = this._freqMap.get(oldFreq);
+        oldBucket.delete(key);
+        if (oldBucket.size === 0) {
+            this._freqMap.delete(oldFreq);
+            if (this._minFreq === oldFreq) this._minFreq = newFreq;
+        }
+        this._addToFreqBucket(key, newFreq);
+    }
+
+    _addToFreqBucket(key, freq) {
+        if (!this._freqMap.has(freq)) this._freqMap.set(freq, new Set());
+        this._freqMap.get(freq).add(key);
+    }
+
+    _evictOne() {
+        // Recover from stale _minFreq (can happen after consecutive evictions)
+        while (this._freqMap.size > 0 && (!this._freqMap.has(this._minFreq) || this._freqMap.get(this._minFreq).size === 0)) {
+            this._freqMap.delete(this._minFreq);
+            if (this._freqMap.size === 0) return;
+            this._minFreq = Math.min(...this._freqMap.keys());
+        }
+        const bucket = this._freqMap.get(this._minFreq);
+        if (!bucket || bucket.size === 0) return;
+
+        const evictKey = bucket.values().next().value; // FIFO within same freq
+        const { buffer } = this._keyMap.get(evictKey);
+        this.currentSize -= buffer.length;
+        this._keyMap.delete(evictKey);
+        bucket.delete(evictKey);
+        if (bucket.size === 0) this._freqMap.delete(this._minFreq);
+
+        if (this.warnInterval !== false) {
+            const now = Date.now();
+            if (now - this._lastWarnAt >= this.warnInterval) {
+                console.warn(`[koa-classic-server] serverCache.${this.cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
+                this._lastWarnAt = now;
+            }
+        }
+    }
 }
 
 module.exports = function koaClassicServer(
@@ -249,6 +406,7 @@ module.exports = function koaClassicServer(
     }
 
     options.urlPrefix = typeof options.urlPrefix === 'string' ? options.urlPrefix : "";
+    const _urlPrefixParts = options.urlPrefix.split("/");
     options.urlsReserved = Array.isArray(options.urlsReserved) ? options.urlsReserved : [];
     options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
@@ -500,7 +658,7 @@ module.exports = function koaClassicServer(
                 enabled: true,
                 encodings: ['br', 'gzip'],              // priority order: brotli first, gzip as fallback
                 minSize: 1024,                          // bytes; skip compression for files smaller than this
-                mimeTypes: DEFAULT_COMPRESSIBLE_MIME_TYPES,
+                mimeTypes: new Set(DEFAULT_COMPRESSIBLE_MIME_TYPES),
             };
         }
 
@@ -518,7 +676,7 @@ module.exports = function koaClassicServer(
             ? compression.mimeTypes
             : DEFAULT_COMPRESSIBLE_MIME_TYPES;
 
-        return { enabled, encodings, minSize, mimeTypes };
+        return { enabled, encodings, minSize, mimeTypes: new Set(mimeTypes) };
     }
 
     // Normalize and validate the serverCache option into a clean internal structure.
@@ -560,41 +718,21 @@ module.exports = function koaClassicServer(
     const compressionConfig = normalizeCompressionConfig(options.compression);
     const serverCacheConfig = normalizeServerCacheConfig(options.serverCache);
 
-    // In-memory cache for raw file buffers (serverCache.rawFile).
-    // Key: absoluteFilePath — stores buffer + mtime + size for invalidation + hits for LFU eviction.
-    const _rawFileCache = new Map();
-    let _rawFileCacheTotalSize = 0;
-    let _rawFileCacheLastWarnAt = 0;
+    // In-memory LFU cache for raw file buffers (serverCache.rawFile).
+    // Key: absoluteFilePath — O(1) eviction via frequency-bucket structure.
+    const _rawFileCache = new LFUCache(
+        serverCacheConfig.rawFile.maxSize,
+        serverCacheConfig.rawFile.warnInterval,
+        'rawFile'
+    );
 
-    // In-memory cache for compressed file buffers (serverCache.compressedFile).
-    // Key: `${absoluteFilePath}:${encoding}` — stores buffer + mtime + size + hits.
-    const _compressedFileCache = new Map();
-    let _compressedFileCacheTotalSize = 0;
-    let _compressedFileCacheLastWarnAt = 0;
-
-    // Evict the LFU (least frequently used) entry from a cache map.
-    // Emits a throttled warning when eviction occurs.
-    function evictLFU(cache, totalSizeRef, lastWarnRef, warnInterval, cacheLabel) {
-        let minHits = Infinity;
-        let minKey = null;
-        for (const [key, entry] of cache) {
-            if (entry.hits < minHits) {
-                minHits = entry.hits;
-                minKey = key;
-            }
-        }
-        if (minKey !== null) {
-            totalSizeRef.value -= cache.get(minKey).buffer.length;
-            cache.delete(minKey);
-            if (warnInterval !== false) {
-                const now = Date.now();
-                if (now - lastWarnRef.value >= warnInterval) {
-                    console.warn(`[koa-classic-server] serverCache.${cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
-                    lastWarnRef.value = now;
-                }
-            }
-        }
-    }
+    // In-memory LFU cache for compressed file buffers (serverCache.compressedFile).
+    // Key: `${absoluteFilePath}:${encoding}` — O(1) eviction via frequency-bucket structure.
+    const _compressedFileCache = new LFUCache(
+        serverCacheConfig.compressedFile.maxSize,
+        serverCacheConfig.compressedFile.warnInterval,
+        'compressedFile'
+    );
 
     // Returns the client's preferred encoding based on Accept-Encoding header,
     // filtered against the enabled encodings list. Returns null if no match.
@@ -649,6 +787,53 @@ module.exports = function koaClassicServer(
         return `inline; filename="${asciiSafe}"; filename*=UTF-8''${rfc5987}`;
     }
 
+    // Find the first matching index file in a directory.
+    // Fast-path: string patterns use a direct stat() — no readdir needed.
+    // Slow-path: RegExp patterns trigger a single lazy readdir(), shared across
+    // all RegExp patterns in the array.
+    async function findIndexFile(dirPath, indexPatterns) {
+        let fileNames = null; // populated lazily on first RegExp pattern
+
+        for (const pattern of indexPatterns) {
+            if (typeof pattern === 'string') {
+                // Fast path: stat directly, zero readdir
+                try {
+                    const fileStat = await fs.promises.stat(path.join(dirPath, pattern));
+                    if (fileStat.isFile()) return { name: pattern, stat: fileStat };
+                } catch {
+                    continue; // file doesn't exist, try next pattern
+                }
+            } else if (pattern instanceof RegExp) {
+                // Slow path: readdir once (lazy), reused for subsequent RegExp patterns
+                if (!fileNames) {
+                    try {
+                        const dirents = await fs.promises.readdir(dirPath, { withFileTypes: true });
+                        const checkResults = await Promise.all(
+                            dirents.map(async dirent => ({
+                                name: dirent.name,
+                                isFile: await isFileOrSymlinkToFile(dirent, dirPath)
+                            }))
+                        );
+                        fileNames = checkResults.filter(e => e.isFile).map(e => e.name);
+                    } catch (error) {
+                        console.error('Error finding index file:', error);
+                        return null;
+                    }
+                }
+                const matchedFile = fileNames.find(name => pattern.test(name));
+                if (matchedFile) {
+                    try {
+                        const fileStat = await fs.promises.stat(path.join(dirPath, matchedFile));
+                        if (fileStat.isFile()) return { name: matchedFile, stat: fileStat };
+                    } catch {
+                        continue; // file deleted between readdir and stat
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     return async (ctx, next) => {
         if (!options.method.includes(ctx.method)) {
             await next();
@@ -657,7 +842,8 @@ module.exports = function koaClassicServer(
 
         // Construct full URL based on useOriginalUrl option
         const urlToUse = options.useOriginalUrl ? ctx.originalUrl : ctx.url;
-        const fullUrl = ctx.protocol + '://' + ctx.host + urlToUse;
+        const _origin  = ctx.protocol + '://' + ctx.host;
+        const fullUrl  = _origin + urlToUse;
         let pageHref = '';
         if (fullUrl.charAt(fullUrl.length - 1) === '/') {
             pageHref = new URL(fullUrl.slice(0, -1));
@@ -667,10 +853,9 @@ module.exports = function koaClassicServer(
 
         // Check URL prefix
         const a_pathname = pageHref.pathname.split("/");
-        const a_urlPrefix = options.urlPrefix.split("/");
 
-        for (const key in a_urlPrefix) {
-            if (a_urlPrefix[key] !== a_pathname[key]) {
+        for (let i = 0; i < _urlPrefixParts.length; i++) {
+            if (_urlPrefixParts[i] !== a_pathname[i]) {
                 await next();
                 return;
             }
@@ -679,7 +864,7 @@ module.exports = function koaClassicServer(
         // Create pageHrefOutPrefix without URL prefix
         let pageHrefOutPrefix = pageHref;
         if (options.urlPrefix !== "") {
-            let a_pathnameOutPrefix = a_pathname.slice(a_urlPrefix.length);
+            let a_pathnameOutPrefix = a_pathname.slice(_urlPrefixParts.length);
             let s_pathnameOutPrefix = a_pathnameOutPrefix.join("/");
             let hrefOutPrefix = pageHref.origin + '/' + s_pathnameOutPrefix;
             pageHrefOutPrefix = new URL(hrefOutPrefix);
@@ -740,20 +925,20 @@ module.exports = function koaClassicServer(
         let toOpen = fullPath;
 
         // hideExtension logic: redirect URLs with extension and resolve clean URLs
-        // Track if original URL had trailing slash (stripped by pageHref construction above)
-        const originalUrlPath = new URL(ctx.protocol + '://' + ctx.host + urlToUse).pathname;
-        const hadTrailingSlash = originalUrlPath.length > 1 && originalUrlPath.endsWith('/');
-
         if (options.hideExtension) {
             const hideExt = options.hideExtension.ext;
             const hideRedirect = options.hideExtension.redirect;
 
+            // Trailing slash check via string — avoids a full new URL() construction
+            const rawPath = urlToUse.split('?')[0];
+            const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
+
             // Check if URL ends with the configured extension → redirect to clean URL
             // Use the original path (before trailing slash stripping) for accurate matching
-            const pathForExtCheck = hadTrailingSlash ? originalUrlPath.slice(0, -1) : requestedPath;
+            const pathForExtCheck = hadTrailingSlash ? rawPath.slice(0, -1) : requestedPath;
             if (pathForExtCheck.endsWith(hideExt)) {
                 // Build redirect target using ctx.originalUrl (always, regardless of useOriginalUrl)
-                const originalUrlObj = new URL(ctx.protocol + '://' + ctx.host + ctx.originalUrl);
+                const originalUrlObj = new URL(_origin + ctx.originalUrl);
                 let redirectPath = originalUrlObj.pathname;
 
                 redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
@@ -850,88 +1035,6 @@ module.exports = function koaClassicServer(
 
         // Internal functions
 
-        /**
-         * Find index file in directory with priority support
-         * @param {string} dirPath - Directory path to search
-         * @param {Array<string|RegExp>} indexPatterns - Array of patterns (strings or RegExp)
-         * @returns {Promise<{name: string, stat: fs.Stats}|null>} - First matching file or null
-         */
-        async function findIndexFile(dirPath, indexPatterns) {
-            try {
-                const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
-
-                // Filter files, following symlinks to determine effective type
-                const fileCheckResults = await Promise.all(
-                    files.map(async dirent => ({
-                        name: dirent.name,
-                        isFile: await isFileOrSymlinkToFile(dirent, dirPath)
-                    }))
-                );
-                const fileNames = fileCheckResults
-                    .filter(entry => entry.isFile)
-                    .map(entry => entry.name);
-
-                // Search with priority order (first pattern wins)
-                for (const pattern of indexPatterns) {
-                    let matchedFile = null;
-
-                    if (typeof pattern === 'string') {
-                        // Exact string match (case-sensitive)
-                        if (fileNames.includes(pattern)) {
-                            matchedFile = pattern;
-                        }
-                    } else if (pattern instanceof RegExp) {
-                        // RegExp match (supports case-insensitive with /i flag)
-                        matchedFile = fileNames.find(fileName => pattern.test(fileName));
-                    }
-
-                    // If match found, verify it's a file and return it
-                    if (matchedFile) {
-                        try {
-                            const filePath = path.join(dirPath, matchedFile);
-                            const fileStat = await fs.promises.stat(filePath);
-                            if (fileStat.isFile()) {
-                                return { name: matchedFile, stat: fileStat };
-                            }
-                        } catch {
-                            // File was deleted between readdir and stat, continue to next pattern
-                            continue;
-                        }
-                    }
-                }
-
-                return null;
-            } catch (error) {
-                console.error('Error finding index file:', error);
-                return null;
-            }
-        }
-
-        // Sets 404 security headers and body in one call.
-        function sendNotFound(ctx) {
-            setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
-            ctx.status = 404;
-            ctx.body = requestedUrlNotFound();
-        }
-
-        function requestedUrlNotFound() {
-            return `
-                <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="UTF-8">
-                        <meta http-equiv="X-UA-Compatible" content="IE=edge">
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <title>URL not found</title>
-                    </head>
-                    <body>
-                    <h1>Not Found</h1>
-                    <h3>The requested URL was not found on this server.</h3>
-                    </body>
-                    </html>
-                `;
-        }
-
         // Accepts a pre-fetched stat to avoid a redundant stat call
         async function loadFile(toOpen, fileStat) {
             // Get file stat if not provided
@@ -949,30 +1052,19 @@ module.exports = function koaClassicServer(
             // Only for files within maxFileSize; large files are always streamed.
             let rawBuffer = null;
             if (serverCacheConfig.rawFile.enabled && fileStat.size <= serverCacheConfig.rawFile.maxFileSize) {
-                const cached = _rawFileCache.get(toOpen);
+                const cached = _rawFileCache.peek(toOpen);
                 if (cached && cached.mtime === fileStat.mtime.getTime() && cached.size === fileStat.size) {
-                    cached.hits++;
+                    _rawFileCache.get(toOpen); // increment frequency
                     rawBuffer = cached.buffer;
                 } else {
                     try {
                         rawBuffer = await fs.promises.readFile(toOpen);
-                        // Evict LFU entries until the new buffer fits within maxSize
-                        const sizeRef = { value: _rawFileCacheTotalSize };
-                        const warnRef = { value: _rawFileCacheLastWarnAt };
-                        while (sizeRef.value + rawBuffer.length > serverCacheConfig.rawFile.maxSize && _rawFileCache.size > 0) {
-                            evictLFU(_rawFileCache, sizeRef, warnRef, serverCacheConfig.rawFile.warnInterval, 'rawFile');
-                        }
-                        _rawFileCacheTotalSize = sizeRef.value;
-                        _rawFileCacheLastWarnAt = warnRef.value;
-                        if (_rawFileCacheTotalSize + rawBuffer.length <= serverCacheConfig.rawFile.maxSize) {
-                            _rawFileCache.set(toOpen, {
-                                buffer: rawBuffer,
-                                mtime: fileStat.mtime.getTime(),
-                                size: fileStat.size,
-                                hits: 1,
-                            });
-                            _rawFileCacheTotalSize += rawBuffer.length;
-                        }
+                        if (cached) _rawFileCache.delete(toOpen); // remove stale entry before re-inserting
+                        _rawFileCache.set(toOpen, {
+                            buffer: rawBuffer,
+                            mtime: fileStat.mtime.getTime(),
+                            size: fileStat.size,
+                        });
                     } catch {
                         rawBuffer = null; // Fall through to disk reads later
                     }
@@ -1102,7 +1194,7 @@ module.exports = function koaClassicServer(
             // Resolve compression: enabled + compressible MIME + meets minSize + client supports it
             let encoding = null; // 'br' | 'gzip' | null
             if (compressionConfig.enabled && compressionConfig.encodings.length > 0) {
-                const isCompressibleMime = compressionConfig.mimeTypes.includes(mimeType);
+                const isCompressibleMime = compressionConfig.mimeTypes.has(mimeType);
                 const meetsMinSize = compressionConfig.minSize === false
                     || fileStat.size >= compressionConfig.minSize;
                 if (isCompressibleMime && meetsMinSize) {
@@ -1150,14 +1242,14 @@ module.exports = function koaClassicServer(
                 if (serverCacheConfig.compressedFile.enabled) {
                     // compressedFile cache mode: compress once → buffer in RAM → Content-Length known
                     const cacheKey = `${toOpen}:${encoding}`;
-                    const cached = _compressedFileCache.get(cacheKey);
+                    const cached = _compressedFileCache.peek(cacheKey);
                     const stale = !cached
                         || cached.mtime !== fileStat.mtime.getTime()
                         || cached.size !== fileStat.size;
 
                     let buf;
                     if (!stale) {
-                        cached.hits++;
+                        _compressedFileCache.get(cacheKey); // increment frequency
                         buf = cached.buffer; // Serve from cache
                     } else {
                         try {
@@ -1165,24 +1257,12 @@ module.exports = function koaClassicServer(
                             const rawData = rawBuffer || await fs.promises.readFile(toOpen);
                             buf = await compressBuffer(rawData, encoding);
 
-                            // Evict LFU entries until the compressed buffer fits within maxSize
-                            const displaced = cached ? cached.buffer.length : 0;
-                            const sizeRef = { value: _compressedFileCacheTotalSize - displaced };
-                            const warnRef = { value: _compressedFileCacheLastWarnAt };
-                            while (sizeRef.value + buf.length > serverCacheConfig.compressedFile.maxSize && _compressedFileCache.size > (cached ? 1 : 0)) {
-                                evictLFU(_compressedFileCache, sizeRef, warnRef, serverCacheConfig.compressedFile.warnInterval, 'compressedFile');
-                            }
-                            _compressedFileCacheTotalSize = sizeRef.value;
-                            _compressedFileCacheLastWarnAt = warnRef.value;
-                            if (_compressedFileCacheTotalSize + buf.length <= serverCacheConfig.compressedFile.maxSize) {
-                                _compressedFileCache.set(cacheKey, {
-                                    buffer: buf,
-                                    mtime: fileStat.mtime.getTime(),
-                                    size: fileStat.size,
-                                    hits: 1,
-                                });
-                                _compressedFileCacheTotalSize += buf.length;
-                            }
+                            if (cached) _compressedFileCache.delete(cacheKey); // remove stale entry before re-inserting
+                            _compressedFileCache.set(cacheKey, {
+                                buffer: buf,
+                                mtime: fileStat.mtime.getTime(),
+                                size: fileStat.size,
+                            });
                         } catch (err) {
                             console.error('Compression error:', err);
                             // Fall back to uncompressed on any compression failure
@@ -1231,7 +1311,6 @@ module.exports = function koaClassicServer(
                             : zlib.createGzip({ level: 6 });
                         if (rawBuffer) {
                             // Compress from in-memory buffer — no disk I/O
-                            const { Readable } = require('stream');
                             const src = Readable.from(rawBuffer);
                             ctx.body = src.pipe(compress);
                         } else {
@@ -1275,17 +1354,6 @@ module.exports = function koaClassicServer(
             }
         }
 
-        // Helper function to format file size in human-readable format
-        function formatSize(bytes) {
-            if (bytes === 0) return '0 B';
-            if (bytes === undefined || bytes === null) return '-';
-
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-        }
 
         async function show_dir(toOpen, ctx) {
             let dir;
@@ -1363,88 +1431,88 @@ module.exports = function koaClassicServer(
             if (dir.length === 0) {
                 parts.push(`<tr><td>empty folder</td><td></td><td></td></tr>`);
             } else {
-                let a_sy = Object.getOwnPropertySymbols(dir[0]);
-                const sy_type = a_sy[0];
+                const _listingBaseUrl = pageHref.origin + pageHref.pathname;
+                const _listingOriginPrefix = pageHref.origin + options.urlPrefix;
 
-                // Collect all items data first (for sorting)
-                const items = [];
-                for (const item of dir) {
-                    const s_name = item.name.toString();
-                    const type = item[sy_type];
+                // Collect item data with stat I/O in parallel (batched to avoid
+                // overwhelming the filesystem on very large directories).
+                const BATCH_SIZE = 64;
+                const rawItems = [];
+                for (let bi = 0; bi < dir.length; bi += BATCH_SIZE) {
+                    const batch = await Promise.all(
+                        dir.slice(bi, bi + BATCH_SIZE).map(async (item) => {
+                            const s_name = item.name.toString();
+                            const type = getDirentType(item);
+                            const itemPath = path.join(toOpen, s_name);
 
-                    if (type !== 0 && type !== 1 && type !== 2 && type !== 3) {
-                        console.error("Unknown file type:", type);
-                        continue;
-                    }
-
-                    const itemPath = path.join(toOpen, s_name);
-                    let itemUri = "";
-                    // Build item URI without query parameters
-                    const baseUrl = pageHref.origin + pageHref.pathname;
-                    if (baseUrl === pageHref.origin + options.urlPrefix + "/" || baseUrl === pageHref.origin + options.urlPrefix) {
-                        itemUri = `${pageHref.origin + options.urlPrefix}/${encodeURIComponent(s_name)}`;
-                    } else {
-                        itemUri = `${baseUrl}/${encodeURIComponent(s_name)}`;
-                    }
-
-                    // Resolve symlinks and DT_UNKNOWN entries to their effective type
-                    let effectiveType = type;
-                    let isBrokenSymlink = false;
-                    if (type === 3 || type === 0) {
-                        // type 3 = symlink, type 0 = DT_UNKNOWN (overlayfs, NFS, FUSE, NixOS buildFHSEnv, ecryptfs)
-                        try {
-                            const realStat = await fs.promises.stat(itemPath);
-                            if (realStat.isFile()) effectiveType = 1;
-                            else if (realStat.isDirectory()) effectiveType = 2;
-                        } catch {
-                            if (type === 3) {
-                                isBrokenSymlink = true; // Broken or circular symlink
+                            // Build item URI without query parameters
+                            let itemUri;
+                            if (_listingBaseUrl === _listingOriginPrefix + "/" || _listingBaseUrl === _listingOriginPrefix) {
+                                itemUri = `${_listingOriginPrefix}/${encodeURIComponent(s_name)}`;
                             } else {
-                                continue; // DT_UNKNOWN entry that can't be stat'd — skip it
+                                itemUri = `${_listingBaseUrl}/${encodeURIComponent(s_name)}`;
                             }
-                        }
-                    }
 
-                    // Hidden check: skip entries that should not appear in directory listing
-                    {
-                        const itemIsDir = effectiveType === 2;
-                        const itemRelPath = dirRelPath ? dirRelPath + '/' + s_name : s_name;
-                        if (isHiddenEntry(s_name, itemRelPath, itemIsDir)) continue;
-                    }
-
-                    // Get file size
-                    let sizeStr = '-';
-                    let sizeBytes = 0;
-                    if (!isBrokenSymlink) {
-                        try {
-                            const itemStat = await fs.promises.stat(itemPath);
-                            if (effectiveType === 1) {
-                                sizeBytes = itemStat.size;
-                                sizeStr = formatSize(sizeBytes);
-                            } else {
-                                sizeStr = '-';
+                            // Resolve symlinks and DT_UNKNOWN entries to their effective type.
+                            // cachedStat is reused below to avoid a second stat() on the same path.
+                            let effectiveType = type;
+                            let isBrokenSymlink = false;
+                            let cachedStat = null;
+                            if (type === 3 || type === 0) {
+                                // type 3 = symlink, type 0 = DT_UNKNOWN (overlayfs, NFS, FUSE, NixOS buildFHSEnv, ecryptfs)
+                                try {
+                                    cachedStat = await fs.promises.stat(itemPath);
+                                    if (cachedStat.isFile()) effectiveType = 1;
+                                    else if (cachedStat.isDirectory()) effectiveType = 2;
+                                } catch {
+                                    if (type === 3) {
+                                        isBrokenSymlink = true; // Broken or circular symlink
+                                    } else {
+                                        return null; // DT_UNKNOWN entry that can't be stat'd — skip it
+                                    }
+                                }
                             }
-                        } catch {
-                            sizeStr = '-';
-                        }
-                    }
 
-                    const mimeType = effectiveType === 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
-                    const isReserved = pageHrefOutPrefix.pathname === '/' && options.urlsReserved.includes('/' + s_name) && (effectiveType === 2 || type === 3);
+                            // Hidden check: skip entries that should not appear in directory listing
+                            const itemIsDir = effectiveType === 2;
+                            const itemRelPath = dirRelPath ? dirRelPath + '/' + s_name : s_name;
+                            if (isHiddenEntry(s_name, itemRelPath, itemIsDir)) return null;
 
-                    items.push({
-                        name: s_name,
-                        type: type,
-                        effectiveType: effectiveType,
-                        isSymlink: type === 3,
-                        isBrokenSymlink: isBrokenSymlink,
-                        mimeType: mimeType,
-                        sizeStr: sizeStr,
-                        sizeBytes: sizeBytes,
-                        itemUri: itemUri,
-                        isReserved: isReserved
-                    });
+                            // Get file size — reuse cachedStat if already available (avoids double stat for symlinks)
+                            let sizeStr = '-';
+                            let sizeBytes = 0;
+                            if (!isBrokenSymlink) {
+                                try {
+                                    const itemStat = cachedStat || await fs.promises.stat(itemPath);
+                                    if (effectiveType === 1) {
+                                        sizeBytes = itemStat.size;
+                                        sizeStr = formatSize(sizeBytes);
+                                    }
+                                } catch {
+                                    sizeStr = '-';
+                                }
+                            }
+
+                            const mimeType = effectiveType === 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
+                            const isReserved = pageHrefOutPrefix.pathname === '/' && options.urlsReserved.includes('/' + s_name) && (effectiveType === 2 || type === 3);
+
+                            return {
+                                name: s_name,
+                                type,
+                                effectiveType,
+                                isSymlink: type === 3,
+                                isBrokenSymlink,
+                                mimeType,
+                                sizeStr,
+                                sizeBytes,
+                                itemUri,
+                                isReserved
+                            };
+                        })
+                    );
+                    rawItems.push(...batch);
                 }
+                const items = rawItems.filter(Boolean);
 
                 // Sort items based on query parameters
                 items.sort((a, b) => {
@@ -1528,17 +1596,5 @@ module.exports = function koaClassicServer(
             return html;
         }
 
-        // Helper function to escape HTML and prevent XSS
-        function escapeHtml(unsafe) {
-            if (typeof unsafe !== 'string') {
-                return unsafe;
-            }
-            return unsafe
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        }
     };
 };

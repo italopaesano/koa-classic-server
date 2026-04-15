@@ -1382,81 +1382,88 @@ module.exports = function koaClassicServer(
             if (dir.length === 0) {
                 parts.push(`<tr><td>empty folder</td><td></td><td></td></tr>`);
             } else {
-                // Collect all items data first (for sorting)
-                const items = [];
                 const _listingBaseUrl = pageHref.origin + pageHref.pathname;
                 const _listingOriginPrefix = pageHref.origin + options.urlPrefix;
-                for (const item of dir) {
-                    const s_name = item.name.toString();
-                    const type = getDirentType(item);
 
-                    const itemPath = path.join(toOpen, s_name);
-                    let itemUri = "";
-                    // Build item URI without query parameters
-                    if (_listingBaseUrl === _listingOriginPrefix + "/" || _listingBaseUrl === _listingOriginPrefix) {
-                        itemUri = `${_listingOriginPrefix}/${encodeURIComponent(s_name)}`;
-                    } else {
-                        itemUri = `${_listingBaseUrl}/${encodeURIComponent(s_name)}`;
-                    }
+                // Collect item data with stat I/O in parallel (batched to avoid
+                // overwhelming the filesystem on very large directories).
+                const BATCH_SIZE = 64;
+                const rawItems = [];
+                for (let bi = 0; bi < dir.length; bi += BATCH_SIZE) {
+                    const batch = await Promise.all(
+                        dir.slice(bi, bi + BATCH_SIZE).map(async (item) => {
+                            const s_name = item.name.toString();
+                            const type = getDirentType(item);
+                            const itemPath = path.join(toOpen, s_name);
 
-                    // Resolve symlinks and DT_UNKNOWN entries to their effective type
-                    let effectiveType = type;
-                    let isBrokenSymlink = false;
-                    if (type === 3 || type === 0) {
-                        // type 3 = symlink, type 0 = DT_UNKNOWN (overlayfs, NFS, FUSE, NixOS buildFHSEnv, ecryptfs)
-                        try {
-                            const realStat = await fs.promises.stat(itemPath);
-                            if (realStat.isFile()) effectiveType = 1;
-                            else if (realStat.isDirectory()) effectiveType = 2;
-                        } catch {
-                            if (type === 3) {
-                                isBrokenSymlink = true; // Broken or circular symlink
+                            // Build item URI without query parameters
+                            let itemUri;
+                            if (_listingBaseUrl === _listingOriginPrefix + "/" || _listingBaseUrl === _listingOriginPrefix) {
+                                itemUri = `${_listingOriginPrefix}/${encodeURIComponent(s_name)}`;
                             } else {
-                                continue; // DT_UNKNOWN entry that can't be stat'd — skip it
+                                itemUri = `${_listingBaseUrl}/${encodeURIComponent(s_name)}`;
                             }
-                        }
-                    }
 
-                    // Hidden check: skip entries that should not appear in directory listing
-                    {
-                        const itemIsDir = effectiveType === 2;
-                        const itemRelPath = dirRelPath ? dirRelPath + '/' + s_name : s_name;
-                        if (isHiddenEntry(s_name, itemRelPath, itemIsDir)) continue;
-                    }
-
-                    // Get file size
-                    let sizeStr = '-';
-                    let sizeBytes = 0;
-                    if (!isBrokenSymlink) {
-                        try {
-                            const itemStat = await fs.promises.stat(itemPath);
-                            if (effectiveType === 1) {
-                                sizeBytes = itemStat.size;
-                                sizeStr = formatSize(sizeBytes);
-                            } else {
-                                sizeStr = '-';
+                            // Resolve symlinks and DT_UNKNOWN entries to their effective type.
+                            // cachedStat is reused below to avoid a second stat() on the same path.
+                            let effectiveType = type;
+                            let isBrokenSymlink = false;
+                            let cachedStat = null;
+                            if (type === 3 || type === 0) {
+                                // type 3 = symlink, type 0 = DT_UNKNOWN (overlayfs, NFS, FUSE, NixOS buildFHSEnv, ecryptfs)
+                                try {
+                                    cachedStat = await fs.promises.stat(itemPath);
+                                    if (cachedStat.isFile()) effectiveType = 1;
+                                    else if (cachedStat.isDirectory()) effectiveType = 2;
+                                } catch {
+                                    if (type === 3) {
+                                        isBrokenSymlink = true; // Broken or circular symlink
+                                    } else {
+                                        return null; // DT_UNKNOWN entry that can't be stat'd — skip it
+                                    }
+                                }
                             }
-                        } catch {
-                            sizeStr = '-';
-                        }
-                    }
 
-                    const mimeType = effectiveType === 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
-                    const isReserved = pageHrefOutPrefix.pathname === '/' && options.urlsReserved.includes('/' + s_name) && (effectiveType === 2 || type === 3);
+                            // Hidden check: skip entries that should not appear in directory listing
+                            const itemIsDir = effectiveType === 2;
+                            const itemRelPath = dirRelPath ? dirRelPath + '/' + s_name : s_name;
+                            if (isHiddenEntry(s_name, itemRelPath, itemIsDir)) return null;
 
-                    items.push({
-                        name: s_name,
-                        type: type,
-                        effectiveType: effectiveType,
-                        isSymlink: type === 3,
-                        isBrokenSymlink: isBrokenSymlink,
-                        mimeType: mimeType,
-                        sizeStr: sizeStr,
-                        sizeBytes: sizeBytes,
-                        itemUri: itemUri,
-                        isReserved: isReserved
-                    });
+                            // Get file size — reuse cachedStat if already available (avoids double stat for symlinks)
+                            let sizeStr = '-';
+                            let sizeBytes = 0;
+                            if (!isBrokenSymlink) {
+                                try {
+                                    const itemStat = cachedStat || await fs.promises.stat(itemPath);
+                                    if (effectiveType === 1) {
+                                        sizeBytes = itemStat.size;
+                                        sizeStr = formatSize(sizeBytes);
+                                    }
+                                } catch {
+                                    sizeStr = '-';
+                                }
+                            }
+
+                            const mimeType = effectiveType === 2 ? "DIR" : (mime.lookup(itemPath) || 'unknown');
+                            const isReserved = pageHrefOutPrefix.pathname === '/' && options.urlsReserved.includes('/' + s_name) && (effectiveType === 2 || type === 3);
+
+                            return {
+                                name: s_name,
+                                type,
+                                effectiveType,
+                                isSymlink: type === 3,
+                                isBrokenSymlink,
+                                mimeType,
+                                sizeStr,
+                                sizeBytes,
+                                itemUri,
+                                isReserved
+                            };
+                        })
+                    );
+                    rawItems.push(...batch);
                 }
+                const items = rawItems.filter(Boolean);
 
                 // Sort items based on query parameters
                 items.sort((a, b) => {

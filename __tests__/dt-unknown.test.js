@@ -190,13 +190,17 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
         });
 
         test('should return false for DT_UNKNOWN entry pointing to a regular file', async () => {
-            // Files should NOT be treated as directories
-            // If only files exist and no index pattern matches, dir listing should show
+            // Files should NOT be treated as directories.
+            // Use a RegExp index pattern to force the readdir-based slow-path in
+            // findIndexFile (the string fast-path uses stat() directly and would bypass
+            // the mock). The regex never matches, so no index file is found and the
+            // directory listing is shown, confirming the DT_UNKNOWN files are treated
+            // as regular files (not directories).
             const spy = mockReaddirWithDtUnknown(tmpDir, ['style.css', 'readme.txt']);
 
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
-                index: ['index.html'],
+                index: [/NOMATCH_SENTINEL/],
                 showDirContents: true
             }));
             const server = app.listen();
@@ -287,11 +291,16 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
         });
 
         test('should not find index in directory with only subdirectories (all DT_UNKNOWN)', async () => {
+            // Use a RegExp to force the readdir-based slow-path (the string fast-path
+            // would stat() index.html directly, finding the real file on disk).
+            // The regex never matches, so the mocked readdir result (['subdir']) is used:
+            // 'subdir' has DT_UNKNOWN → stat fallback → isDirectory() → not a file →
+            // fileNames stays empty → no index found → directory listing shown.
             const spy = mockReaddirWithDtUnknown(tmpDir, ['subdir']);
 
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
-                index: ['index.html'],
+                index: [/NOMATCH_SENTINEL/],
                 showDirContents: true
             }));
             const server = app.listen();
@@ -300,7 +309,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             try {
                 const res = await request.get('/');
                 expect(res.status).toBe(200);
-                // No file matches index.html, so directory listing should appear
+                // No file matches the pattern, so directory listing should appear
                 expect(res.text).toContain('Index of');
             } finally {
                 server.close();

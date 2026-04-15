@@ -1,5 +1,7 @@
 node_modules/
 .env
+!__tests__/hidden-fixtures/.env
+!__tests__/hidden-fixtures/**/.env
 dist/
 coverage/
 npm-debug.log

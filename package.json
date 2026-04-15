@@ -51,5 +51,10 @@
     "inquirer": "^13.3.0",
     "jest": "^30.2.0",
     "supertest": "^7.2.2"
+  },
+  "overrides": {
+    "glob": "^13.0.6",
+    "babel-plugin-istanbul": "^8.0.0",
+    "test-exclude": "^8.0.0"
   }
 }

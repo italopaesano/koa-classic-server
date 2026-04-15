@@ -198,6 +198,108 @@ function parseRangeHeader(rangeHeader, fileSize) {
     return { start, end };
 }
 
+// LFU cache with O(1) eviction using frequency buckets.
+// peek(key)  — read without touching frequency (for staleness checks)
+// get(key)   — read and increment frequency
+// set(key, entry) — insert, evicting LFU entries if needed
+// delete(key) — remove explicitly (e.g. stale entry before re-insert)
+class LFUCache {
+    constructor(maxSize, warnInterval, cacheLabel) {
+        this.maxSize     = maxSize;
+        this.warnInterval = warnInterval;
+        this.cacheLabel  = cacheLabel;
+        this.currentSize = 0;
+        this._keyMap     = new Map(); // key → { buffer, mtime, size, freq }
+        this._freqMap    = new Map(); // freq → Set<key>
+        this._minFreq    = 0;
+        this._lastWarnAt = 0;
+    }
+
+    get size() { return this._keyMap.size; }
+
+    // Returns entry without incrementing frequency — safe for staleness checks.
+    peek(key) {
+        return this._keyMap.get(key);
+    }
+
+    // Returns entry and increments its frequency.
+    get(key) {
+        if (!this._keyMap.has(key)) return undefined;
+        this._incrementFreq(key);
+        return this._keyMap.get(key);
+    }
+
+    set(key, entry) {
+        while (this.currentSize + entry.buffer.length > this.maxSize && this._keyMap.size > 0) {
+            this._evictOne();
+        }
+        if (this.currentSize + entry.buffer.length > this.maxSize) return; // entry too large for cache
+
+        this._keyMap.set(key, { ...entry, freq: 1 });
+        this._addToFreqBucket(key, 1);
+        this.currentSize += entry.buffer.length;
+        this._minFreq = 1;
+    }
+
+    delete(key) {
+        if (!this._keyMap.has(key)) return;
+        const { freq, buffer } = this._keyMap.get(key);
+        this.currentSize -= buffer.length;
+        this._keyMap.delete(key);
+        const bucket = this._freqMap.get(freq);
+        if (bucket) {
+            bucket.delete(key);
+            if (bucket.size === 0) this._freqMap.delete(freq);
+        }
+        // _minFreq may be stale after external delete — reset to 1 on next set()
+    }
+
+    _incrementFreq(key) {
+        const entry   = this._keyMap.get(key);
+        const oldFreq = entry.freq;
+        const newFreq = oldFreq + 1;
+        entry.freq = newFreq;
+        const oldBucket = this._freqMap.get(oldFreq);
+        oldBucket.delete(key);
+        if (oldBucket.size === 0) {
+            this._freqMap.delete(oldFreq);
+            if (this._minFreq === oldFreq) this._minFreq = newFreq;
+        }
+        this._addToFreqBucket(key, newFreq);
+    }
+
+    _addToFreqBucket(key, freq) {
+        if (!this._freqMap.has(freq)) this._freqMap.set(freq, new Set());
+        this._freqMap.get(freq).add(key);
+    }
+
+    _evictOne() {
+        // Recover from stale _minFreq (can happen after consecutive evictions)
+        while (this._freqMap.size > 0 && (!this._freqMap.has(this._minFreq) || this._freqMap.get(this._minFreq).size === 0)) {
+            this._freqMap.delete(this._minFreq);
+            if (this._freqMap.size === 0) return;
+            this._minFreq = Math.min(...this._freqMap.keys());
+        }
+        const bucket = this._freqMap.get(this._minFreq);
+        if (!bucket || bucket.size === 0) return;
+
+        const evictKey = bucket.values().next().value; // FIFO within same freq
+        const { buffer } = this._keyMap.get(evictKey);
+        this.currentSize -= buffer.length;
+        this._keyMap.delete(evictKey);
+        bucket.delete(evictKey);
+        if (bucket.size === 0) this._freqMap.delete(this._minFreq);
+
+        if (this.warnInterval !== false) {
+            const now = Date.now();
+            if (now - this._lastWarnAt >= this.warnInterval) {
+                console.warn(`[koa-classic-server] serverCache.${this.cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
+                this._lastWarnAt = now;
+            }
+        }
+    }
+}
+
 module.exports = function koaClassicServer(
     rootDir,
     opts = {}
@@ -616,41 +718,21 @@ module.exports = function koaClassicServer(
     const compressionConfig = normalizeCompressionConfig(options.compression);
     const serverCacheConfig = normalizeServerCacheConfig(options.serverCache);
 
-    // In-memory cache for raw file buffers (serverCache.rawFile).
-    // Key: absoluteFilePath — stores buffer + mtime + size for invalidation + hits for LFU eviction.
-    const _rawFileCache = new Map();
-    let _rawFileCacheTotalSize = 0;
-    let _rawFileCacheLastWarnAt = 0;
+    // In-memory LFU cache for raw file buffers (serverCache.rawFile).
+    // Key: absoluteFilePath — O(1) eviction via frequency-bucket structure.
+    const _rawFileCache = new LFUCache(
+        serverCacheConfig.rawFile.maxSize,
+        serverCacheConfig.rawFile.warnInterval,
+        'rawFile'
+    );
 
-    // In-memory cache for compressed file buffers (serverCache.compressedFile).
-    // Key: `${absoluteFilePath}:${encoding}` — stores buffer + mtime + size + hits.
-    const _compressedFileCache = new Map();
-    let _compressedFileCacheTotalSize = 0;
-    let _compressedFileCacheLastWarnAt = 0;
-
-    // Evict the LFU (least frequently used) entry from a cache map.
-    // Emits a throttled warning when eviction occurs.
-    function evictLFU(cache, totalSizeRef, lastWarnRef, warnInterval, cacheLabel) {
-        let minHits = Infinity;
-        let minKey = null;
-        for (const [key, entry] of cache) {
-            if (entry.hits < minHits) {
-                minHits = entry.hits;
-                minKey = key;
-            }
-        }
-        if (minKey !== null) {
-            totalSizeRef.value -= cache.get(minKey).buffer.length;
-            cache.delete(minKey);
-            if (warnInterval !== false) {
-                const now = Date.now();
-                if (now - lastWarnRef.value >= warnInterval) {
-                    console.warn(`[koa-classic-server] serverCache.${cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
-                    lastWarnRef.value = now;
-                }
-            }
-        }
-    }
+    // In-memory LFU cache for compressed file buffers (serverCache.compressedFile).
+    // Key: `${absoluteFilePath}:${encoding}` — O(1) eviction via frequency-bucket structure.
+    const _compressedFileCache = new LFUCache(
+        serverCacheConfig.compressedFile.maxSize,
+        serverCacheConfig.compressedFile.warnInterval,
+        'compressedFile'
+    );
 
     // Returns the client's preferred encoding based on Accept-Encoding header,
     // filtered against the enabled encodings list. Returns null if no match.
@@ -970,30 +1052,19 @@ module.exports = function koaClassicServer(
             // Only for files within maxFileSize; large files are always streamed.
             let rawBuffer = null;
             if (serverCacheConfig.rawFile.enabled && fileStat.size <= serverCacheConfig.rawFile.maxFileSize) {
-                const cached = _rawFileCache.get(toOpen);
+                const cached = _rawFileCache.peek(toOpen);
                 if (cached && cached.mtime === fileStat.mtime.getTime() && cached.size === fileStat.size) {
-                    cached.hits++;
+                    _rawFileCache.get(toOpen); // increment frequency
                     rawBuffer = cached.buffer;
                 } else {
                     try {
                         rawBuffer = await fs.promises.readFile(toOpen);
-                        // Evict LFU entries until the new buffer fits within maxSize
-                        const sizeRef = { value: _rawFileCacheTotalSize };
-                        const warnRef = { value: _rawFileCacheLastWarnAt };
-                        while (sizeRef.value + rawBuffer.length > serverCacheConfig.rawFile.maxSize && _rawFileCache.size > 0) {
-                            evictLFU(_rawFileCache, sizeRef, warnRef, serverCacheConfig.rawFile.warnInterval, 'rawFile');
-                        }
-                        _rawFileCacheTotalSize = sizeRef.value;
-                        _rawFileCacheLastWarnAt = warnRef.value;
-                        if (_rawFileCacheTotalSize + rawBuffer.length <= serverCacheConfig.rawFile.maxSize) {
-                            _rawFileCache.set(toOpen, {
-                                buffer: rawBuffer,
-                                mtime: fileStat.mtime.getTime(),
-                                size: fileStat.size,
-                                hits: 1,
-                            });
-                            _rawFileCacheTotalSize += rawBuffer.length;
-                        }
+                        if (cached) _rawFileCache.delete(toOpen); // remove stale entry before re-inserting
+                        _rawFileCache.set(toOpen, {
+                            buffer: rawBuffer,
+                            mtime: fileStat.mtime.getTime(),
+                            size: fileStat.size,
+                        });
                     } catch {
                         rawBuffer = null; // Fall through to disk reads later
                     }
@@ -1171,14 +1242,14 @@ module.exports = function koaClassicServer(
                 if (serverCacheConfig.compressedFile.enabled) {
                     // compressedFile cache mode: compress once → buffer in RAM → Content-Length known
                     const cacheKey = `${toOpen}:${encoding}`;
-                    const cached = _compressedFileCache.get(cacheKey);
+                    const cached = _compressedFileCache.peek(cacheKey);
                     const stale = !cached
                         || cached.mtime !== fileStat.mtime.getTime()
                         || cached.size !== fileStat.size;
 
                     let buf;
                     if (!stale) {
-                        cached.hits++;
+                        _compressedFileCache.get(cacheKey); // increment frequency
                         buf = cached.buffer; // Serve from cache
                     } else {
                         try {
@@ -1186,24 +1257,12 @@ module.exports = function koaClassicServer(
                             const rawData = rawBuffer || await fs.promises.readFile(toOpen);
                             buf = await compressBuffer(rawData, encoding);
 
-                            // Evict LFU entries until the compressed buffer fits within maxSize
-                            const displaced = cached ? cached.buffer.length : 0;
-                            const sizeRef = { value: _compressedFileCacheTotalSize - displaced };
-                            const warnRef = { value: _compressedFileCacheLastWarnAt };
-                            while (sizeRef.value + buf.length > serverCacheConfig.compressedFile.maxSize && _compressedFileCache.size > (cached ? 1 : 0)) {
-                                evictLFU(_compressedFileCache, sizeRef, warnRef, serverCacheConfig.compressedFile.warnInterval, 'compressedFile');
-                            }
-                            _compressedFileCacheTotalSize = sizeRef.value;
-                            _compressedFileCacheLastWarnAt = warnRef.value;
-                            if (_compressedFileCacheTotalSize + buf.length <= serverCacheConfig.compressedFile.maxSize) {
-                                _compressedFileCache.set(cacheKey, {
-                                    buffer: buf,
-                                    mtime: fileStat.mtime.getTime(),
-                                    size: fileStat.size,
-                                    hits: 1,
-                                });
-                                _compressedFileCacheTotalSize += buf.length;
-                            }
+                            if (cached) _compressedFileCache.delete(cacheKey); // remove stale entry before re-inserting
+                            _compressedFileCache.set(cacheKey, {
+                                buffer: buf,
+                                mtime: fileStat.mtime.getTime(),
+                                size: fileStat.size,
+                            });
                         } catch (err) {
                             console.error('Compression error:', err);
                             // Fall back to uncompressed on any compression failure

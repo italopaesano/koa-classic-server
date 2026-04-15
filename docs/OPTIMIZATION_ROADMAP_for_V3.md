@@ -33,12 +33,12 @@
 6. [FASE 4 — Strutture dati: Array → Set](#6-fase-4--strutture-dati-array--set)
    - [x] 6.1 #7 — `mimeTypes` `Array.includes()` O(n) → `Set.has()` O(1)
 7. [FASE 5 — Directory listing: I/O parallelo](#7-fase-5--directory-listing-io-parallelo)
-   - [ ] 7.1 #4 — Eliminare doppia `stat()` per symlink
-   - [ ] 7.2 #3 — Loop `for...of` `await` → `Promise.all` per stat parallele
+   - [x] 7.1 #4 — Eliminare doppia `stat()` per symlink
+   - [x] 7.2 #3 — Loop `for...of` `await` → `Promise.all` per stat parallele
 8. [FASE 6 — findIndexFile fast-path](#8-fase-6--findindexfile-fast-path)
-   - [ ] 8.1 #5 — `stat()` diretto per pattern stringa, `readdir` solo per RegExp
+   - [x] 8.1 #5 — `stat()` diretto per pattern stringa, `readdir` solo per RegExp
 9. [FASE 7 — LFU cache: eviction O(1)](#9-fase-7--lfu-cache-eviction-o1)
-   - [ ] 9.1 #6 — Struttura LFU classica con bucket di frequenza
+   - [x] 9.1 #6 — Struttura LFU classica con bucket di frequenza
 10. [Stima impatto complessivo atteso](#10-stima-impatto-complessivo-atteso)
     - 10.1 File serving (rawFile cache warm)
     - 10.2 Directory listing su disco locale
@@ -500,7 +500,7 @@ Su NFS o filesystem di rete l'impatto è ordini di grandezza.
 
 ---
 
-### [ ] 7.1 — #4: Eliminare doppia `stat()` per symlink — riutilizzare `realStat`
+### [x] 7.1 — #4: Eliminare doppia `stat()` per symlink — riutilizzare `realStat`
 
 **Righe:** `1396–1420`  
 **Problema:** per ogni entry che è un symlink o `DT_UNKNOWN`, la funzione fa
@@ -546,7 +546,7 @@ if (!isBrokenSymlink) {
 
 ---
 
-### [ ] 7.2 — #3: Loop `for...of` con `await` → `Promise.all` per stat parallele
+### [x] 7.2 — #3: Loop `for...of` con `await` → `Promise.all` per stat parallele
 
 **Righe:** `1371–1430`  
 **Problema:** il loop raccoglie i dati di ogni entry in modo sequenziale.
@@ -638,7 +638,7 @@ efficiente tentare una `stat` diretta sul file candidato.
 
 ---
 
-### [ ] 8.1 — #5: `stat()` diretto per pattern stringa, `readdir` solo per RegExp
+### [x] 8.1 — #5: `stat()` diretto per pattern stringa, `readdir` solo per RegExp
 
 **Righe:** `859–908`  
 **Problema attuale:**
@@ -698,7 +698,7 @@ sul `maxSize`, questo degrada a O(n) per eviction, O(n²) ammortizzato.
 
 ---
 
-### [ ] 9.1 — #6: Struttura LFU classica con bucket di frequenza
+### [x] 9.1 — #6: Struttura LFU classica con bucket di frequenza
 
 **Righe:** `577–597`  
 **Problema attuale:**

@@ -705,6 +705,53 @@ module.exports = function koaClassicServer(
         return `inline; filename="${asciiSafe}"; filename*=UTF-8''${rfc5987}`;
     }
 
+    // Find the first matching index file in a directory.
+    // Fast-path: string patterns use a direct stat() — no readdir needed.
+    // Slow-path: RegExp patterns trigger a single lazy readdir(), shared across
+    // all RegExp patterns in the array.
+    async function findIndexFile(dirPath, indexPatterns) {
+        let fileNames = null; // populated lazily on first RegExp pattern
+
+        for (const pattern of indexPatterns) {
+            if (typeof pattern === 'string') {
+                // Fast path: stat directly, zero readdir
+                try {
+                    const fileStat = await fs.promises.stat(path.join(dirPath, pattern));
+                    if (fileStat.isFile()) return { name: pattern, stat: fileStat };
+                } catch {
+                    continue; // file doesn't exist, try next pattern
+                }
+            } else if (pattern instanceof RegExp) {
+                // Slow path: readdir once (lazy), reused for subsequent RegExp patterns
+                if (!fileNames) {
+                    try {
+                        const dirents = await fs.promises.readdir(dirPath, { withFileTypes: true });
+                        const checkResults = await Promise.all(
+                            dirents.map(async dirent => ({
+                                name: dirent.name,
+                                isFile: await isFileOrSymlinkToFile(dirent, dirPath)
+                            }))
+                        );
+                        fileNames = checkResults.filter(e => e.isFile).map(e => e.name);
+                    } catch (error) {
+                        console.error('Error finding index file:', error);
+                        return null;
+                    }
+                }
+                const matchedFile = fileNames.find(name => pattern.test(name));
+                if (matchedFile) {
+                    try {
+                        const fileStat = await fs.promises.stat(path.join(dirPath, matchedFile));
+                        if (fileStat.isFile()) return { name: matchedFile, stat: fileStat };
+                    } catch {
+                        continue; // file deleted between readdir and stat
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     return async (ctx, next) => {
         if (!options.method.includes(ctx.method)) {
             await next();
@@ -905,63 +952,6 @@ module.exports = function koaClassicServer(
         }
 
         // Internal functions
-
-        /**
-         * Find index file in directory with priority support
-         * @param {string} dirPath - Directory path to search
-         * @param {Array<string|RegExp>} indexPatterns - Array of patterns (strings or RegExp)
-         * @returns {Promise<{name: string, stat: fs.Stats}|null>} - First matching file or null
-         */
-        async function findIndexFile(dirPath, indexPatterns) {
-            try {
-                const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
-
-                // Filter files, following symlinks to determine effective type
-                const fileCheckResults = await Promise.all(
-                    files.map(async dirent => ({
-                        name: dirent.name,
-                        isFile: await isFileOrSymlinkToFile(dirent, dirPath)
-                    }))
-                );
-                const fileNames = fileCheckResults
-                    .filter(entry => entry.isFile)
-                    .map(entry => entry.name);
-
-                // Search with priority order (first pattern wins)
-                for (const pattern of indexPatterns) {
-                    let matchedFile = null;
-
-                    if (typeof pattern === 'string') {
-                        // Exact string match (case-sensitive)
-                        if (fileNames.includes(pattern)) {
-                            matchedFile = pattern;
-                        }
-                    } else if (pattern instanceof RegExp) {
-                        // RegExp match (supports case-insensitive with /i flag)
-                        matchedFile = fileNames.find(fileName => pattern.test(fileName));
-                    }
-
-                    // If match found, verify it's a file and return it
-                    if (matchedFile) {
-                        try {
-                            const filePath = path.join(dirPath, matchedFile);
-                            const fileStat = await fs.promises.stat(filePath);
-                            if (fileStat.isFile()) {
-                                return { name: matchedFile, stat: fileStat };
-                            }
-                        } catch {
-                            // File was deleted between readdir and stat, continue to next pattern
-                            continue;
-                        }
-                    }
-                }
-
-                return null;
-            } catch (error) {
-                console.error('Error finding index file:', error);
-                return null;
-            }
-        }
 
         // Accepts a pre-fetched stat to avoid a redundant stat call
         async function loadFile(toOpen, fileStat) {

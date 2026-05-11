@@ -115,6 +115,32 @@ function sendNotFound(ctx) {
     ctx.body = _NOT_FOUND_HTML;
 }
 
+const _GATEWAY_TIMEOUT_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gateway Timeout</title>
+</head>
+<body>
+  <h1>Gateway Timeout</h1>
+  <h3>The template took too long to render.</h3>
+</body>
+</html>`;
+
+const _TEMPLATE_ERROR_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Internal Server Error</title>
+</head>
+<body>
+  <h1>Internal Server Error</h1>
+  <h3>Template rendering failed for the requested resource.</h3>
+</body>
+</html>`;
+
 // Single-pass HTML escaping — one regex scan, one allocation, lookup table compiled once.
 const _HTML_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
 const _HTML_ESCAPE_RE  = /[&<>"']/g;
@@ -316,8 +342,13 @@ module.exports = function koaClassicServer(
         urlPrefix: "", // URL path prefix
         urlsReserved: [], // Reserved paths (first level only)
         template: {
-            render: undefined, // Template rendering function: async (ctx, next, filePath) => {}
+            render: undefined, // Template rendering function: async (ctx, next, filePath, rawBuffer, signal) => {}
             ext: [], // File extensions to process with template.render
+            renderTimeout: 30000, // Max ms allowed for template.render (number ≥ 0; 0 = disabled).
+                                  // On timeout responds 504 Gateway Timeout. The render receives an
+                                  // AbortSignal as 5th argument; propagate it to fetch/db/fs to free
+                                  // backend resources. The signal also aborts on client disconnect,
+                                  // even when renderTimeout is 0.
         },
         browserCacheMaxAge: 3600, // Browser Cache-Control max-age in seconds (default: 1 hour)
         browserCacheEnabled: false, // Enable browser HTTP caching headers (ETag, Last-Modified)
@@ -410,6 +441,19 @@ module.exports = function koaClassicServer(
     options.urlsReserved = Array.isArray(options.urlsReserved) ? options.urlsReserved : [];
     options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
+
+    if (options.template.renderTimeout === undefined) {
+        options.template.renderTimeout = 30000;
+    } else if (
+        typeof options.template.renderTimeout !== 'number' ||
+        !Number.isFinite(options.template.renderTimeout) ||
+        options.template.renderTimeout < 0
+    ) {
+        throw new Error(
+            '[koa-classic-server] template.renderTimeout must be a finite number >= 0 (ms). ' +
+            'Use 0 to disable. Got: ' + String(options.template.renderTimeout)
+        );
+    }
 
     // v3.0.0: removed legacy option names — throw to surface the breaking change clearly
     if ('cacheMaxAge' in opts) {
@@ -1073,32 +1117,66 @@ module.exports = function koaClassicServer(
 
             // Template rendering — rawBuffer passed as optional 4th param so render functions
             // can skip their own fs.readFile() call when the file is already in memory.
+            // 5th param is an AbortSignal: aborts on timeout or on client disconnect.
             if (options.template.ext.length > 0 && options.template.render) {
                 const fileExt = path.extname(toOpen).slice(1); // Remove leading dot
 
                 if (fileExt && options.template.ext.includes(fileExt)) {
+                    const controller = new AbortController();
+                    const onClientClose = () => controller.abort();
+                    ctx.req.on('close', onClientClose);
+
+                    const timeoutMs = options.template.renderTimeout;
+                    let timer = null;
+                    let timedOut = false;
+
+                    const renderPromise = Promise.resolve().then(() =>
+                        options.template.render(ctx, next, toOpen, rawBuffer, controller.signal)
+                    );
+                    renderPromise.catch(() => {}); // swallow late rejections after timeout
+
                     try {
-                        await options.template.render(ctx, next, toOpen, rawBuffer);
+                        if (timeoutMs > 0) {
+                            await Promise.race([
+                                renderPromise,
+                                new Promise((_, reject) => {
+                                    timer = setTimeout(() => {
+                                        timedOut = true;
+                                        controller.abort();
+                                        const err = new Error('Template render timeout');
+                                        err.code = 'ETEMPLATETIMEOUT';
+                                        reject(err);
+                                    }, timeoutMs);
+                                })
+                            ]);
+                        } else {
+                            await renderPromise;
+                        }
                         return;
                     } catch (error) {
+                        if (timedOut || error.code === 'ETEMPLATETIMEOUT') {
+                            console.error('Template render timeout after ' + timeoutMs + 'ms:', toOpen);
+                            if (ctx.headerSent || ctx.res.writableEnded) {
+                                ctx.res.destroy();
+                                return;
+                            }
+                            setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
+                            ctx.status = 504;
+                            ctx.body = _GATEWAY_TIMEOUT_HTML;
+                            return;
+                        }
                         console.error('Template rendering error:', error);
+                        if (ctx.headerSent || ctx.res.writableEnded) {
+                            ctx.res.destroy();
+                            return;
+                        }
                         setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
                         ctx.status = 500;
-                        ctx.body = `
-                            <!DOCTYPE html>
-                            <html>
-                            <head>
-                                <meta charset="UTF-8">
-                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                                <title>Internal Server Error</title>
-                            </head>
-                            <body>
-                                <h1>Internal Server Error</h1>
-                                <h3>Template rendering failed for the requested resource.</h3>
-                            </body>
-                            </html>
-                        `;
+                        ctx.body = _TEMPLATE_ERROR_HTML;
                         return;
+                    } finally {
+                        if (timer) clearTimeout(timer);
+                        ctx.req.removeListener('close', onClientClose);
                     }
                 }
             }

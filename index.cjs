@@ -94,20 +94,27 @@ function setGeneratedPageHeaders(ctx, csp) {
     ctx.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
 }
 
-// Pre-computed 404 HTML body — identical on every call, no need to regenerate.
-const _NOT_FOUND_HTML = `<!DOCTYPE html>
+// Builds a minimal error page used by the middleware (404 / 500 / 504).
+// Each page is pre-computed once at module load and reused on every request.
+function buildErrorHtml(title, heading, message) {
+    return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>URL not found</title>
+  <title>${title}</title>
 </head>
 <body>
-  <h1>Not Found</h1>
-  <h3>The requested URL was not found on this server.</h3>
+  <h1>${heading}</h1>
+  <h3>${message}</h3>
 </body>
 </html>`;
+}
+
+const _NOT_FOUND_HTML       = buildErrorHtml('URL not found',         'Not Found',             'The requested URL was not found on this server.');
+const _GATEWAY_TIMEOUT_HTML = buildErrorHtml('Gateway Timeout',       'Gateway Timeout',       'The template took too long to render.');
+const _TEMPLATE_ERROR_HTML  = buildErrorHtml('Internal Server Error', 'Internal Server Error', 'Template rendering failed for the requested resource.');
 
 function sendNotFound(ctx) {
     setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
@@ -115,31 +122,19 @@ function sendNotFound(ctx) {
     ctx.body = _NOT_FOUND_HTML;
 }
 
-const _GATEWAY_TIMEOUT_HTML = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gateway Timeout</title>
-</head>
-<body>
-  <h1>Gateway Timeout</h1>
-  <h3>The template took too long to render.</h3>
-</body>
-</html>`;
-
-const _TEMPLATE_ERROR_HTML = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Internal Server Error</title>
-</head>
-<body>
-  <h1>Internal Server Error</h1>
-  <h3>Template rendering failed for the requested resource.</h3>
-</body>
-</html>`;
+// Sends an error response for a failed template render. If headers were already
+// flushed by the render itself, destroys the underlying socket instead (the
+// status/body can no longer be changed at that point).
+function sendTemplateError(ctx, status, html, logMsg, err) {
+    console.error(logMsg, err);
+    if (ctx.headerSent || ctx.res.writableEnded) {
+        ctx.res.destroy();
+        return;
+    }
+    setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
+    ctx.status = status;
+    ctx.body = html;
+}
 
 // Single-pass HTML escaping — one regex scan, one allocation, lookup table compiled once.
 const _HTML_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
@@ -1155,24 +1150,12 @@ module.exports = function koaClassicServer(
                         return;
                     } catch (error) {
                         if (timedOut || error.code === 'ETEMPLATETIMEOUT') {
-                            console.error('Template render timeout after ' + timeoutMs + 'ms:', toOpen);
-                            if (ctx.headerSent || ctx.res.writableEnded) {
-                                ctx.res.destroy();
-                                return;
-                            }
-                            setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
-                            ctx.status = 504;
-                            ctx.body = _GATEWAY_TIMEOUT_HTML;
-                            return;
+                            sendTemplateError(ctx, 504, _GATEWAY_TIMEOUT_HTML,
+                                'Template render timeout after ' + timeoutMs + 'ms:', toOpen);
+                        } else {
+                            sendTemplateError(ctx, 500, _TEMPLATE_ERROR_HTML,
+                                'Template rendering error:', error);
                         }
-                        console.error('Template rendering error:', error);
-                        if (ctx.headerSent || ctx.res.writableEnded) {
-                            ctx.res.destroy();
-                            return;
-                        }
-                        setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
-                        ctx.status = 500;
-                        ctx.body = _TEMPLATE_ERROR_HTML;
                         return;
                     } finally {
                         if (timer) clearTimeout(timer);

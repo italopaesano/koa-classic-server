@@ -191,6 +191,27 @@ describe('template.renderTimeout', () => {
             expect(receivedSignal.aborted).toBe(false);
         });
 
+        test('signal is NOT aborted after a successful render completes', async () => {
+            let signalAtEnd;
+            let signalRef;
+            env = buildServer(async (ctx, _next, _path, _buf, signal) => {
+                signalRef = signal;
+                await new Promise(r => setTimeout(r, 20));
+                signalAtEnd = signal.aborted;
+                ctx.type = 'text/html';
+                ctx.body = '<p>done</p>';
+            }, { renderTimeout: 1000 });
+
+            const res = await env.request.get(TEMPLATE_URL);
+            expect(res.status).toBe(200);
+            // Signal must not be aborted at the end of a successful render
+            expect(signalAtEnd).toBe(false);
+            // ...and must remain non-aborted after the handler finishes
+            // (i.e. our cleanup must not abort it as a side-effect)
+            await new Promise(r => setTimeout(r, 50));
+            expect(signalRef.aborted).toBe(false);
+        });
+
         test('signal aborts when render times out', async () => {
             let signalAtTimeout = null;
             env = buildServer(async (ctx, _next, _path, _buf, signal) => {

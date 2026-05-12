@@ -221,6 +221,26 @@ To restore v2.x behavior: `hidden: { dotFiles: { default: 'visible' } }`
   }));
   ```
 
+#### Renamed `compression.minSize` → `compression.minFileSize`
+
+The threshold below which files are served uncompressed has a clearer name. Brings naming into line with `serverCache.rawFile.maxFileSize`, where "file size" is the explicit unit. Affects only alpha-tester code (the `compression` namespace was introduced in v3 and is not present in v2).
+
+- **Removed**: `compression.minSize` — passing it now throws an `Error` at startup
+- **Migration**:
+  ```js
+  // Before (v3.0.0-alpha.0 — now throws)
+  app.use(koaClassicServer('/public', {
+    compression: { minSize: 2048 }
+  }));
+
+  // After (v3.0.0)
+  app.use(koaClassicServer('/public', {
+    compression: { minFileSize: 2048 }
+  }));
+  ```
+
+The `false` shorthand (disable the threshold entirely) is preserved on the new name: `compression: { minFileSize: false }`.
+
 ---
 
 ## [2.6.1] - 2026-03-04

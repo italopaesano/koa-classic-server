@@ -100,8 +100,8 @@ describe('Compression — threshold (default 1024 bytes)', () => {
         expect(res.headers['content-encoding']).toBe('gzip');
     });
 
-    test('minSize: false → compress regardless of size', async () => {
-        const s = createApp({ compression: { minSize: false } });
+    test('minFileSize: false → compress regardless of size', async () => {
+        const s = createApp({ compression: { minFileSize: false } });
         const res = await supertest(s)
             .get('/small.txt')
             .set('Accept-Encoding', 'gzip');
@@ -266,5 +266,19 @@ describe('Compression — no compression on Range requests (HTTP 206)', () => {
         expect(res.status).toBe(206);
         expect(res.headers['content-encoding']).toBeUndefined();
         expect(res.text).toBe('A'.repeat(10));
+    });
+});
+
+// ─── V3 migration guard ───────────────────────────────────────────────────────
+
+describe('Compression — V3 migration guard (old name throws helpful error)', () => {
+    test('compression.minSize throws with hint pointing to minFileSize', () => {
+        expect(() => koaClassicServer(root, { compression: { minSize: 2048 } }))
+            .toThrow(/options\.compression\.minSize was renamed[\s\S]*compression: \{ minFileSize: 2048 \}/);
+    });
+
+    test('compression.minSize === false also throws (legacy "no minimum" sentinel)', () => {
+        expect(() => koaClassicServer(root, { compression: { minSize: false } }))
+            .toThrow(/options\.compression\.minSize was renamed/);
     });
 });

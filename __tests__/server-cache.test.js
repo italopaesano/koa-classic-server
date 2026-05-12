@@ -290,7 +290,7 @@ describe('serverCache.compressedFile.maxAge — time-based staleness', () => {
     beforeAll(() => {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-maxage-cmp-'));
         filePath = path.join(tmpDir, 'data.css');
-        fs.writeFileSync(filePath, 'a'.repeat(2048)); // above minSize=1024 to ensure compression
+        fs.writeFileSync(filePath, 'a'.repeat(2048)); // above minFileSize=1024 to ensure compression
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
@@ -365,7 +365,7 @@ describe('serverCache.rawFile + compression — rawFile feeds compressedFile', (
     let server;
     beforeAll(() => {
         server = createApp({
-            compression: { minSize: false }, // compress small.txt too
+            compression: { minFileSize: false }, // compress small.txt too
             serverCache: { rawFile: { enabled: true } }
         });
     });

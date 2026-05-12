@@ -97,7 +97,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.html'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -120,7 +120,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['subdir'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -143,7 +143,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['nonexistent.html'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -172,7 +172,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.html'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -201,7 +201,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [/NOMATCH_SENTINEL/],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -228,7 +228,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.html'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -250,7 +250,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.ejs'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -273,7 +273,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [/index\.[eE][jJ][sS]/],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -301,7 +301,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [/NOMATCH_SENTINEL/],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -328,7 +328,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -356,7 +356,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -386,7 +386,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -410,7 +410,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -440,7 +440,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.html'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -465,7 +465,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -486,7 +486,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -522,7 +522,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.ejs'],
-                showDirContents: true,
+                dirListing: { enabled: true },
                 template: {
                     ext: ['ejs'],
                     render: async (ctx, next, filePath) => {
@@ -573,7 +573,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);
@@ -615,7 +615,7 @@ describe('DT_UNKNOWN filesystem support (NixOS buildFHSEnv, overlayfs, FUSE)', (
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.html', 'index.ejs'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             const server = app.listen();
             const request = supertest(server);

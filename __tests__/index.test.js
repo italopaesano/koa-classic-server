@@ -33,7 +33,7 @@ const filesAndDirArray = getFilesRecursivelySync(rootDir);
 const options0 = {  
   urlPrefix: '/public', // Il prefisso URL che il middleware dovrà intercettare
   method: ['GET'],// I metodi HTTP ammessi (default 'GET')
-  showDirContents: true,// Se mostrare il contenuto della directory in caso di richiesta ad una cartella
+  dirListing: { enabled: true },// Se mostrare il contenuto della directory in caso di richiesta ad una cartella
   //index: 'index.html', // Nome del file index da cercare all'interno di una directory (se presente)
 };
 
@@ -79,7 +79,7 @@ describe(` koaClassicServer options0: ${JSON.stringify(options0)}`, () => {
 //START option1
 const options1 = {
   method: ['GET'],
-  showDirContents: true,
+  dirListing: { enabled: true },
 };
 
 describe(` koaClassicServer options1: ${JSON.stringify(options1)}`, () => {
@@ -114,7 +114,7 @@ describe(` koaClassicServer options1: ${JSON.stringify(options1)}`, () => {
 //STASRT option2
 const options2 = {
   method: ['GET'],
-  showDirContents: false,
+  dirListing: { enabled: false },
   index: ['index.html'],
 };
 
@@ -141,7 +141,7 @@ describe(` koaClassicServer options2: ${JSON.stringify(options2)}`, () => {
 //STASRT option3
 const options3 = {
   method: ['GET'],
-  showDirContents: false,
+  dirListing: { enabled: false },
   urlsReserved : Array('/percorso_riservato', '/percorso riservato con spazi')
 };
 
@@ -188,7 +188,7 @@ describe(` koaClassicServer options2: ${JSON.stringify(options2)}`, () => {
   // I metodi HTTP ammessi (default 'GET')
   method: ['GET'],
   // Se mostrare il contenuto della directory in caso di richiesta ad una cartella
-  showDirContents: true,
+  dirListing: { enabled: true },
   // Nome del file index da cercare all'interno di una directory (se presente)
   //index: 'index.html',
 }; */
@@ -268,7 +268,7 @@ function testAllPathByFileList(filesAndDirArray, getServer, options) {
             const responseBody = res.text !== undefined ? res.text : res.body.toString('utf8');
             expect(responseBody).toBe(content);
           } else {//è una directory
-            if( options.showDirContents === false ){
+            if( options.dirListing && options.dirListing.enabled === false ){
               // FIX: Quando directory listing è disabilitato, restituisce 404
               expect(res.status).toBe(404);
               expect(res.type).toBe('text/html');

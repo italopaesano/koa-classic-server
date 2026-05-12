@@ -31,7 +31,7 @@ describe('hideExtension option tests', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 index: ['index.ejs'],
                 hideExtension: { ext: '.ejs' },
                 template: {
@@ -83,7 +83,7 @@ describe('hideExtension option tests', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 index: ['index.ejs'],
                 hideExtension: { ext: '.ejs' },
                 template: {
@@ -141,7 +141,7 @@ describe('hideExtension option tests', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 index: ['index.ejs'],
                 hideExtension: { ext: '.ejs', redirect: 302 }
             }));
@@ -159,15 +159,15 @@ describe('hideExtension option tests', () => {
     });
 
     // ==========================================
-    // Directory/file conflict (showDirContents: true)
+    // Directory/file conflict (dirListing: { enabled: true })
     // ==========================================
-    describe('Directory/file conflict with showDirContents: true', () => {
+    describe('Directory/file conflict with dirListing: { enabled: true }', () => {
         let app, server, request;
 
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 index: ['index.html'],
                 hideExtension: { ext: '.ejs' },
                 template: {
@@ -208,7 +208,7 @@ describe('hideExtension option tests', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 hideExtension: { ext: '.ejs' }
             }));
             server = app.listen();
@@ -232,7 +232,7 @@ describe('hideExtension option tests', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 hideExtension: { ext: '.ejs' },
                 template: {
                     ext: ['ejs'],
@@ -275,7 +275,7 @@ describe('hideExtension option tests', () => {
             });
 
             const middleware = koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 index: ['index.ejs'],
                 urlsReserved: ['/blog'],
                 hideExtension: { ext: '.ejs' },
@@ -335,7 +335,7 @@ describe('hideExtension option tests', () => {
             });
 
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 useOriginalUrl: false,
                 hideExtension: { ext: '.ejs' },
                 template: {
@@ -377,7 +377,7 @@ describe('hideExtension option tests', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 hideExtension: { ext: '.ejs' }
             }));
             server = app.listen();
@@ -404,7 +404,7 @@ describe('hideExtension option tests', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 hideExtension: { ext: '.ejs' }
             }));
             server = app.listen();
@@ -442,7 +442,7 @@ describe('hideExtension option tests', () => {
         beforeAll(() => {
             app = new Koa();
             app.use(koaClassicServer(rootDir, {
-                showDirContents: true,
+                dirListing: { enabled: true },
                 index: ['index.ejs'],
                 hideExtension: { ext: '.ejs' },
                 template: {

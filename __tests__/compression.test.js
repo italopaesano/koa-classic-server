@@ -12,7 +12,7 @@ const root = path.join(__dirname, 'compression-fixtures');
 
 function createApp(opts = {}) {
     const app = new Koa();
-    app.use(koaClassicServer(root, { showDirContents: false, ...opts }));
+    app.use(koaClassicServer(root, { dirListing: { enabled: false }, ...opts }));
     return app.listen();
 }
 

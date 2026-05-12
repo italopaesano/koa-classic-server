@@ -28,7 +28,7 @@ const fixturesDir = path.join(__dirname, 'server-cache-fixtures');
 
 function createApp(opts = {}) {
     const app = new Koa();
-    app.use(koaClassicServer(fixturesDir, { showDirContents: false, ...opts }));
+    app.use(koaClassicServer(fixturesDir, { dirListing: { enabled: false }, ...opts }));
     return app.listen();
 }
 
@@ -124,7 +124,7 @@ describe('serverCache.rawFile — cache invalidation on file change', () => {
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
-            showDirContents: false,
+            dirListing: { enabled: false },
             serverCache: { rawFile: { enabled: true } }
         }));
         server = app.listen();
@@ -216,7 +216,7 @@ describe('serverCache.rawFile.maxAge — time-based staleness', () => {
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
-            showDirContents: false,
+            dirListing: { enabled: false },
             serverCache: { rawFile: { enabled: true, maxAge: 100 } }
         }));
         server = app.listen();
@@ -260,7 +260,7 @@ describe('serverCache.rawFile.maxAge — disabled (0) preserves previous behavio
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
-            showDirContents: false,
+            dirListing: { enabled: false },
             serverCache: { rawFile: { enabled: true, maxAge: 0 } }
         }));
         server = app.listen();
@@ -294,7 +294,7 @@ describe('serverCache.compressedFile.maxAge — time-based staleness', () => {
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
-            showDirContents: false,
+            dirListing: { enabled: false },
             serverCache: { compressedFile: { maxAge: 100 } }
         }));
         server = app.listen();
@@ -447,7 +447,7 @@ describe('serverCache.rawFile — LFU eviction when maxSize exceeded', () => {
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
-            showDirContents: false,
+            dirListing: { enabled: false },
             serverCache: {
                 rawFile: {
                     enabled: true,
@@ -492,7 +492,7 @@ describe('serverCache.rawFile — warnInterval throttles warnings', () => {
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
-            showDirContents: false,
+            dirListing: { enabled: false },
             serverCache: {
                 rawFile: {
                     enabled: true,
@@ -531,7 +531,7 @@ describe('serverCache.rawFile — buffer passed as 4th param to render function'
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
-            showDirContents: false,
+            dirListing: { enabled: false },
             serverCache: { rawFile: { enabled: true } },
             template: {
                 ext: ['tmpl'],
@@ -575,7 +575,7 @@ describe('serverCache.rawFile — buffer passed as 4th param to render function'
         let bufferWhenDisabled;
         const appNoCache = new Koa();
         appNoCache.use(koaClassicServer(tmpDir, {
-            showDirContents: false,
+            dirListing: { enabled: false },
             // rawFile.enabled: false by default
             template: {
                 ext: ['tmpl'],

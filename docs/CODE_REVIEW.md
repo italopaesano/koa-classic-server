@@ -1,5 +1,7 @@
 # Code Review - koa-classic-server
 
+> **Nota storica:** questo documento è uno snapshot di code review precedente al refactor V3. Riferimenti a `showDirContents` corrispondono a `dirListing.enabled` nell'API V3 corrente. Vedi [README.md → Migration Guide](../README.md#from-v2x-to-v3x).
+
 ## Analisi Generale del Codice
 
 Data: 2025-11-18

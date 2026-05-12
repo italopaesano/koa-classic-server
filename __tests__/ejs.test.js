@@ -19,7 +19,7 @@ describe('EJS Template Engine Integration Tests', () => {
         app.use(
             koaClassicServer(rootDir, {
                 method: ['GET'],
-                showDirContents: true,
+                dirListing: { enabled: true },
                 template: {
                     ext: ['ejs'],
                     render: async (ctx, next, filePath) => {

@@ -242,7 +242,7 @@ Il directory listing processa le entry in batch da 64 elementi con `Promise.all(
 
 **Soluzione proposta**
 
-1. Aggiungere un'opzione `maxDirEntries` (default: es. `1000`) che tronca il listing e mostra un avviso.
+1. Aggiungere un'opzione `dirListing.maxEntries` (default: es. `10000`) che tronca il listing e mostra un avviso.
 2. Aggiungere paginazione opzionale al directory listing.
 
 ---
@@ -271,9 +271,9 @@ Il directory listing processa le entry in batch da 64 elementi con `Promise.all(
 
 **Contesto**
 
-La prima implementazione di N-2 (v3.0.0-alpha.0) usava `fs.promises.opendir()` con async iterator per limitare la lettura a `maxDirEntries` entry e bounded la RAM indipendentemente dalla dimensione su disco. I benchmark hanno mostrato una regressione di latenza di 3-4× sui listing rispetto a v2 (es. dir 10k file: 90 ms → 405 ms), dovuta all'overhead di una `Promise` per ogni entry nell'async iterator.
+La prima implementazione di N-2 (v3.0.0-alpha.0) usava `fs.promises.opendir()` con async iterator per limitare la lettura a `dirListing.maxEntries` entry e bounded la RAM indipendentemente dalla dimensione su disco. I benchmark hanno mostrato una regressione di latenza di 3-4× sui listing rispetto a v2 (es. dir 10k file: 90 ms → 405 ms), dovuta all'overhead di una `Promise` per ogni entry nell'async iterator.
 
-Prima del rilascio è stato applicato un fix (vedi commit di v3.0.0-alpha.0): la lettura è tornata a usare `fs.promises.readdir({ withFileTypes: true })` seguita da `slice(0, maxDirEntries)`. Recupera le performance v2, ma **rinuncia alla garanzia "RAM bounded regardless of disk size"**: una directory con milioni di file alloca milioni di Dirent prima dello slicing.
+Prima del rilascio è stato applicato un fix (vedi commit di v3.0.0-alpha.0): la lettura è tornata a usare `fs.promises.readdir({ withFileTypes: true })` seguita da `slice(0, dirListing.maxEntries)`. Recupera le performance v2, ma **rinuncia alla garanzia "RAM bounded regardless of disk size"**: una directory con milioni di file alloca milioni di Dirent prima dello slicing.
 
 **Decisione v3.0**
 
@@ -281,21 +281,23 @@ Per il caso d'uso primario (servire asset statici controllati dall'operatore) la
 
 **Proposta per v3.1**
 
-Aggiungere un'opzione `dirReadMode` (`'fast' | 'bounded'`, default `'fast'`):
+Aggiungere un'opzione `dirListing.readMode` (`'fast' | 'bounded'`, default `'fast'`):
 
 ```javascript
 app.use(koaClassicServer(rootDir, {
-  maxDirEntries: 1000,
-  dirReadMode:   'bounded',   // opendir() streaming, RAM bounded a O(maxDirEntries)
+  dirListing: {
+    maxEntries: 1000,
+    readMode:   'bounded',   // opendir() streaming, RAM bounded a O(maxEntries)
+  }
 }));
 ```
 
 - `'fast'` (default) — comportamento v3.0: readdir + slice, performance v2-class
-- `'bounded'` — opendir async iterator: lettura interrotta a `maxDirEntries`, RAM bounded indipendentemente dalla dimensione su disco, latenza più alta sui listing
+- `'bounded'` — opendir async iterator: lettura interrotta a `dirListing.maxEntries`, RAM bounded indipendentemente dalla dimensione su disco, latenza più alta sui listing
 
 Trade-off documentato chiaramente nella user-facing doc. Da valutare prima del freeze 3.1:
 - Test simmetrici nelle due modalità
-- Validazione factory (`dirReadMode` ∈ `{'fast', 'bounded'}`)
+- Validazione factory (`dirListing.readMode` ∈ `{'fast', 'bounded'}`)
 - Aggiornamento README + DOCUMENTATION.md con esempio di scelta
 
 Il caso d'uso target di `'bounded'`: hosting multi-tenant con directory scrivibili da utenti (es. `/uploads`), backup server, log shipper con cartelle spool.

@@ -113,31 +113,50 @@ app.use(koaClassicServer('/public', {
 
 **Backward compatible:** when `logger` is omitted, the default is `console` — existing code and tests that spy on `console.error` / `console.warn` continue to work unchanged.
 
-#### `maxDirEntries` + `pageSize` — bounded and paginated directory listings (Security N-2)
+#### `dirListing` namespace — bounded and paginated directory listings (Security N-2)
 
-Two new top-level options harden the directory listing against indirect DoS via very large directories, and improve usability on big folders.
+A new namespaced option groups all directory-listing config together, replacing the v2-era flat `showDirContents` knob with a structured object. Hardens the listing against indirect DoS via very large directories and improves usability on big folders.
 
 ```js
 app.use(koaClassicServer('/public', {
-  maxDirEntries: 10000,   // hard cap on entries enumerated (default 10000; 0 = disabled)
-  pageSize:      100      // entries per page in the listing UI (default 100; 0 = disabled)
+  dirListing: {
+    enabled:        true,    // render listing HTML when no index file matches (default: true)
+    maxEntries:     10000,   // hard cap on visible / sorted / stat'd entries (default; 0 = disabled)
+    entriesPerPage: 100,     // entries per page in the listing UI (default; 0 = disabled)
+  }
 }));
 ```
 
-**maxDirEntries**
+**dirListing.enabled**
+- Replaces the v2 top-level `showDirContents`. Accepts `true` / `false`. When `false`, requests for a directory without a matching index file return 404 instead of an HTML listing.
+
+**dirListing.maxEntries**
 - Caps how many entries are sorted, stat'd, and rendered per directory listing. Excess entries trigger a yellow banner at the top of the page and an `X-Dir-Truncated: <N>` response header so monitoring can distinguish capped listings.
 - Implementation: the middleware calls `fs.promises.readdir()` once and then slices the result. This bounds rendering and CPU cost but **not** the size of the initial `readdir()` allocation. For typical static-file servers (where the directory contents are controlled by the operator) this is the right trade-off — it recovers v2-class listing performance.
 - Default `10000` is permissive enough for normal use while bounding rendering cost on accidentally-large folders.
-- **Caveat for adversarial workloads:** if you serve a directory writable by untrusted parties, an attacker creating millions of files could still force a large `readdir()` allocation. Tracked for v3.1 as an opt-in streaming read mode — see `docs/security_improvement_for_V3.md` → *Future Work*.
+- **Caveat for adversarial workloads:** if you serve a directory writable by untrusted parties, an attacker creating millions of files could still force a large `readdir()` allocation. Tracked for v3.1 as opt-in streaming reads — see `docs/security_improvement_for_V3.md` → *Future Work* → *[F-1]*.
 
-**pageSize**
-- Pagination kicks in only when the visible entries exceed `pageSize`; small directories render in a single page exactly like before.
+**dirListing.entriesPerPage**
+- Pagination kicks in only when the visible entries exceed `entriesPerPage`; small directories render in a single page exactly like before.
 - The current page is selected by `?page=N` (0-based). Invalid or out-of-range values clamp silently to the nearest valid page.
 - A numbered paginator (`« First | ‹ Prev | 0 1 … N-1 | Next › | Last »`) is rendered below the table, preserving any active `sort`/`order`. An `X-Dir-Pagination: <current>/<last>` header is also emitted.
 
-**CSP impact:** the listing CSS now includes rules for `.kcs-banner` and `.kcs-pagination`. The page's CSP hash is auto-recomputed at module load (no manual config change needed).
+**Migration from v2 / v3.0.0-alpha.0**
 
-**Backward compatibility:** sites that always served small directories see no visible change beyond the new headers, which are only set when applicable.
+The factory throws helpful errors for the three legacy names — your editor's stack trace points you to the new shape:
+
+```
+options.showDirContents was relocated in v3.0.0.
+  Replace with: dirListing: { enabled: true }
+
+options.maxDirEntries was relocated in v3.0.0.
+  Replace with: dirListing: { maxEntries: 10000 }
+
+options.pageSize was relocated and renamed in v3.0.0.
+  Replace with: dirListing: { entriesPerPage: 100 }
+```
+
+**CSP impact:** the listing CSS now includes rules for `.kcs-banner` and `.kcs-pagination`. The page's CSP hash is auto-recomputed at module load (no manual config change needed).
 
 ### 📝 Documentation
 

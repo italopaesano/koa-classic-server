@@ -20,7 +20,7 @@ const configurations = [
     options: {
       //urlPrefix: '/',
       method: ['GET'],
-      showDirContents: true,
+      dirListing: { enabled: true },
     },
   },
   {
@@ -31,7 +31,7 @@ const configurations = [
     options: {
       urlPrefix: '/public',
       method: ['GET'],
-      showDirContents: true,
+      dirListing: { enabled: true },
       index: ['index.html'],
     },
   },
@@ -43,7 +43,7 @@ const configurations = [
     options: {
       urlPrefix: '/public',
       method: ['GET'],
-      showDirContents: true,
+      dirListing: { enabled: true },
     },
   },
   {
@@ -54,7 +54,7 @@ const configurations = [
     options: {
       urlPrefix: '',
       method: ['GET'],
-      showDirContents: true,
+      dirListing: { enabled: true },
       urlsReserved : Array('/percorso_riservato', '/percorso riservato con spazi')
     },
   },

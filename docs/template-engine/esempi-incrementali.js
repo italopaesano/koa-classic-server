@@ -157,7 +157,7 @@ app.use(
   classicServer(
     __dirname + "/examples",
     {
-      showDirContents: true,
+      dirListing: { enabled: true },
       template: {
         render: templateRender,
         ext: ["ejs", "EJS"],

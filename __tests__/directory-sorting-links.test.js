@@ -13,7 +13,7 @@ describe('Directory Sorting Links Bug Tests', () => {
 
         app.use(koaClassicServer(publicDir, {
             method: ['GET'],
-            showDirContents: true
+            dirListing: { enabled: true }
         }));
 
         server = app.listen();

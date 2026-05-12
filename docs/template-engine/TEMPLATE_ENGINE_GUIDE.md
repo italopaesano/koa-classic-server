@@ -127,7 +127,7 @@ const path = require('path');
 const app = new Koa();
 
 app.use(koaClassicServer(path.join(__dirname, 'public'), {
-  showDirContents: true,
+  dirListing: { enabled: true },
   template: {
     ext: ['ejs'],
     render: async (ctx, next, filePath) => {
@@ -427,7 +427,7 @@ app.use(
   koaClassicServer(
     __dirname + '/public',
     {
-      showDirContents: true,
+      dirListing: { enabled: true },
       template: {
         render: async (ctx, next, filePath) => {
           try {
@@ -467,7 +467,7 @@ app.use(
   koaClassicServer(
     __dirname + '/public',
     {
-      showDirContents: true,
+      dirListing: { enabled: true },
       template: {
         render: async (ctx, next, filePath) => {
           try {
@@ -540,7 +540,7 @@ app.use(
   koaClassicServer(
     __dirname + '/public',
     {
-      showDirContents: true,
+      dirListing: { enabled: true },
       template: {
         render: async (ctx, next, filePath) => {
           try {
@@ -680,7 +680,7 @@ app.use(
   koaClassicServer(
     __dirname + `${ital8Conf.wwwPath}`,
     {
-      showDirContents: true,
+      dirListing: { enabled: true },
       urlsReserved: ['/' + ital8Conf.adminPrefix, '/' + ital8Conf.apiPrefix, '/' + ital8Conf.viewsPrefix],
       template: {
         render: async (ctx, next, filePath) => {

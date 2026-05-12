@@ -11,7 +11,7 @@ const FILE_CONTENT = '0123456789abcdefghij';
 
 function createApp(opts = {}) {
     const app = new Koa();
-    app.use(koaClassicServer(root, { showDirContents: false, ...opts }));
+    app.use(koaClassicServer(root, { dirListing: { enabled: false }, ...opts }));
     return app.listen();
 }
 
@@ -29,7 +29,7 @@ describe('Range — Accept-Ranges header', () => {
     });
 
     test('Accept-Ranges not added to directory listings', async () => {
-        const listServer = createApp({ showDirContents: true });
+        const listServer = createApp({ dirListing: { enabled: true } });
         const res = await supertest(listServer).get('/');
         listServer.close();
         expect(res.headers['accept-ranges']).toBeUndefined();

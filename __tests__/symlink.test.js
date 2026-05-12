@@ -124,7 +124,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.html'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             server = app.listen();
             request = supertest(server);
@@ -150,7 +150,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.ejs'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             server = app.listen();
             request = supertest(server);
@@ -177,7 +177,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             server = app.listen();
             request = supertest(server);
@@ -210,7 +210,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.ejs'],
-                showDirContents: true,
+                dirListing: { enabled: true },
                 template: {
                     ext: ['ejs'],
                     render: async (ctx, next, filePath) => {
@@ -244,7 +244,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             server = app.listen();
             request = supertest(server);
@@ -275,7 +275,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             server = app.listen();
             request = supertest(server);
@@ -301,7 +301,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             server = app.listen();
             request = supertest(server);
@@ -330,7 +330,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: ['index.html'],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             server = app.listen();
             request = supertest(server);
@@ -356,7 +356,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             server = app.listen();
             request = supertest(server);
@@ -422,7 +422,7 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             const app = new Koa();
             app.use(koaClassicServer(tmpDir, {
                 index: [/index\.[eE][jJ][sS]/],
-                showDirContents: true
+                dirListing: { enabled: true }
             }));
             server = app.listen();
             request = supertest(server);

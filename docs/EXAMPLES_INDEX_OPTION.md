@@ -339,7 +339,7 @@ const app = new Koa();
 // Configurazione production-ready
 app.use(koaClassicServer('./public', {
     method: ['GET', 'HEAD'],
-    showDirContents: true,
+    dirListing: { enabled: true },
 
     // Index configuration con fallback multipli
     index: [

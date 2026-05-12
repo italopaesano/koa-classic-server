@@ -28,55 +28,83 @@ function countDataRows(html) {
     const m = html.match(/<tbody>([\s\S]*?)<\/tbody>/);
     if (!m) return 0;
     const rows = m[1].match(/<tr>/g) || [];
-    // Discount the optional "..Parent Directory" row.
     const parent = (m[1].match(/Parent Directory/g) || []).length;
     return rows.length - parent;
 }
 
-describe('maxDirEntries and pageSize — factory validation', () => {
+describe('dirListing — factory validation', () => {
     const fakeRoot = path.join(__dirname, 'publicWwwTest');
 
     test.each([
-        ['maxDirEntries', -1],
-        ['maxDirEntries', 1.5],
-        ['maxDirEntries', NaN],
-        ['maxDirEntries', Infinity],
-        ['maxDirEntries', '100'],
-        ['pageSize', -1],
-        ['pageSize', 1.5],
-        ['pageSize', NaN],
-        ['pageSize', Infinity],
-        ['pageSize', '50'],
-    ])('rejects %s = %p', (name, value) => {
-        expect(() => koaClassicServer(fakeRoot, { [name]: value }))
-            .toThrow(new RegExp(`options\\.${name} must be a non-negative integer`));
+        ['maxEntries',     -1],
+        ['maxEntries',     1.5],
+        ['maxEntries',     NaN],
+        ['maxEntries',     Infinity],
+        ['maxEntries',     '100'],
+        ['entriesPerPage', -1],
+        ['entriesPerPage', 1.5],
+        ['entriesPerPage', NaN],
+        ['entriesPerPage', Infinity],
+        ['entriesPerPage', '50'],
+    ])('rejects dirListing.%s = %p', (name, value) => {
+        expect(() => koaClassicServer(fakeRoot, { dirListing: { [name]: value } }))
+            .toThrow(new RegExp(`options\\.dirListing\\.${name} must be a non-negative integer`));
     });
 
     test.each([
-        ['maxDirEntries', 0],
-        ['maxDirEntries', 1],
-        ['maxDirEntries', 100000],
-        ['pageSize', 0],
-        ['pageSize', 1],
-        ['pageSize', 10000],
-    ])('accepts %s = %p', (name, value) => {
-        expect(() => koaClassicServer(fakeRoot, { [name]: value })).not.toThrow();
+        ['maxEntries',     0],
+        ['maxEntries',     1],
+        ['maxEntries',     100000],
+        ['entriesPerPage', 0],
+        ['entriesPerPage', 1],
+        ['entriesPerPage', 10000],
+    ])('accepts dirListing.%s = %p', (name, value) => {
+        expect(() => koaClassicServer(fakeRoot, { dirListing: { [name]: value } })).not.toThrow();
+    });
+
+    test('rejects dirListing of wrong type (array)', () => {
+        expect(() => koaClassicServer(fakeRoot, { dirListing: [] }))
+            .toThrow(/options\.dirListing must be an object/);
+    });
+
+    test('rejects dirListing of wrong type (string)', () => {
+        expect(() => koaClassicServer(fakeRoot, { dirListing: 'true' }))
+            .toThrow(/options\.dirListing must be an object/);
     });
 });
 
-describe('maxDirEntries — truncation', () => {
+describe('dirListing — V3 migration guards (helpful errors for old names)', () => {
+    const fakeRoot = path.join(__dirname, 'publicWwwTest');
+
+    test('options.showDirContents throws with migration hint', () => {
+        expect(() => koaClassicServer(fakeRoot, { showDirContents: false }))
+            .toThrow(/showDirContents was relocated[\s\S]*dirListing: \{ enabled: false \}/);
+    });
+
+    test('options.maxDirEntries throws with migration hint', () => {
+        expect(() => koaClassicServer(fakeRoot, { maxDirEntries: 500 }))
+            .toThrow(/maxDirEntries was relocated[\s\S]*dirListing: \{ maxEntries: 500 \}/);
+    });
+
+    test('options.pageSize throws with migration hint pointing to entriesPerPage', () => {
+        expect(() => koaClassicServer(fakeRoot, { pageSize: 50 }))
+            .toThrow(/pageSize was relocated and renamed[\s\S]*dirListing: \{ entriesPerPage: 50 \}/);
+    });
+});
+
+describe('dirListing.maxEntries — truncation', () => {
     let tmpDir, server;
     beforeAll(() => {
         const names = Array.from({ length: 50 }, (_, i) => `f${String(i).padStart(3, '0')}.txt`);
         tmpDir = makeDir('kcs-cap-', names);
-        server = makeApp(tmpDir, { maxDirEntries: 10, pageSize: 0 });
+        server = makeApp(tmpDir, { dirListing: { maxEntries: 10, entriesPerPage: 0 } });
     });
     afterAll(() => {
         server.close();
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    test('caps the visible entries to maxDirEntries', async () => {
+    test('caps the visible entries to dirListing.maxEntries', async () => {
         const res = await supertest(server).get('/');
         expect(res.status).toBe(200);
         expect(countDataRows(res.text)).toBe(10);
@@ -87,18 +115,19 @@ describe('maxDirEntries — truncation', () => {
         expect(res.headers['x-dir-truncated']).toBe('10');
     });
 
-    test('renders the truncation banner with the kcs-banner class', async () => {
+    test('renders the truncation banner referencing dirListing.maxEntries', async () => {
         const res = await supertest(server).get('/');
         expect(res.text).toMatch(/<div class="kcs-banner">/);
         expect(res.text).toMatch(/Showing first 10 entries/);
+        expect(res.text).toMatch(/dirListing\.maxEntries/);
     });
 });
 
-describe('maxDirEntries — under the cap', () => {
+describe('dirListing.maxEntries — under the cap', () => {
     let tmpDir, server;
     beforeAll(() => {
         tmpDir = makeDir('kcs-undercap-', ['a.txt', 'b.txt', 'c.txt']);
-        server = makeApp(tmpDir, { maxDirEntries: 100, pageSize: 0 });
+        server = makeApp(tmpDir, { dirListing: { maxEntries: 100, entriesPerPage: 0 } });
     });
     afterAll(() => {
         server.close();
@@ -107,20 +136,18 @@ describe('maxDirEntries — under the cap', () => {
 
     test('no truncation banner when entries <= cap', async () => {
         const res = await supertest(server).get('/');
-        // The "kcs-banner" class always appears in <style>; the banner ELEMENT
-        // is only present in the body.
         const bodyOnly = res.text.replace(/<style>[\s\S]*?<\/style>/, '');
         expect(bodyOnly).not.toMatch(/<div class="kcs-banner">/);
         expect(res.headers['x-dir-truncated']).toBeUndefined();
     });
 });
 
-describe('maxDirEntries: 0 — cap disabled', () => {
+describe('dirListing.maxEntries: 0 — cap disabled', () => {
     let tmpDir, server;
     beforeAll(() => {
         const names = Array.from({ length: 25 }, (_, i) => `f${i}.txt`);
         tmpDir = makeDir('kcs-cap-off-', names);
-        server = makeApp(tmpDir, { maxDirEntries: 0, pageSize: 0 });
+        server = makeApp(tmpDir, { dirListing: { maxEntries: 0, entriesPerPage: 0 } });
     });
     afterAll(() => {
         server.close();
@@ -134,19 +161,19 @@ describe('maxDirEntries: 0 — cap disabled', () => {
     });
 });
 
-describe('pageSize — pagination', () => {
+describe('dirListing.entriesPerPage — pagination', () => {
     let tmpDir, server;
     beforeAll(() => {
         const names = Array.from({ length: 350 }, (_, i) => `f${String(i).padStart(3, '0')}.txt`);
         tmpDir = makeDir('kcs-page-', names);
-        server = makeApp(tmpDir, { maxDirEntries: 0, pageSize: 100 });
+        server = makeApp(tmpDir, { dirListing: { maxEntries: 0, entriesPerPage: 100 } });
     });
     afterAll(() => {
         server.close();
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    test('first page (page=0 default) returns pageSize rows', async () => {
+    test('first page (page=0 default) returns entriesPerPage rows', async () => {
         const res = await supertest(server).get('/');
         expect(countDataRows(res.text)).toBe(100);
         expect(res.headers['x-dir-pagination']).toBe('0/3'); // 4 total pages → indexes 0..3
@@ -169,7 +196,7 @@ describe('pageSize — pagination', () => {
         expect(res.text).not.toContain('f099.txt');
     });
 
-    test('?page=3 (last) returns the trailing slice with fewer than pageSize rows', async () => {
+    test('?page=3 (last) returns the trailing slice with fewer than entriesPerPage rows', async () => {
         const res = await supertest(server).get('/?page=3');
         expect(countDataRows(res.text)).toBe(50);
         expect(res.headers['x-dir-pagination']).toBe('3/3');
@@ -205,12 +232,12 @@ describe('pageSize — pagination', () => {
     });
 });
 
-describe('pageSize — out-of-range clamping', () => {
+describe('dirListing.entriesPerPage — out-of-range clamping', () => {
     let tmpDir, server;
     beforeAll(() => {
         const names = Array.from({ length: 250 }, (_, i) => `f${String(i).padStart(3, '0')}.txt`);
         tmpDir = makeDir('kcs-clamp-', names);
-        server = makeApp(tmpDir, { maxDirEntries: 0, pageSize: 100 });
+        server = makeApp(tmpDir, { dirListing: { maxEntries: 0, entriesPerPage: 100 } });
     });
     afterAll(() => {
         server.close();
@@ -234,11 +261,11 @@ describe('pageSize — out-of-range clamping', () => {
     });
 });
 
-describe('pageSize — no pagination when entries <= pageSize', () => {
+describe('dirListing.entriesPerPage — no pagination when entries <= entriesPerPage', () => {
     let tmpDir, server;
     beforeAll(() => {
         tmpDir = makeDir('kcs-nopage-', ['a.txt', 'b.txt']);
-        server = makeApp(tmpDir, { maxDirEntries: 0, pageSize: 100 });
+        server = makeApp(tmpDir, { dirListing: { maxEntries: 0, entriesPerPage: 100 } });
     });
     afterAll(() => {
         server.close();
@@ -258,7 +285,7 @@ describe('pagination — preserves sort/order in links', () => {
     beforeAll(() => {
         const names = Array.from({ length: 150 }, (_, i) => `f${String(i).padStart(3, '0')}.txt`);
         tmpDir = makeDir('kcs-sortpage-', names);
-        server = makeApp(tmpDir, { maxDirEntries: 0, pageSize: 50 });
+        server = makeApp(tmpDir, { dirListing: { maxEntries: 0, entriesPerPage: 50 } });
     });
     afterAll(() => {
         server.close();
@@ -279,7 +306,7 @@ describe('cap + pagination combined', () => {
         const names = Array.from({ length: 250 }, (_, i) => `f${String(i).padStart(3, '0')}.txt`);
         tmpDir = makeDir('kcs-cap-page-', names);
         // Cap to 80, paginate by 25 → 80/25 = 4 pages (last has 5)
-        server = makeApp(tmpDir, { maxDirEntries: 80, pageSize: 25 });
+        server = makeApp(tmpDir, { dirListing: { maxEntries: 80, entriesPerPage: 25 } });
     });
     afterAll(() => {
         server.close();
@@ -290,5 +317,22 @@ describe('cap + pagination combined', () => {
         const res = await supertest(server).get('/');
         expect(res.headers['x-dir-truncated']).toBe('80');
         expect(res.headers['x-dir-pagination']).toBe('0/3'); // 4 pages (80/25 rounded up)
+    });
+});
+
+describe('dirListing.enabled (V3 namespace switch)', () => {
+    let tmpDir, server;
+    beforeAll(() => {
+        tmpDir = makeDir('kcs-disabled-', ['a.txt', 'b.txt']);
+    });
+    afterAll(() => {
+        if (server) server.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('dirListing.enabled = false returns 404 instead of listing HTML', async () => {
+        server = makeApp(tmpDir, { dirListing: { enabled: false } });
+        const res = await supertest(server).get('/');
+        expect(res.status).toBe(404);
     });
 });

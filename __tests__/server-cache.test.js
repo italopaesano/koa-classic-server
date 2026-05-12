@@ -232,12 +232,9 @@ describe('serverCache.rawFile.maxAge — time-based staleness', () => {
         expect(first.text).toBe('version-A');
 
         // Replace content but freeze mtime to its original value (simulates NFS lying about mtime).
+        // Length must stay identical so the size check doesn't invalidate independently of maxAge.
         const originalStat = fs.statSync(filePath);
-        fs.writeFileSync(filePath, 'version-A2'); // same length, different bytes
-        fs.utimesSync(filePath, originalStat.atime, originalStat.mtime);
-
-        // Length differs → cache miss by size check, not by maxAge. We need to keep size identical.
-        fs.writeFileSync(filePath, 'version-B'); // same 9 bytes
+        fs.writeFileSync(filePath, 'version-B'); // same 9 bytes as 'version-A'
         fs.utimesSync(filePath, originalStat.atime, originalStat.mtime);
 
         // Within maxAge → stale check passes → still serves cached A

@@ -92,6 +92,27 @@ app.use(koaClassicServer('/public', {
 
 Internally a new `LFUCache.refresh(key, fields)` method updates the entry in place while preserving its LFU frequency, so popular files refreshed by `maxAge` don't fall to the bottom of the eviction bucket.
 
+#### `logger` option — pluggable structured logging (Security N-1)
+
+All internal `console.error` / `console.warn` calls now route through an injectable logger. Pass any object that exposes `error(...)` and `warn(...)` methods — `console` (default), `pino`, `winston`, `bunyan`, or a custom adapter — to integrate with aggregated logging pipelines in production.
+
+```js
+const pino = require('pino')();
+
+app.use(koaClassicServer('/public', {
+  logger: pino
+}));
+```
+
+**Contract:**
+- Must be an object with `typeof logger.error === 'function'` and `typeof logger.warn === 'function'`
+- Invalid loggers (missing methods, non-objects, `null`, `false`, arrays) throw at factory time
+- Extra methods (`info`, `debug`, `fatal`, ...) are ignored — pass any superset freely
+
+**ANSI escape codes** in warning messages are only emitted when the logger is the global `console` (detected by reference). Structured loggers receive the plain text, keeping log aggregators clean.
+
+**Backward compatible:** when `logger` is omitted, the default is `console` — existing code and tests that spy on `console.error` / `console.warn` continue to work unchanged.
+
 ### ⚠️ Breaking Changes
 
 #### Dot-files hidden by default

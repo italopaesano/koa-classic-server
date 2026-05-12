@@ -122,11 +122,37 @@ function sendNotFound(ctx) {
     ctx.body = _NOT_FOUND_HTML;
 }
 
+// Validates and returns a logger compatible with our contract. The minimum
+// surface is `{ error: Function, warn: Function }` — any object exposing both
+// (console, pino, winston, bunyan, ...) is accepted as-is.
+function normalizeLogger(logger) {
+    if (logger === undefined) return console;
+    if (!logger || typeof logger !== 'object' || Array.isArray(logger)) {
+        throw new Error(
+            '[koa-classic-server] options.logger must be an object exposing error() and warn() methods.'
+        );
+    }
+    if (typeof logger.error !== 'function' || typeof logger.warn !== 'function') {
+        throw new Error(
+            '[koa-classic-server] options.logger must implement both error() and warn() methods.'
+        );
+    }
+    return logger;
+}
+
+// Yellow ANSI wrap, but only when writing to the actual console TTY. Structured
+// loggers (pino/winston/...) would otherwise receive escape bytes as noise.
+function warnPayload(logger, message) {
+    return logger === console
+        ? ['\x1b[33m%s\x1b[0m', message]
+        : [message];
+}
+
 // Sends an error response for a failed template render. If headers were already
 // flushed by the render itself, destroys the underlying socket instead (the
 // status/body can no longer be changed at that point).
-function sendTemplateError(ctx, status, html, logMsg, err) {
-    console.error(logMsg, err);
+function sendTemplateError(ctx, status, html, logMsg, err, logger) {
+    logger.error(logMsg, err);
     if (ctx.headerSent || ctx.res.writableEnded) {
         ctx.res.destroy();
         return;
@@ -146,7 +172,7 @@ function sendTemplateError(ctx, status, html, logMsg, err) {
 // client disconnect. Cooperative renders that propagate the signal to fetch/db
 // release backend resources promptly; non-cooperative renders still get a 504
 // response, but their work continues in the background.
-async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts) {
+async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts, logger) {
     if (templateOpts.ext.length === 0 || !templateOpts.render) return false;
 
     const fileExt = path.extname(filePath).slice(1);
@@ -163,7 +189,7 @@ async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts) {
     const renderPromise = Promise.resolve().then(() =>
         templateOpts.render(ctx, next, filePath, rawBuffer, controller.signal)
     );
-    renderPromise.catch(() => {}); // swallow late rejections after timeout
+    renderPromise.catch(() => {}); // swallow rejections that arrive after we've already responded
 
     try {
         if (timeoutMs > 0) {
@@ -185,10 +211,10 @@ async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts) {
     } catch (error) {
         if (timedOut || error.code === 'ETEMPLATETIMEOUT') {
             sendTemplateError(ctx, 504, _GATEWAY_TIMEOUT_HTML,
-                'Template render timeout after ' + timeoutMs + 'ms:', filePath);
+                'Template render timeout after ' + timeoutMs + 'ms:', filePath, logger);
         } else {
             sendTemplateError(ctx, 500, _TEMPLATE_ERROR_HTML,
-                'Template rendering error:', error);
+                'Template rendering error:', error, logger);
         }
     } finally {
         if (timer) clearTimeout(timer);
@@ -287,10 +313,11 @@ function parseRangeHeader(rangeHeader, fileSize) {
 // set(key, entry) — insert, evicting LFU entries if needed
 // delete(key) — remove explicitly (e.g. stale entry before re-insert)
 class LFUCache {
-    constructor(maxSize, warnInterval, cacheLabel) {
+    constructor(maxSize, warnInterval, cacheLabel, logger) {
         this.maxSize     = maxSize;
         this.warnInterval = warnInterval;
         this.cacheLabel  = cacheLabel;
+        this.logger      = logger || console;
         this.currentSize = 0;
         this._keyMap     = new Map(); // key → { buffer, mtime, size, insertedAt, freq }
         this._freqMap    = new Map(); // freq → Set<key>
@@ -375,7 +402,6 @@ class LFUCache {
         if (!this._freqMap.has(freq)) this._freqMap.set(freq, new Set());
         this._freqMap.get(freq).add(key);
     }
-
     _evictOne() {
         // Recover from stale _minFreq (can happen after consecutive evictions)
         while (this._freqMap.size > 0 && (!this._freqMap.has(this._minFreq) || this._freqMap.get(this._minFreq).size === 0)) {
@@ -396,10 +422,25 @@ class LFUCache {
         if (this.warnInterval !== false) {
             const now = Date.now();
             if (now - this._lastWarnAt >= this.warnInterval) {
-                console.warn(`[koa-classic-server] serverCache.${this.cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
+                this.logger.warn(`[koa-classic-server] serverCache.${this.cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
                 this._lastWarnAt = now;
             }
         }
+    }
+}
+
+// Upserts a fresh entry into an LFUCache. When the previous entry was only
+// stale-by-age (mtime + size unchanged), updates in place so the existing
+// frequency counter survives — important for popular files refreshed by maxAge.
+// Otherwise falls back to delete + set (frequency resets to 1).
+function refreshOrInsert(cache, key, newEntry, cached, staleByAge) {
+    const canRefreshInPlace = cached
+        && staleByAge
+        && cached.mtime === newEntry.mtime
+        && cached.size === newEntry.size;
+    if (!canRefreshInPlace || !cache.refresh(key, newEntry)) {
+        if (cached) cache.delete(key);
+        cache.set(key, newEntry);
     }
 }
 
@@ -479,6 +520,10 @@ module.exports = function koaClassicServer(
             mimeTypes: [],                // compressible MIME types (replaces default list if provided)
         },
         // compression: false            // shorthand to disable all compression
+        logger: console,    // Logger used for internal errors and warnings.
+                            // Must expose error(...) and warn(...). Pass pino/winston/bunyan
+                            // or any compatible object to integrate with aggregated logging.
+                            // Default: the global console.
 
     }
     */
@@ -494,6 +539,8 @@ module.exports = function koaClassicServer(
 
     const options = opts || {};
     options.template = opts.template || {};
+
+    const _logger = normalizeLogger(options.logger);
 
     options.method = Array.isArray(options.method) ? options.method : ['GET'];
     options.showDirContents = typeof options.showDirContents === 'boolean' ? options.showDirContents : true;
@@ -566,13 +613,12 @@ module.exports = function koaClassicServer(
         }
         // Normalize ext: add leading dot if missing
         if (!options.hideExtension.ext.startsWith('.')) {
-            console.warn(
-                '\x1b[33m%s\x1b[0m',
+            _logger.warn(...warnPayload(_logger,
                 '[koa-classic-server] WARNING: hideExtension.ext should start with a dot.\n' +
                 `  Current usage: ext: "${options.hideExtension.ext}"\n` +
                 `  Corrected to:  ext: ".${options.hideExtension.ext}"\n` +
                 '  Please update your configuration.'
-            );
+            ));
             options.hideExtension.ext = '.' + options.hideExtension.ext;
         }
         // Validate redirect code
@@ -634,14 +680,13 @@ module.exports = function koaClassicServer(
         const dotDirsImplicit  = opts.hidden?.dotDirs?.default  === undefined;
         if (dotFilesImplicit || dotDirsImplicit) {
             _hiddenDefaultWarnEmitted = true;
-            console.warn(
-                '\x1b[33m%s\x1b[0m',
+            _logger.warn(...warnPayload(_logger,
                 '[koa-classic-server] WARNING: hidden.dotFiles.default and/or hidden.dotDirs.default are not explicitly set.\n' +
                 '  Since v3.0.0 the defaults are: dotFiles → "hidden", dotDirs → "visible".\n' +
                 '  To suppress this warning, add to your configuration:\n' +
                 '    hidden: { dotFiles: { default: \'hidden\' }, dotDirs: { default: \'visible\' } }\n' +
                 '  (adjust values to match your desired behaviour)'
-            );
+            ));
         }
     }
 
@@ -865,7 +910,8 @@ module.exports = function koaClassicServer(
     const _rawFileCache = new LFUCache(
         serverCacheConfig.rawFile.maxSize,
         serverCacheConfig.rawFile.warnInterval,
-        'rawFile'
+        'rawFile',
+        _logger
     );
 
     // In-memory LFU cache for compressed file buffers (serverCache.compressedFile).
@@ -873,7 +919,8 @@ module.exports = function koaClassicServer(
     const _compressedFileCache = new LFUCache(
         serverCacheConfig.compressedFile.maxSize,
         serverCacheConfig.compressedFile.warnInterval,
-        'compressedFile'
+        'compressedFile',
+        _logger
     );
 
     // Returns the client's preferred encoding based on Accept-Encoding header,
@@ -958,7 +1005,7 @@ module.exports = function koaClassicServer(
                         );
                         fileNames = checkResults.filter(e => e.isFile).map(e => e.name);
                     } catch (error) {
-                        console.error('Error finding index file:', error);
+                        _logger.error('Error finding index file:', error);
                         return null;
                     }
                 }
@@ -1184,7 +1231,7 @@ module.exports = function koaClassicServer(
                 try {
                     fileStat = await fs.promises.stat(toOpen);
                 } catch (error) {
-                    console.error('File stat error:', error);
+                    _logger.error('File stat error:', error);
                     sendNotFound(ctx);
                     return;
                 }
@@ -1196,40 +1243,30 @@ module.exports = function koaClassicServer(
             if (serverCacheConfig.rawFile.enabled && fileStat.size <= serverCacheConfig.rawFile.maxFileSize) {
                 const cached = _rawFileCache.peek(toOpen);
                 const maxAge = serverCacheConfig.rawFile.maxAge;
-                const expiredByAge = maxAge > 0 && cached && (Date.now() - cached.insertedAt) >= maxAge;
+                const staleByAge = maxAge > 0 && cached && (Date.now() - cached.insertedAt) >= maxAge;
                 const fresh = cached
                     && cached.mtime === fileStat.mtime.getTime()
                     && cached.size === fileStat.size
-                    && !expiredByAge;
+                    && !staleByAge;
                 if (fresh) {
                     _rawFileCache.get(toOpen); // increment frequency
                     rawBuffer = cached.buffer;
                 } else {
                     try {
                         rawBuffer = await fs.promises.readFile(toOpen);
-                        const newEntry = {
+                        refreshOrInsert(_rawFileCache, toOpen, {
                             buffer: rawBuffer,
                             mtime: fileStat.mtime.getTime(),
                             size: fileStat.size,
                             insertedAt: Date.now(),
-                        };
-                        // If the entry was only stale-by-age (mtime+size still match),
-                        // refresh in place to preserve the existing LFU frequency.
-                        const canRefreshInPlace = cached
-                            && expiredByAge
-                            && cached.mtime === fileStat.mtime.getTime()
-                            && cached.size === fileStat.size;
-                        if (!canRefreshInPlace || !_rawFileCache.refresh(toOpen, newEntry)) {
-                            if (cached) _rawFileCache.delete(toOpen);
-                            _rawFileCache.set(toOpen, newEntry);
-                        }
+                        }, cached, staleByAge);
                     } catch {
                         rawBuffer = null; // Fall through to disk reads later
                     }
                 }
             }
 
-            if (await tryRenderTemplate(ctx, next, toOpen, rawBuffer, options.template)) {
+            if (await tryRenderTemplate(ctx, next, toOpen, rawBuffer, options.template, _logger)) {
                 return;
             }
 
@@ -1255,7 +1292,7 @@ module.exports = function koaClassicServer(
                 try {
                     await fs.promises.access(toOpen, fs.constants.R_OK);
                 } catch (error) {
-                    console.error('File access error:', error);
+                    _logger.error('File access error:', error);
                     sendNotFound(ctx);
                     return;
                 }
@@ -1296,7 +1333,7 @@ module.exports = function koaClassicServer(
                             } else {
                                 const src = fs.createReadStream(toOpen, { start, end });
                                 src.on('error', (err) => {
-                                    console.error('Stream error:', err);
+                                    _logger.error('Stream error:', err);
                                     if (!ctx.headerSent) {
                                         ctx.status = 500;
                                         ctx.body = 'Error reading file';
@@ -1374,11 +1411,11 @@ module.exports = function koaClassicServer(
                     const cacheKey = `${toOpen}:${encoding}`;
                     const cached = _compressedFileCache.peek(cacheKey);
                     const maxAge = serverCacheConfig.compressedFile.maxAge;
-                    const expiredByAge = maxAge > 0 && cached && (Date.now() - cached.insertedAt) >= maxAge;
+                    const staleByAge = maxAge > 0 && cached && (Date.now() - cached.insertedAt) >= maxAge;
                     const stale = !cached
                         || cached.mtime !== fileStat.mtime.getTime()
                         || cached.size !== fileStat.size
-                        || expiredByAge;
+                        || staleByAge;
 
                     let buf;
                     if (!stale) {
@@ -1390,22 +1427,14 @@ module.exports = function koaClassicServer(
                             const rawData = rawBuffer || await fs.promises.readFile(toOpen);
                             buf = await compressBuffer(rawData, encoding);
 
-                            const newEntry = {
+                            refreshOrInsert(_compressedFileCache, cacheKey, {
                                 buffer: buf,
                                 mtime: fileStat.mtime.getTime(),
                                 size: fileStat.size,
                                 insertedAt: Date.now(),
-                            };
-                            const canRefreshInPlace = cached
-                                && expiredByAge
-                                && cached.mtime === fileStat.mtime.getTime()
-                                && cached.size === fileStat.size;
-                            if (!canRefreshInPlace || !_compressedFileCache.refresh(cacheKey, newEntry)) {
-                                if (cached) _compressedFileCache.delete(cacheKey);
-                                _compressedFileCache.set(cacheKey, newEntry);
-                            }
+                            }, cached, staleByAge);
                         } catch (err) {
-                            console.error('Compression error:', err);
+                            _logger.error('Compression error:', err);
                             // Fall back to uncompressed on any compression failure
                             ctx.remove('Content-Encoding');
                             ctx.remove('Vary');
@@ -1422,7 +1451,7 @@ module.exports = function koaClassicServer(
                                 if (ctx.method !== 'HEAD') {
                                     const src = fs.createReadStream(toOpen);
                                     src.on('error', (streamErr) => {
-                                        console.error('Stream error:', streamErr);
+                                        _logger.error('Stream error:', streamErr);
                                         if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
                                     });
                                     ctx.body = src;
@@ -1457,7 +1486,7 @@ module.exports = function koaClassicServer(
                         } else {
                             const src = fs.createReadStream(toOpen);
                             src.on('error', (err) => {
-                                console.error('Stream error:', err);
+                                _logger.error('Stream error:', err);
                                 if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
                             });
                             ctx.body = src.pipe(compress);
@@ -1482,7 +1511,7 @@ module.exports = function koaClassicServer(
                     if (ctx.method !== 'HEAD') {
                         const src = fs.createReadStream(toOpen);
                         src.on('error', (err) => {
-                            console.error('Stream error:', err);
+                            _logger.error('Stream error:', err);
                             if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
                         });
                         ctx.body = src;
@@ -1501,7 +1530,7 @@ module.exports = function koaClassicServer(
             try {
                 dir = await fs.promises.readdir(toOpen, { withFileTypes: true });
             } catch (error) {
-                console.error('Directory read error:', error);
+                _logger.error('Directory read error:', error);
                 ctx.status = 500;
                 setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
                 return `

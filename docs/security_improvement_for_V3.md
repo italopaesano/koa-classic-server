@@ -20,7 +20,7 @@ Analisi di sicurezza del progetto `koa-classic-server` v3.0.0-alpha.0, con roadm
 - [ ] [M-4] Documentare i limiti dei security headers sui file statici *(Basso)*
 
 ### Nice-to-Have
-- [ ] [N-1] Logger iniettabile dall'esterno
+- [x] [N-1] Logger iniettabile dall'esterno
 - [ ] [N-2] Protezione contro directory listing con molti file (DoS)
 
 ---
@@ -256,5 +256,5 @@ Il directory listing processa le entry in batch da 64 elementi con `Promise.all(
 | M-2 | Cache staleness NFS | Media | Implementato |
 | M-3 | Documentare DNS Rebinding | Bassa | Da fare |
 | M-4 | Documentare limiti security headers | Bassa | Da fare |
-| N-1 | Logger iniettabile | Nice-to-have | Da valutare |
+| N-1 | Logger iniettabile | Nice-to-have | Implementato |
 | N-2 | Protezione DoS directory listing | Nice-to-have | Da valutare |

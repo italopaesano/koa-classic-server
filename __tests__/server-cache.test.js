@@ -156,6 +156,180 @@ describe('serverCache.rawFile — cache invalidation on file change', () => {
     });
 });
 
+// ─── maxAge: factory validation ───────────────────────────────────────────────
+
+describe('serverCache.*.maxAge — factory validation', () => {
+    test('rejects negative rawFile.maxAge', () => {
+        expect(() => koaClassicServer(fixturesDir, {
+            serverCache: { rawFile: { enabled: true, maxAge: -1 } }
+        })).toThrow(/rawFile\.maxAge must be a finite number/);
+    });
+
+    test('rejects NaN rawFile.maxAge', () => {
+        expect(() => koaClassicServer(fixturesDir, {
+            serverCache: { rawFile: { enabled: true, maxAge: NaN } }
+        })).toThrow(/rawFile\.maxAge must be a finite number/);
+    });
+
+    test('rejects Infinity rawFile.maxAge', () => {
+        expect(() => koaClassicServer(fixturesDir, {
+            serverCache: { rawFile: { enabled: true, maxAge: Infinity } }
+        })).toThrow(/rawFile\.maxAge must be a finite number/);
+    });
+
+    test('rejects string rawFile.maxAge', () => {
+        expect(() => koaClassicServer(fixturesDir, {
+            serverCache: { rawFile: { enabled: true, maxAge: '5000' } }
+        })).toThrow(/rawFile\.maxAge must be a finite number/);
+    });
+
+    test('rejects negative compressedFile.maxAge', () => {
+        expect(() => koaClassicServer(fixturesDir, {
+            serverCache: { compressedFile: { maxAge: -1 } }
+        })).toThrow(/compressedFile\.maxAge must be a finite number/);
+    });
+
+    test('accepts 0 (disabled) and positive integers', () => {
+        expect(() => koaClassicServer(fixturesDir, {
+            serverCache: { rawFile: { enabled: true, maxAge: 0 } }
+        })).not.toThrow();
+        expect(() => koaClassicServer(fixturesDir, {
+            serverCache: { rawFile: { enabled: true, maxAge: 1000 } }
+        })).not.toThrow();
+    });
+});
+
+// ─── maxAge: rawFile staleness ────────────────────────────────────────────────
+
+describe('serverCache.rawFile.maxAge — time-based staleness', () => {
+    // Verify maxAge triggers a fresh disk read even when mtime+size are unchanged.
+    // Simulates the NFS attribute-cache scenario by manually restoring mtime after
+    // editing the file, so the mtime-based invariant alone cannot detect the change.
+    let tmpDir;
+    let filePath;
+    let server;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-maxage-raw-'));
+        filePath = path.join(tmpDir, 'data.txt');
+        fs.writeFileSync(filePath, 'version-A');
+
+        const app = new Koa();
+        app.use(koaClassicServer(tmpDir, {
+            showDirContents: false,
+            serverCache: { rawFile: { enabled: true, maxAge: 100 } }
+        }));
+        server = app.listen();
+    });
+
+    afterAll(() => {
+        server.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('within maxAge: cache is served (no disk re-read)', async () => {
+        const first = await supertest(server).get('/data.txt').set('Accept-Encoding', 'identity');
+        expect(first.text).toBe('version-A');
+
+        // Replace content but freeze mtime to its original value (simulates NFS lying about mtime).
+        const originalStat = fs.statSync(filePath);
+        fs.writeFileSync(filePath, 'version-A2'); // same length, different bytes
+        fs.utimesSync(filePath, originalStat.atime, originalStat.mtime);
+
+        // Length differs → cache miss by size check, not by maxAge. We need to keep size identical.
+        fs.writeFileSync(filePath, 'version-B'); // same 9 bytes
+        fs.utimesSync(filePath, originalStat.atime, originalStat.mtime);
+
+        // Within maxAge → stale check passes → still serves cached A
+        const second = await supertest(server).get('/data.txt').set('Accept-Encoding', 'identity');
+        expect(second.text).toBe('version-A');
+    });
+
+    test('after maxAge: cache is refreshed (disk re-read) even when mtime+size unchanged', async () => {
+        await new Promise(r => setTimeout(r, 120)); // exceeds 100 ms maxAge
+
+        const third = await supertest(server).get('/data.txt').set('Accept-Encoding', 'identity');
+        expect(third.text).toBe('version-B');
+    });
+});
+
+describe('serverCache.rawFile.maxAge — disabled (0) preserves previous behaviour', () => {
+    let tmpDir;
+    let server;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-maxage-off-'));
+        fs.writeFileSync(path.join(tmpDir, 'stable.txt'), 'unchanged');
+
+        const app = new Koa();
+        app.use(koaClassicServer(tmpDir, {
+            showDirContents: false,
+            serverCache: { rawFile: { enabled: true, maxAge: 0 } }
+        }));
+        server = app.listen();
+    });
+
+    afterAll(() => {
+        server.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('cache served indefinitely while mtime+size unchanged', async () => {
+        await supertest(server).get('/stable.txt').set('Accept-Encoding', 'identity');
+        await new Promise(r => setTimeout(r, 150));
+        const res = await supertest(server).get('/stable.txt').set('Accept-Encoding', 'identity');
+        expect(res.status).toBe(200);
+        expect(res.text).toBe('unchanged');
+    });
+});
+
+// ─── maxAge: compressedFile staleness ─────────────────────────────────────────
+
+describe('serverCache.compressedFile.maxAge — time-based staleness', () => {
+    let tmpDir;
+    let filePath;
+    let server;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-maxage-cmp-'));
+        filePath = path.join(tmpDir, 'data.css');
+        fs.writeFileSync(filePath, 'a'.repeat(2048)); // above minSize=1024 to ensure compression
+
+        const app = new Koa();
+        app.use(koaClassicServer(tmpDir, {
+            showDirContents: false,
+            serverCache: { compressedFile: { maxAge: 100 } }
+        }));
+        server = app.listen();
+    });
+
+    afterAll(() => {
+        server.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('after maxAge, compressed cache is rebuilt from updated content', async () => {
+        const first = await supertest(server).get('/data.css').set('Accept-Encoding', 'gzip');
+        expect(first.status).toBe(200);
+        expect(first.headers['content-encoding']).toBe('gzip');
+        expect(first.text).toBe('a'.repeat(2048));
+
+        // Replace content with same length, freeze mtime to simulate NFS staleness.
+        const originalStat = fs.statSync(filePath);
+        fs.writeFileSync(filePath, 'b'.repeat(2048));
+        fs.utimesSync(filePath, originalStat.atime, originalStat.mtime);
+
+        // Within maxAge → cached gzip of A still served.
+        const second = await supertest(server).get('/data.css').set('Accept-Encoding', 'gzip');
+        expect(second.text).toBe('a'.repeat(2048));
+
+        // After maxAge → cache refreshed → gzip of B served.
+        await new Promise(r => setTimeout(r, 120));
+        const third = await supertest(server).get('/data.css').set('Accept-Encoding', 'gzip');
+        expect(third.text).toBe('b'.repeat(2048));
+    });
+});
+
 // ─── rawFile + Range requests ─────────────────────────────────────────────────
 
 describe('serverCache.rawFile — Range request served from buffer', () => {

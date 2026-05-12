@@ -481,18 +481,22 @@ module.exports = function koaClassicServer(
     opts STRUCTURE
      opts = {
         method: ['GET'], // Supported methods, otherwise next() will be called
-        showDirContents: true, // Show or hide directory contents
-        maxDirEntries: 10000,  // Cap on the entries shown / sorted / stat'd per directory listing.
-                               // The full directory is still read via fs.promises.readdir() — this
-                               // bounds the rendering and CPU cost, NOT the size of the initial
-                               // readdir() allocation. Excess entries are not shown: a banner +
-                               // the X-Dir-Truncated response header advertise the truncation.
-                               // Must be a finite integer >= 0; 0 = disabled (no cap).
-                               // For directories writable by untrusted parties, see the v3.1 TODO
-                               // in docs/security_improvement_for_V3.md on opt-in streaming reads.
-        pageSize: 100,         // Number of entries per directory listing page. Pagination kicks in only
-                               // when visible entries > pageSize. Page index via ?page=N (0-based);
-                               // out-of-range values are clamped silently. 0 disables pagination.
+        dirListing: {                   // Directory listing configuration (V3+).
+            enabled:        true,       // Render the directory listing HTML when no index file matches.
+                                        //   Set to false to return 404 instead of a listing.
+            maxEntries:     10000,      // Cap on entries shown / sorted / stat'd per listing.
+                                        //   Implementation: fs.promises.readdir() then slice(0, maxEntries).
+                                        //   Bounds the rendering / CPU cost, NOT the size of the initial
+                                        //   readdir() allocation. Excess entries are not shown: a banner +
+                                        //   the X-Dir-Truncated response header advertise the truncation.
+                                        //   Must be a finite integer >= 0; 0 = disabled (no cap).
+                                        //   For directories writable by untrusted parties, see the v3.1
+                                        //   TODO [F-1] in docs/security_improvement_for_V3.md.
+            entriesPerPage: 100,        // Entries per page in the listing UI. Pagination kicks in only
+                                        //   when visible entries > entriesPerPage. Page index via
+                                        //   ?page=N (0-based); out-of-range values are clamped silently.
+                                        //   Must be a finite integer >= 0; 0 = disabled (no pagination).
+        },
         index: ["index.html"], // Index file name(s) - must be an ARRAY:
                                //   - Array of strings: ["index.html", "index.htm", "default.html"]
                                //   - Array of RegExp:  [/index\.html/i, /default\.(html|htm)/i]
@@ -584,7 +588,26 @@ module.exports = function koaClassicServer(
     const _logger = normalizeLogger(options.logger);
 
     options.method = Array.isArray(options.method) ? options.method : ['GET'];
-    options.showDirContents = typeof options.showDirContents === 'boolean' ? options.showDirContents : true;
+
+    // ── V3 breaking-change guards: helpful errors for renamed/relocated options ──
+    if (opts.showDirContents !== undefined) {
+        throw new Error(
+            '[koa-classic-server] options.showDirContents was relocated in v3.0.0.\n' +
+            `  Replace with: dirListing: { enabled: ${opts.showDirContents} }`
+        );
+    }
+    if (opts.maxDirEntries !== undefined) {
+        throw new Error(
+            '[koa-classic-server] options.maxDirEntries was relocated in v3.0.0.\n' +
+            `  Replace with: dirListing: { maxEntries: ${opts.maxDirEntries} }`
+        );
+    }
+    if (opts.pageSize !== undefined) {
+        throw new Error(
+            '[koa-classic-server] options.pageSize was relocated and renamed in v3.0.0.\n' +
+            `  Replace with: dirListing: { entriesPerPage: ${opts.pageSize} }`
+        );
+    }
 
     function validateNonNegativeInt(value, optionName, defaultValue) {
         if (value === undefined) return defaultValue;
@@ -596,8 +619,27 @@ module.exports = function koaClassicServer(
         }
         return value;
     }
-    options.maxDirEntries = validateNonNegativeInt(options.maxDirEntries, 'maxDirEntries', 10000);
-    options.pageSize      = validateNonNegativeInt(options.pageSize,      'pageSize',      100);
+
+    // ── dirListing namespace (V3+) — single source of truth for listing config ──
+    const userDirListing = opts.dirListing;
+    if (userDirListing !== undefined && (typeof userDirListing !== 'object' || userDirListing === null || Array.isArray(userDirListing))) {
+        throw new Error('[koa-classic-server] options.dirListing must be an object.');
+    }
+    options.dirListing = {
+        enabled: userDirListing && userDirListing.enabled !== undefined
+            ? !!userDirListing.enabled
+            : true,
+        maxEntries: validateNonNegativeInt(
+            userDirListing && userDirListing.maxEntries,
+            'dirListing.maxEntries',
+            10000
+        ),
+        entriesPerPage: validateNonNegativeInt(
+            userDirListing && userDirListing.entriesPerPage,
+            'dirListing.entriesPerPage',
+            100
+        ),
+    };
 
     // Normalize index option to array format
     if (typeof options.index === 'string') {
@@ -1250,7 +1292,7 @@ module.exports = function koaClassicServer(
 
         if (stat.isDirectory()) {
             // Handle directory
-            if (options.showDirContents) {
+            if (options.dirListing.enabled) {
                 // Search for index file matching configured patterns
                 if (options.index && options.index.length > 0) {
                     const indexFile = await findIndexFile(toOpen, options.index);
@@ -1581,10 +1623,10 @@ module.exports = function koaClassicServer(
 
         async function show_dir(toOpen, ctx) {
             // Read the full directory in one syscall, then cap the result.
-            // `maxDirEntries` bounds the visible / sorted / stat'd entries, but does
-            // NOT bound the size of the initial readdir() allocation — see the
-            // adversarial-directory caveat tracked for v3.1.
-            const maxDirEntries = options.maxDirEntries; // 0 = disabled (no cap)
+            // `dirListing.maxEntries` bounds the visible / sorted / stat'd entries, but
+            // does NOT bound the size of the initial readdir() allocation — see the
+            // adversarial-directory caveat tracked for v3.1 [F-1].
+            const maxDirEntries = options.dirListing.maxEntries; // 0 = disabled (no cap)
             let dir;
             let truncated = false;
             try {
@@ -1655,7 +1697,7 @@ module.exports = function koaClassicServer(
             let totalPages = 1;     // populated in the non-empty branch below
             let currentPage = 0;
             if (truncated) {
-                parts.push(`<div class="kcs-banner">⚠ Showing first ${maxDirEntries} entries (cap reached). More files exist but are not listed. Adjust <code>maxDirEntries</code> to see more.</div>`);
+                parts.push(`<div class="kcs-banner">⚠ Showing first ${maxDirEntries} entries (cap reached). More files exist but are not listed. Adjust <code>dirListing.maxEntries</code> to see more.</div>`);
                 ctx.set('X-Dir-Truncated', `${maxDirEntries}`);
             }
             parts.push("<table>");
@@ -1795,7 +1837,7 @@ module.exports = function koaClassicServer(
                 });
 
                 // Pagination — slice the sorted items into the requested page (0-based).
-                const pageSize = options.pageSize; // 0 disables pagination
+                const pageSize = options.dirListing.entriesPerPage; // 0 disables pagination
                 totalPages = pageSize > 0 ? Math.max(1, Math.ceil(items.length / pageSize)) : 1;
                 const rawPage = parseInt(ctx.query.page, 10);
                 const requestedPage = Number.isFinite(rawPage) && rawPage >= 0 ? rawPage : 0;

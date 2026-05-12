@@ -61,7 +61,7 @@ index: ['index1.html', 'index2.html', 'index3.html']
    - ✅ Se trovato → **SERVE index3.html** (STOP)
    - ❌ Se non trovato → Passa al passo 4
 
-4. Nessun file trovato → **Mostra directory listing** (se `showDirContents: true`)
+4. Nessun file trovato → **Mostra directory listing** (se `dirListing: { enabled: true }`)
 
 ---
 
@@ -502,7 +502,7 @@ app.use(koaClassicServer('./public', {
 **A:** Le stringhe sono **molto più veloci** (O(1) vs O(n)). Metti sempre le stringhe prima delle RegExp.
 
 ### Q: Cosa succede se nessun pattern matcha?
-**A:** Se `showDirContents: true`, mostra directory listing. Altrimenti restituisce 404.
+**A:** Se `dirListing: { enabled: true }`, mostra directory listing. Altrimenti restituisce 404.
 
 ---
 

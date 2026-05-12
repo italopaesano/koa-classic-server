@@ -15,8 +15,8 @@ The 3.0 series builds on 2.x with stronger security defaults, observability hook
 
 ### Key Features in Version 3.x
 
-✅ **Bounded directory listings** — `maxDirEntries` caps how many entries are sorted, stat'd, and rendered per page (banner + `X-Dir-Truncated` header); opt-in RAM-bounded streaming reads planned for v3.1
-✅ **Paginated listings** — `pageSize` adds 0-based `?page=N` navigation with First/Prev/Next/Last + `X-Dir-Pagination` header
+✅ **Bounded directory listings** — `dirListing.maxEntries` caps how many entries are sorted, stat'd, and rendered per page (banner + `X-Dir-Truncated` header); opt-in RAM-bounded streaming reads planned for v3.1
+✅ **Paginated listings** — `dirListing.entriesPerPage` adds 0-based `?page=N` navigation with First/Prev/Next/Last + `X-Dir-Pagination` header
 ✅ **Template render timeout + AbortSignal** — `template.renderTimeout` (default 30s) + a per-request `template.signal` so slow renders never wedge the server
 ✅ **Injectable logger** — pass any `{ error, warn, info, debug }`-shaped logger (Pino, Bunyan, Winston, console) for full observability
 ✅ **Dot-files hidden by default** — `.env`, `.git`, etc. return 404 unless explicitly allowed (with `.well-known` whitelist friendly to ACME/Let's Encrypt)
@@ -43,7 +43,7 @@ The 3.0 series builds on 2.x with stronger security defaults, observability hook
 - 📄 **Static File Serving** — Automatic MIME type detection with streaming
 - 📊 **Sortable Columns** — Click headers to sort ascending/descending
 - 📏 **File Sizes** — Human-readable display (B, KB, MB, GB, TB)
-- 📃 **Bounded + Paginated Listings** — `maxDirEntries` cap + `pageSize` navigation
+- 📃 **Bounded + Paginated Listings** — `dirListing.maxEntries` cap + `dirListing.entriesPerPage` navigation
 - ⏱️ **Template Render Timeout** — Configurable timeout with AbortSignal propagation
 - 📝 **Injectable Logger** — Plug Pino/Bunyan/Winston/console at construction time
 - ⚡ **HTTP Caching** — ETag, Last-Modified, 304 responses (opt-in)
@@ -96,13 +96,15 @@ const koaClassicServer = require('koa-classic-server');
 const app = new Koa();
 
 app.use(koaClassicServer(__dirname + '/public', {
-  showDirContents: true,
   index: ['index.html', 'index.htm'],
   urlPrefix: '/static',
-  maxDirEntries: 5000,        // cap huge directories
-  pageSize: 50,               // 50 entries per listing page
+  dirListing: {
+    enabled:        true,
+    maxEntries:     5000,    // cap huge directories
+    entriesPerPage: 50,      // 50 entries per listing page
+  },
   browserCacheEnabled: true,
-  browserCacheMaxAge: 3600,
+  browserCacheMaxAge:  3600,
 }));
 
 app.listen(3000);
@@ -132,7 +134,7 @@ const koaClassicServer = require('koa-classic-server');
 const app = new Koa();
 
 app.use(koaClassicServer(path.join(__dirname, 'public'), {
-  showDirContents: true,
+  dirListing: { enabled: true },
   index: ['index.html'],
 }));
 
@@ -163,15 +165,17 @@ For directories that may grow without bound (uploads, archives, logs), cap the m
 
 ```javascript
 app.use(koaClassicServer(__dirname + '/uploads', {
-  showDirContents: true,
-  maxDirEntries: 10000,  // stop reading after 10k entries (default; 0 = disabled)
-  pageSize:      100,    // 100 entries per page (default; 0 = disabled)
+  dirListing: {
+    enabled:        true,
+    maxEntries:     10000,  // cap visible / sorted / stat'd entries (default; 0 = disabled)
+    entriesPerPage: 100,    // entries per page in the listing UI (default; 0 = disabled)
+  },
 }));
 ```
 
 **What happens on a directory with 1,000,000 files**
 
-- The middleware calls `fs.promises.readdir()` once and slices the result to `maxDirEntries` — sorting, stat'ing, and rendering are CPU-bounded by `maxDirEntries`. The initial `readdir()` itself is **not** bounded by `maxDirEntries` (see v3.1 roadmap for an opt-in streaming mode targeting adversarial-directory workloads).
+- The middleware calls `fs.promises.readdir()` once and slices the result to `dirListing.maxEntries` — sorting, stat'ing, and rendering are CPU-bounded by `dirListing.maxEntries`. The initial `readdir()` itself is **not** bounded (see v3.1 roadmap for an opt-in streaming mode targeting adversarial-directory workloads).
 - A yellow banner appears at the top of the listing: *"Showing first 10000 entries (cap reached)…"*
 - The response carries `X-Dir-Truncated: 10000` so monitoring can flag capped pages.
 - Pagination is rendered below the table with `« First · ‹ Prev · 0 1 … N · Next › · Last »`, and an `X-Dir-Pagination: <current>/<last>` response header is set.
@@ -316,10 +320,12 @@ app.use(async (ctx, next) => {
 });
 
 app.use(koaClassicServer(path.join(__dirname, 'public'), {
-  index:               ['index.html'],
-  showDirContents:     process.env.NODE_ENV !== 'production',
-  maxDirEntries:       10000,
-  pageSize:            100,
+  index: ['index.html'],
+  dirListing: {
+    enabled:        process.env.NODE_ENV !== 'production',
+    maxEntries:     10000,
+    entriesPerPage: 100,
+  },
   browserCacheEnabled: true,
   browserCacheMaxAge:  86400,
   logger:              pino,
@@ -362,10 +368,12 @@ Creates a Koa middleware for serving static files.
   // HTTP methods allowed (default: ['GET'])
   method: ['GET', 'HEAD'],
 
-  // Directory listing
-  showDirContents: true,
-  maxDirEntries:   10000,   // cap on entries enumerated (0 = disabled)
-  pageSize:        100,     // entries per page (0 = disabled)
+  // Directory listing (V3 namespace)
+  dirListing: {
+    enabled:        true,
+    maxEntries:     10000,   // cap visible entries (0 = disabled)
+    entriesPerPage: 100,     // entries per page (0 = disabled)
+  },
 
   // Index file resolution (Array of strings and/or RegExp)
   index: ['index.html', 'index.htm'],
@@ -406,9 +414,9 @@ Creates a Koa middleware for serving static files.
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `method` | `String[]` | `['GET']` | Allowed HTTP methods |
-| `showDirContents` | `Boolean` | `true` | Render directory listing HTML |
-| `maxDirEntries` | `Number` | `10000` | Cap entries enumerated per directory (0 = disabled). **V3** |
-| `pageSize` | `Number` | `100` | Entries per listing page (0 = disabled). **V3** |
+| `dirListing.enabled` | `Boolean` | `true` | **V3** Render directory listing HTML when no index file matches |
+| `dirListing.maxEntries` | `Number` | `10000` | **V3** Cap entries shown / sorted / stat'd (0 = disabled) |
+| `dirListing.entriesPerPage` | `Number` | `100` | **V3** Entries per listing page (0 = disabled) |
 | `index` | `Array` | `[]` | Index file patterns (strings, RegExp, or mixed) |
 | `urlPrefix` | `String` | `''` | URL path prefix |
 | `urlsReserved` | `String[]` | `[]` | First-level paths passed through to next middleware |
@@ -446,7 +454,7 @@ Visual indicators: `↑` ascending, `↓` descending. Sort + order are preserved
 
 ### Pagination (V3)
 
-When the number of visible entries exceeds `pageSize`, a numbered paginator is rendered below the table:
+When the number of visible entries exceeds `dirListing.entriesPerPage`, a numbered paginator is rendered below the table:
 
 ```
 « First · ‹ Prev · 0 · 1 · … · 7 · 8 · 9 · Next › · Last »
@@ -458,7 +466,7 @@ When the number of visible entries exceeds `pageSize`, a numbered paginator is r
 
 ### Truncation Banner (V3)
 
-When `maxDirEntries` is hit, a banner is rendered above the table and `X-Dir-Truncated: <N>` is set, so capped listings are visible both to users and to monitoring.
+When `dirListing.maxEntries` is hit, a banner is rendered above the table and `X-Dir-Truncated: <N>` is set, so capped listings are visible both to users and to monitoring.
 
 ### File Size Display
 
@@ -538,7 +546,7 @@ File metadata is verified before streaming. A file deleted between check and acc
 
 #### 8. Bounded Listings (V3)
 
-`maxDirEntries` caps the number of entries that are sorted, stat'd, and rendered per listing — bounds CPU and HTML size against accidentally-large folders. The initial `readdir()` is not bounded by this option; an opt-in streaming mode for adversarial-directory workloads is planned for v3.1.
+`dirListing.maxEntries` caps the number of entries that are sorted, stat'd, and rendered per listing — bounds CPU and HTML size against accidentally-large folders. The initial `readdir()` is not bounded by this option; an opt-in streaming mode for adversarial-directory workloads is planned for v3.1.
 
 #### 9. Template Render Timeout (V3)
 
@@ -554,7 +562,7 @@ File metadata is verified before streaming. A file deleted between check and acc
 
 ### Optimizations
 
-- **Single-syscall `readdir()`** — directory entries fetched in one batched syscall, then sliced to `maxDirEntries` to cap rendering work
+- **Single-syscall `readdir()`** — directory entries fetched in one batched syscall, then sliced to `dirListing.maxEntries` to cap rendering work
 - **Single `stat()`** per item — no double filesystem traversal
 - **Array `.join()`** for listing HTML — significantly less GC pressure than `+=`
 - **HTTP conditional responses** — 304s with `If-None-Match` / `If-Modified-Since` (when caching enabled)
@@ -633,6 +641,7 @@ npm run test:performance
 | `index: 'index.html'` | accepted | **throws** — must be an array |
 | `cacheMaxAge` | accepted | **removed** — use `browserCacheMaxAge` |
 | `enableCaching` | accepted | **removed** — use `browserCacheEnabled` |
+| `showDirContents` | accepted | **relocated** — use `dirListing: { enabled: true }` |
 | Dot-files | served | **hidden by default** (`hidden.dotFiles.default: 'hidden'`) |
 | Logger | `console` only | `logger` option injects any logger; default still `console` |
 | Template `render` signature | `(ctx, next, filePath)` | `(ctx, next, filePath, { signal })` — old signature still works, `signal` is opt-in |
@@ -642,9 +651,10 @@ npm run test:performance
 ```javascript
 // v2.x
 app.use(koaClassicServer(root, {
-  index:         'index.html',
-  enableCaching: true,
-  cacheMaxAge:   3600,
+  index:           'index.html',
+  enableCaching:   true,
+  cacheMaxAge:     3600,
+  showDirContents: true,
 }));
 
 // v3.x
@@ -652,6 +662,7 @@ app.use(koaClassicServer(root, {
   index:               ['index.html'],
   browserCacheEnabled: true,
   browserCacheMaxAge:  3600,
+  dirListing:          { enabled: true },
 }));
 ```
 
@@ -725,15 +736,17 @@ const app = new Koa();
 // Static assets — no listing in production
 app.use(koaClassicServer(__dirname + '/public', {
   urlPrefix: '/static',
-  showDirContents: false,
+  dirListing: { enabled: false },
 }));
 
 // User uploads — paginated browsable index
 app.use(koaClassicServer(__dirname + '/uploads', {
   urlPrefix: '/files',
-  showDirContents: true,
-  maxDirEntries: 5000,
-  pageSize: 50,
+  dirListing: {
+    enabled:        true,
+    maxEntries:     5000,
+    entriesPerPage: 50,
+  },
 }));
 
 app.listen(3000);
@@ -749,7 +762,7 @@ const ejs = require('ejs');
 const app = new Koa();
 
 app.use(koaClassicServer(__dirname + '/src', {
-  showDirContents: true,
+  dirListing: { enabled: true },
   template: {
     ext: ['ejs'],
     renderTimeout: 3000,
@@ -777,7 +790,7 @@ const app = new Koa();
 
 app.use(koaClassicServer(__dirname + '/public', {
   index:               ['index.html'],
-  showDirContents:     false,
+  dirListing:          { enabled: false },
   browserCacheEnabled: true,
   browserCacheMaxAge:  86400,
   logger:              pino,
@@ -806,7 +819,7 @@ koaClassicServer(path.join(__dirname, 'pub'))  // ✅ absolute
 
 **Directory listing shows fewer files than expected**
 
-Check the response headers: `X-Dir-Truncated` indicates the `maxDirEntries` cap was reached. Increase the cap or paginate via `?page=N`.
+Check the response headers: `X-Dir-Truncated` indicates the `dirListing.maxEntries` cap was reached. Increase the cap or paginate via `?page=N`.
 
 **Templates time out under load**
 

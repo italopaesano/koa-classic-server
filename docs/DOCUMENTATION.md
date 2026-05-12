@@ -157,7 +157,7 @@ const koaClassicServer = require('koa-classic-server');
 const app = new Koa();
 
 app.use(koaClassicServer(__dirname + '/public', {
-  showDirContents: true,
+  dirListing: { enabled: true },
   index: 'index.html',
   urlPrefix: '/static'
 }));
@@ -193,7 +193,7 @@ const options = {
 
   // Mostra il contenuto delle directory
   // Default: true
-  showDirContents: true,
+  dirListing: { enabled: true },
 
   // Nome del file index da caricare automaticamente nelle directory
   // Se presente, viene caricato invece del directory listing
@@ -245,16 +245,16 @@ method: ['GET', 'HEAD']
 method: ['GET', 'HEAD', 'POST']
 ```
 
-#### `showDirContents` (Boolean)
+#### `dirListing.enabled` (Boolean)
 
 Controlla se mostrare il contenuto delle directory.
 
 ```javascript
 // Mostra directory listing
-showDirContents: true
+dirListing: { enabled: true }
 
 // Non mostra directory (restituisce "Not Found")
-showDirContents: false
+dirListing: { enabled: false }
 ```
 
 #### `index` (String)
@@ -275,7 +275,7 @@ index: ''
 **Comportamento:**
 1. Utente accede a `/cartella/`
 2. Se esiste `/cartella/index.html` → viene servito
-3. Altrimenti → mostra directory listing (se `showDirContents: true`)
+3. Altrimenti → mostra directory listing (se `dirListing: { enabled: true }`)
 
 #### `urlPrefix` (String)
 
@@ -373,7 +373,7 @@ const koaClassicServer = require('koa-classic-server');
 const app = new Koa();
 
 app.use(koaClassicServer(__dirname + '/public', {
-  showDirContents: true,
+  dirListing: { enabled: true },
   index: 'index.html'
 }));
 
@@ -400,7 +400,7 @@ const app = new Koa();
 app.use(koaClassicServer(__dirname + '/public', {
   urlPrefix: '/static',
   method: ['GET', 'HEAD'],
-  showDirContents: true
+  dirListing: { enabled: true }
 }));
 
 // Altri middleware per route diverse
@@ -427,7 +427,7 @@ const koaClassicServer = require('koa-classic-server');
 const app = new Koa();
 
 app.use(koaClassicServer(__dirname + '/www', {
-  showDirContents: true,
+  dirListing: { enabled: true },
   // Protegge directory sensibili
   urlsReserved: ['/config', '/private', '/.git', '/node_modules']
 }));
@@ -452,7 +452,7 @@ const ejs = require('ejs');
 const app = new Koa();
 
 app.use(koaClassicServer(__dirname + '/views', {
-  showDirContents: false,
+  dirListing: { enabled: false },
   template: {
     render: async (ctx, next, filePath) => {
       // Rendering EJS con dati
@@ -485,19 +485,19 @@ const app = new Koa();
 // File statici pubblici
 app.use(koaClassicServer(__dirname + '/public', {
   urlPrefix: '/public',
-  showDirContents: true
+  dirListing: { enabled: true }
 }));
 
 // Asset (CSS, JS, images)
 app.use(koaClassicServer(__dirname + '/assets', {
   urlPrefix: '/assets',
-  showDirContents: false
+  dirListing: { enabled: false }
 }));
 
 // Download area
 app.use(koaClassicServer(__dirname + '/downloads', {
   urlPrefix: '/downloads',
-  showDirContents: true,
+  dirListing: { enabled: true },
   index: 'README.txt'
 }));
 
@@ -549,7 +549,7 @@ const templateRender = async (ctx, next, filePath) => {
 // File server
 app.use(koaClassicServer(path.join(__dirname, 'public'), {
   method: ['GET', 'HEAD'],
-  showDirContents: process.env.NODE_ENV !== 'production',
+  dirListing: { enabled: process.env.NODE_ENV !== 'production' },
   index: 'index.html',
   urlPrefix: '/files',
   urlsReserved: ['/admin', '/private', '/config', '/.env'],
@@ -599,7 +599,7 @@ app.use(router.allowedMethods());
 
 // File statici (dopo le route API)
 app.use(koaClassicServer(__dirname + '/public', {
-  showDirContents: true
+  dirListing: { enabled: true }
 }));
 
 app.listen(3000);
@@ -631,7 +631,7 @@ Crea e restituisce un middleware Koa per servire file statici.
 
 ```javascript
 const middleware = koaClassicServer('/path/to/files', {
-  showDirContents: true
+  dirListing: { enabled: true }
 });
 
 app.use(middleware);
@@ -682,7 +682,7 @@ template: {
 
 ### Gestione delle Directory
 
-#### Caso 1: showDirContents = true, index presente
+#### Caso 1: dirListing.enabled = true, index presente
 
 ```
 Richiesta: GET /cartella/
@@ -693,7 +693,7 @@ Filesystem:
 Risultato: Serve /cartella/index.html
 ```
 
-#### Caso 2: showDirContents = true, index assente
+#### Caso 2: dirListing.enabled = true, index assente
 
 ```
 Richiesta: GET /cartella/
@@ -704,7 +704,7 @@ Filesystem:
 Risultato: Mostra directory listing HTML
 ```
 
-#### Caso 3: showDirContents = false
+#### Caso 3: dirListing.enabled = false
 
 ```
 Richiesta: GET /cartella/
@@ -925,7 +925,7 @@ describe('My custom test', () => {
   beforeAll(() => {
     app = new Koa();
     app.use(koaClassicServer(__dirname + '/test-files', {
-      showDirContents: true
+      dirListing: { enabled: true }
     }));
     server = app.listen();
   });
@@ -1042,11 +1042,11 @@ npm install ejs
 **Soluzione:**
 
 ```javascript
-// ❌ showDirContents disabilitato
-showDirContents: false
+// ❌ dirListing.enabled disabilitato
+dirListing: { enabled: false }
 
-// ✅ showDirContents abilitato
-showDirContents: true
+// ✅ dirListing.enabled abilitato
+dirListing: { enabled: true }
 ```
 
 ---
@@ -1128,12 +1128,12 @@ const url = '/' + encodeURIComponent(filename);
 
 1. Disabilita directory listing:
 ```javascript
-showDirContents: false
+dirListing: { enabled: false }
 ```
 
 2. Usa file index:
 ```javascript
-showDirContents: true,
+dirListing: { enabled: true },
 index: 'index.html'  // Carica index invece di listing
 ```
 
@@ -1278,7 +1278,7 @@ method: ['GET', 'HEAD']
 #### Disabilita Directory Listing in Produzione
 ```javascript
 app.use(koaClassicServer(rootDir, {
-  showDirContents: process.env.NODE_ENV !== 'production',
+  dirListing: { enabled: process.env.NODE_ENV !== 'production' },
   index: 'index.html'
 }));
 ```
@@ -1408,7 +1408,7 @@ app.listen(3000);
 const isProduction = process.env.NODE_ENV === 'production';
 
 app.use(koaClassicServer(rootDir, {
-  showDirContents: !isProduction,
+  dirListing: { enabled: !isProduction },
   method: ['GET', 'HEAD']
 }));
 ```
@@ -1450,7 +1450,7 @@ module.exports = {
   rootDir: path.join(__dirname, '../public'),
   options: {
     method: ['GET', 'HEAD'],
-    showDirContents: true,
+    dirListing: { enabled: true },
     index: 'index.html',
     urlPrefix: '/static',
     urlsReserved: ['/admin', '/config']
@@ -1575,7 +1575,7 @@ if (isDev) {
 
 // File server con configurazione ambiente-specifica
 app.use(koaClassicServer(path.join(__dirname, 'public'), {
-  showDirContents: isDev,  // Solo in dev
+  dirListing: { enabled: isDev },  // Solo in dev
   index: 'index.html',
   urlPrefix: isDev ? '' : '/static',  // Prefix solo in prod
   urlsReserved: ['/admin', '/config', '/.env'],
@@ -1607,7 +1607,7 @@ app.listen(process.env.PORT || 3000);
 const configs = [
   { name: 'base', options: {} },
   { name: 'with-prefix', options: { urlPrefix: '/public' } },
-  { name: 'no-listing', options: { showDirContents: false } }
+  { name: 'no-listing', options: { dirListing: { enabled: false } } }
 ];
 
 configs.forEach(({ name, options }) => {
@@ -1637,7 +1637,7 @@ configs.forEach(({ name, options }) => {
 ```javascript
 app.use(koaClassicServer(__dirname + '/public', {
   // Mostra directory solo in development per sicurezza
-  showDirContents: process.env.NODE_ENV !== 'production',
+  dirListing: { enabled: process.env.NODE_ENV !== 'production' },
 
   // Protegge configurazioni sensibili
   // Nota: funziona solo per directory di primo livello

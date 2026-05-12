@@ -1,5 +1,7 @@
 # Flow Diagram - koa-classic-server
 
+> **Nota storica:** diagrammi e snippet di questo documento sono pre-V3. Riferimenti a `options.showDirContents` corrispondono a `options.dirListing.enabled` nell'API V3 corrente. Vedi [README.md → Migration Guide](../README.md#from-v2x-to-v3x).
+
 ## Table of Contents
 - [Overview](#overview)
 - [Main Flow Diagram](#main-flow-diagram)

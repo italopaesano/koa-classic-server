@@ -27,7 +27,7 @@ const COMMON_HEADERS = {
 
 function createApp(opts = {}) {
   const app = new Koa();
-  app.use(koaClassicServer(root, { showDirContents: true, ...opts }));
+  app.use(koaClassicServer(root, { dirListing: { enabled: true }, ...opts }));
   return app.listen();
 }
 
@@ -105,11 +105,11 @@ describe('Security headers — 404 Not Found page', () => {
   });
 });
 
-// ─── Directory listing disabled (showDirContents: false) ─────────────────────
+// ─── Directory listing disabled (dirListing: { enabled: false }) ─────────────────────
 
 describe('Security headers — 404 when directory listing disabled', () => {
   let server;
-  beforeAll(() => { server = createApp({ showDirContents: false }); });
+  beforeAll(() => { server = createApp({ dirListing: { enabled: false } }); });
   afterAll(() => server.close());
 
   test('Security headers present when directory listing disabled', async () => {

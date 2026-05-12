@@ -1,5 +1,7 @@
 # Ottimizzazione #3: HTTP Caching Headers
 
+> **Nota storica:** documento di analisi pre-V3. Riferimenti a `showDirContents` corrispondono a `dirListing.enabled` nell'API V3 corrente. Vedi [README.md → Migration Guide](../README.md#from-v2x-to-v3x).
+
 ## Panoramica
 
 **Problema:** I file statici vengono riscaricati dal browser ad ogni richiesta, anche se non sono cambiati.

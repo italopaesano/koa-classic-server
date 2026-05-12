@@ -156,7 +156,7 @@ describe('options.logger', () => {
             app.use(koaClassicServer(tmpDir, {
                 logger,
                 hidden: { dotFiles: { default: 'hidden' }, dotDirs: { default: 'visible' } },
-                showDirContents: false,
+                dirListing: { enabled: false },
                 serverCache: {
                     rawFile: { enabled: true, maxSize: 128, warnInterval: 0 }
                 }

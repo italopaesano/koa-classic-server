@@ -7,7 +7,7 @@ const root = path.join(__dirname, 'hidden-fixtures');
 
 function createApp(hiddenOpts) {
   const app = new Koa();
-  app.use(koaClassicServer(root, { showDirContents: true, hidden: hiddenOpts }));
+  app.use(koaClassicServer(root, { dirListing: { enabled: true }, hidden: hiddenOpts }));
   return app.listen();
 }
 

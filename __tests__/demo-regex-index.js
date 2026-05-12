@@ -48,7 +48,7 @@ console.log('  Aspettativa: Matcha INDEX.HTML o Index.Html');
 const app1 = new Koa();
 app1.use(koaClassicServer(testDir, {
     index: [/index\.html/i],
-    showDirContents: true
+    dirListing: { enabled: true }
 }));
 const server1 = app1.listen(3001);
 console.log('  ✓ Server avviato su http://localhost:3001\n');
@@ -63,7 +63,7 @@ console.log('  Aspettativa: Matcha INDEX.HTML, Index.Html, index.htm');
 const app2 = new Koa();
 app2.use(koaClassicServer(testDir, {
     index: [/index\.(html|htm)/i],
-    showDirContents: true
+    dirListing: { enabled: true }
 }));
 const server2 = app2.listen(3002);
 console.log('  ✓ Server avviato su http://localhost:3002\n');
@@ -81,7 +81,7 @@ app3.use(koaClassicServer(testDir, {
         /index\.(html|htm)/i,
         /default\.html/i
     ],
-    showDirContents: true
+    dirListing: { enabled: true }
 }));
 const server3 = app3.listen(3003);
 console.log('  ✓ Server avviato su http://localhost:3003\n');
@@ -100,7 +100,7 @@ app4.use(koaClassicServer(testDir, {
         /INDEX\.HTML/i,     // Case-insensitive fallback
         /default\.html/i    // Default fallback
     ],
-    showDirContents: true
+    dirListing: { enabled: true }
 }));
 const server4 = app4.listen(3004);
 console.log('  ✓ Server avviato su http://localhost:3004\n');

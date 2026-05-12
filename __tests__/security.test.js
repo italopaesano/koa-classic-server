@@ -22,7 +22,7 @@ describe('Security Tests - Path Traversal', () => {
   beforeAll(() => {
     app = new Koa();
     app.use(koaClassicServer(rootDir, {
-      showDirContents: true
+      dirListing: { enabled: true }
     }));
     server = app.listen();
   });
@@ -79,7 +79,7 @@ describe('Bug Tests - Status Code 404', () => {
   beforeAll(() => {
     app = new Koa();
     app.use(koaClassicServer(rootDir, {
-      showDirContents: true
+      dirListing: { enabled: true }
     }));
     server = app.listen();
   });
@@ -90,10 +90,10 @@ describe('Bug Tests - Status Code 404', () => {
     expect(res.text).toContain('Not Found');
   });
 
-  test('FIXED: Directory with showDirContents=false returns 404', async () => {
+  test('FIXED: Directory with dirListing.enabled=false returns 404', async () => {
     const app2 = new Koa();
     app2.use(koaClassicServer(rootDir, {
-      showDirContents: false
+      dirListing: { enabled: false }
     }));
     const server2 = app2.listen();
 
@@ -235,7 +235,7 @@ describe('Bug Tests - Directory Read Errors', () => {
     const tempDir = path.join(rootDir, 'temp-perm-test-dir');
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
 
-    app.use(koaClassicServer(rootDir, { showDirContents: true }));
+    app.use(koaClassicServer(rootDir, { dirListing: { enabled: true } }));
     const server = app.listen();
 
     try {

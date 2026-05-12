@@ -561,7 +561,7 @@ module.exports = function koaClassicServer(
         compression: {       // Response compression (gzip / brotli) — to enable/disable caching → serverCache.compressedFile
             enabled: true,                // master switch (false = disable all compression)
             encodings: ['br', 'gzip'],    // algorithms in priority order; [] = disable
-            minSize: 1024,                // min file size in bytes to compress; false = no minimum
+            minFileSize: 1024,            // min file size in bytes to compress; false = no minimum
             mimeTypes: [],                // compressible MIME types (replaces default list if provided)
         },
         // compression: false            // shorthand to disable all compression
@@ -925,9 +925,17 @@ module.exports = function koaClassicServer(
             return {
                 enabled: true,
                 encodings: ['br', 'gzip'],              // priority order: brotli first, gzip as fallback
-                minSize: 1024,                          // bytes; skip compression for files smaller than this
+                minFileSize: 1024,                      // bytes; skip compression for files smaller than this
                 mimeTypes: new Set(DEFAULT_COMPRESSIBLE_MIME_TYPES),
             };
+        }
+
+        // V3 breaking-change guard: catch the v2-alpha name minSize with a helpful migration hint.
+        if (compression.minSize !== undefined) {
+            throw new Error(
+                '[koa-classic-server] options.compression.minSize was renamed in v3.0.0.\n' +
+                `  Replace with: compression: { minFileSize: ${compression.minSize} }`
+            );
         }
 
         const enabled = typeof compression.enabled === 'boolean' ? compression.enabled : true;
@@ -937,14 +945,14 @@ module.exports = function koaClassicServer(
             ? compression.encodings.filter(e => e === 'br' || e === 'gzip')
             : ['br', 'gzip'];
 
-        const minSize = compression.minSize === false ? false
-            : (typeof compression.minSize === 'number' && compression.minSize >= 0 ? compression.minSize : 1024);
+        const minFileSize = compression.minFileSize === false ? false
+            : (typeof compression.minFileSize === 'number' && compression.minFileSize >= 0 ? compression.minFileSize : 1024);
 
         const mimeTypes = Array.isArray(compression.mimeTypes) && compression.mimeTypes.length > 0
             ? compression.mimeTypes
             : DEFAULT_COMPRESSIBLE_MIME_TYPES;
 
-        return { enabled, encodings, minSize, mimeTypes: new Set(mimeTypes) };
+        return { enabled, encodings, minFileSize, mimeTypes: new Set(mimeTypes) };
     }
 
     // Normalize and validate the serverCache option into a clean internal structure.
@@ -1454,12 +1462,12 @@ module.exports = function koaClassicServer(
             const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
             const filename = path.basename(toOpen);
 
-            // Resolve compression: enabled + compressible MIME + meets minSize + client supports it
+            // Resolve compression: enabled + compressible MIME + meets minFileSize + client supports it
             let encoding = null; // 'br' | 'gzip' | null
             if (compressionConfig.enabled && compressionConfig.encodings.length > 0) {
                 const isCompressibleMime = compressionConfig.mimeTypes.has(mimeType);
-                const meetsMinSize = compressionConfig.minSize === false
-                    || fileStat.size >= compressionConfig.minSize;
+                const meetsMinSize = compressionConfig.minFileSize === false
+                    || fileStat.size >= compressionConfig.minFileSize;
                 if (isCompressibleMime && meetsMinSize) {
                     encoding = getClientEncoding(ctx.get('Accept-Encoding'));
                 }

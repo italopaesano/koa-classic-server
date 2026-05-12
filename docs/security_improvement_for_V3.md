@@ -17,7 +17,7 @@ Analisi di sicurezza del progetto `koa-classic-server` v3.0.0-alpha.0, con roadm
 - [x] [M-1] Timeout configurabile sul template rendering *(Medio)*
 - [x] [M-2] Cache staleness su filesystem NFS/distribuiti *(Medio)*
 - [x] [M-3] Documentare il rischio DNS Rebinding *(Basso)*
-- [ ] [M-4] Documentare i limiti dei security headers sui file statici *(Basso)*
+- [x] [M-4] Documentare i limiti dei security headers sui file statici *(Basso)*
 
 ### Nice-to-Have
 - [x] [N-1] Logger iniettabile dall'esterno
@@ -208,6 +208,8 @@ Aggiungere nella documentazione una sezione dedicata che spieghi:
 - Come aggiungere headers custom sui file statici tramite Koa middleware separato
 - Esempio con `ctx.set()` a monte di `koa-classic-server`
 
+**Stato V3:** documentato in `docs/DOCUMENTATION.md` → *Best Practices → Sicurezza → Limiti dei Security Headers sui file statici*, con tabella degli header impostati automaticamente, esempio di middleware Koa upstream con CSP/HSTS/Referrer-Policy, e note operative su CSP report-only e COOP/COEP.
+
 ---
 
 ## Nice-to-Have
@@ -257,6 +259,49 @@ Il directory listing processa le entry in batch da 64 elementi con `Promise.all(
 | M-1 | Timeout template rendering | Media | Implementato |
 | M-2 | Cache staleness NFS | Media | Implementato |
 | M-3 | Documentare DNS Rebinding | Bassa | Documentato |
-| M-4 | Documentare limiti security headers | Bassa | Da fare |
+| M-4 | Documentare limiti security headers | Bassa | Documentato |
 | N-1 | Logger iniettabile | Nice-to-have | Implementato |
-| N-2 | Protezione DoS directory listing | Nice-to-have | Implementato |
+| N-2 | Protezione DoS directory listing | Nice-to-have | Implementato (con caveat — vedi sotto) |
+
+---
+
+## Future Work — v3.1
+
+### [F-1] Opt-in streaming read per directory adversarial *(rimandato a v3.1)*
+
+**Contesto**
+
+La prima implementazione di N-2 (v3.0.0-alpha.0) usava `fs.promises.opendir()` con async iterator per limitare la lettura a `maxDirEntries` entry e bounded la RAM indipendentemente dalla dimensione su disco. I benchmark hanno mostrato una regressione di latenza di 3-4× sui listing rispetto a v2 (es. dir 10k file: 90 ms → 405 ms), dovuta all'overhead di una `Promise` per ogni entry nell'async iterator.
+
+Prima del rilascio è stato applicato un fix (vedi commit di v3.0.0-alpha.0): la lettura è tornata a usare `fs.promises.readdir({ withFileTypes: true })` seguita da `slice(0, maxDirEntries)`. Recupera le performance v2, ma **rinuncia alla garanzia "RAM bounded regardless of disk size"**: una directory con milioni di file alloca milioni di Dirent prima dello slicing.
+
+**Decisione v3.0**
+
+Per il caso d'uso primario (servire asset statici controllati dall'operatore) la nuova implementazione è ottimale. Il caso edge — directory scrivibile da utenti non fidati, attaccante che crea milioni di file — non è la modalità d'uso dichiarata del middleware e va affrontata a livello applicativo / OS.
+
+**Proposta per v3.1**
+
+Aggiungere un'opzione `dirReadMode` (`'fast' | 'bounded'`, default `'fast'`):
+
+```javascript
+app.use(koaClassicServer(rootDir, {
+  maxDirEntries: 1000,
+  dirReadMode:   'bounded',   // opendir() streaming, RAM bounded a O(maxDirEntries)
+}));
+```
+
+- `'fast'` (default) — comportamento v3.0: readdir + slice, performance v2-class
+- `'bounded'` — opendir async iterator: lettura interrotta a `maxDirEntries`, RAM bounded indipendentemente dalla dimensione su disco, latenza più alta sui listing
+
+Trade-off documentato chiaramente nella user-facing doc. Da valutare prima del freeze 3.1:
+- Test simmetrici nelle due modalità
+- Validazione factory (`dirReadMode` ∈ `{'fast', 'bounded'}`)
+- Aggiornamento README + DOCUMENTATION.md con esempio di scelta
+
+Il caso d'uso target di `'bounded'`: hosting multi-tenant con directory scrivibili da utenti (es. `/uploads`), backup server, log shipper con cartelle spool.
+
+**Rinviato perché**
+
+- Non è regressione rispetto a v2 (v2 aveva esattamente questo profilo memoria)
+- Caso d'uso adversarial-directory minoritario nel target del middleware
+- Aggiungere un'opzione API non banale richiede design review e test approfonditi, meglio non aggiungerla in fretta nel rush release di 3.0

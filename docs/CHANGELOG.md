@@ -125,9 +125,10 @@ app.use(koaClassicServer('/public', {
 ```
 
 **maxDirEntries**
-- Entries are streamed via `fs.promises.opendir()` and the iterator stops after `maxDirEntries` reads — memory and CPU are bounded regardless of how many files are actually on disk.
-- When the cap is reached, a yellow banner is added at the top of the listing and an `X-Dir-Truncated: <N>` response header is set, so monitoring can distinguish capped pages.
-- Default `10000` is permissive enough for normal use while bounding the worst case.
+- Caps how many entries are sorted, stat'd, and rendered per directory listing. Excess entries trigger a yellow banner at the top of the page and an `X-Dir-Truncated: <N>` response header so monitoring can distinguish capped listings.
+- Implementation: the middleware calls `fs.promises.readdir()` once and then slices the result. This bounds rendering and CPU cost but **not** the size of the initial `readdir()` allocation. For typical static-file servers (where the directory contents are controlled by the operator) this is the right trade-off — it recovers v2-class listing performance.
+- Default `10000` is permissive enough for normal use while bounding rendering cost on accidentally-large folders.
+- **Caveat for adversarial workloads:** if you serve a directory writable by untrusted parties, an attacker creating millions of files could still force a large `readdir()` allocation. Tracked for v3.1 as an opt-in streaming read mode — see `docs/security_improvement_for_V3.md` → *Future Work*.
 
 **pageSize**
 - Pagination kicks in only when the visible entries exceed `pageSize`; small directories render in a single page exactly like before.
@@ -148,6 +149,18 @@ The `Host` header is intentionally not validated by the middleware — host vali
 - When it doesn't (reverse proxy with `server_name` allowlist, public IP behind CDN/WAF).
 - A drop-in nginx allowlist snippet.
 - A Koa middleware that checks `ctx.host` against an allowlist and returns `421 Misdirected Request`, plus a note on `app.proxy = true` + `X-Forwarded-Host` when terminating TLS upstream.
+
+No code change in `index.cjs` — documentation only.
+
+#### Security headers scope and limits (Security M-4)
+
+Clarify that the security headers emitted by the middleware (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`) are applied **only** to middleware-generated responses (directory listing + error pages). User-served static files are returned without these headers — by design, because the right policy is application-specific.
+
+The new *Best Practices → Sicurezza → Limiti dei Security Headers sui file statici* section in `docs/DOCUMENTATION.md` covers:
+
+- A table listing which headers are emitted automatically and on which responses.
+- An upstream Koa middleware example that adds `X-Content-Type-Options`, `Referrer-Policy`, `Strict-Transport-Security` to every response and a strict CSP only to HTML responses.
+- Notes on rolling out CSP via `Content-Security-Policy-Report-Only`, and on `COOP`/`COEP` for projects using `SharedArrayBuffer`.
 
 No code change in `index.cjs` — documentation only.
 

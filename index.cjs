@@ -482,11 +482,14 @@ module.exports = function koaClassicServer(
      opts = {
         method: ['GET'], // Supported methods, otherwise next() will be called
         showDirContents: true, // Show or hide directory contents
-        maxDirEntries: 10000,  // Cap on entries enumerated per directory listing. Reads stop after this
-                               // value via opendir() async iterator, capping CPU/RAM regardless of
-                               // directory size. Excess entries are not shown — a banner + the
-                               // X-Dir-Truncated response header advertise the truncation.
-                               // Must be finite number >= 0; 0 = disabled (no cap).
+        maxDirEntries: 10000,  // Cap on the entries shown / sorted / stat'd per directory listing.
+                               // The full directory is still read via fs.promises.readdir() — this
+                               // bounds the rendering and CPU cost, NOT the size of the initial
+                               // readdir() allocation. Excess entries are not shown: a banner +
+                               // the X-Dir-Truncated response header advertise the truncation.
+                               // Must be a finite integer >= 0; 0 = disabled (no cap).
+                               // For directories writable by untrusted parties, see the v3.1 TODO
+                               // in docs/security_improvement_for_V3.md on opt-in streaming reads.
         pageSize: 100,         // Number of entries per directory listing page. Pagination kicks in only
                                // when visible entries > pageSize. Page index via ?page=N (0-based);
                                // out-of-range values are clamped silently. 0 disables pagination.
@@ -1577,27 +1580,20 @@ module.exports = function koaClassicServer(
 
 
         async function show_dir(toOpen, ctx) {
-            // Stream directory entries via opendir() — bounds memory even on huge
-            // directories. Reads at most maxDirEntries + 1 to detect truncation.
+            // Read the full directory in one syscall, then cap the result.
+            // `maxDirEntries` bounds the visible / sorted / stat'd entries, but does
+            // NOT bound the size of the initial readdir() allocation — see the
+            // adversarial-directory caveat tracked for v3.1.
             const maxDirEntries = options.maxDirEntries; // 0 = disabled (no cap)
-            const dir = [];
+            let dir;
             let truncated = false;
             try {
-                const handle = await fs.promises.opendir(toOpen);
-                try {
-                    for await (const entry of handle) {
-                        if (maxDirEntries > 0 && dir.length >= maxDirEntries) {
-                            truncated = true;
-                            break;
-                        }
-                        dir.push(entry);
-                    }
-                } finally {
-                    // If we broke out early, opendir's handle is still open.
-                    // The async iterator closes on completion but not on break.
-                    if (truncated) {
-                        try { await handle.close(); } catch { /* already closed */ }
-                    }
+                const all = await fs.promises.readdir(toOpen, { withFileTypes: true });
+                if (maxDirEntries > 0 && all.length > maxDirEntries) {
+                    truncated = true;
+                    dir = all.slice(0, maxDirEntries);
+                } else {
+                    dir = all;
                 }
             } catch (error) {
                 _logger.error('Directory read error:', error);

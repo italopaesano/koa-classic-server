@@ -163,7 +163,7 @@ async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts) {
     const renderPromise = Promise.resolve().then(() =>
         templateOpts.render(ctx, next, filePath, rawBuffer, controller.signal)
     );
-    renderPromise.catch(() => {}); // swallow late rejections after timeout
+    renderPromise.catch(() => {}); // swallow rejections that arrive after we've already responded
 
     try {
         if (timeoutMs > 0) {
@@ -375,7 +375,6 @@ class LFUCache {
         if (!this._freqMap.has(freq)) this._freqMap.set(freq, new Set());
         this._freqMap.get(freq).add(key);
     }
-
     _evictOne() {
         // Recover from stale _minFreq (can happen after consecutive evictions)
         while (this._freqMap.size > 0 && (!this._freqMap.has(this._minFreq) || this._freqMap.get(this._minFreq).size === 0)) {
@@ -400,6 +399,21 @@ class LFUCache {
                 this._lastWarnAt = now;
             }
         }
+    }
+}
+
+// Upserts a fresh entry into an LFUCache. When the previous entry was only
+// stale-by-age (mtime + size unchanged), updates in place so the existing
+// frequency counter survives — important for popular files refreshed by maxAge.
+// Otherwise falls back to delete + set (frequency resets to 1).
+function refreshOrInsert(cache, key, newEntry, cached, staleByAge) {
+    const canRefreshInPlace = cached
+        && staleByAge
+        && cached.mtime === newEntry.mtime
+        && cached.size === newEntry.size;
+    if (!canRefreshInPlace || !cache.refresh(key, newEntry)) {
+        if (cached) cache.delete(key);
+        cache.set(key, newEntry);
     }
 }
 
@@ -1196,33 +1210,23 @@ module.exports = function koaClassicServer(
             if (serverCacheConfig.rawFile.enabled && fileStat.size <= serverCacheConfig.rawFile.maxFileSize) {
                 const cached = _rawFileCache.peek(toOpen);
                 const maxAge = serverCacheConfig.rawFile.maxAge;
-                const expiredByAge = maxAge > 0 && cached && (Date.now() - cached.insertedAt) >= maxAge;
+                const staleByAge = maxAge > 0 && cached && (Date.now() - cached.insertedAt) >= maxAge;
                 const fresh = cached
                     && cached.mtime === fileStat.mtime.getTime()
                     && cached.size === fileStat.size
-                    && !expiredByAge;
+                    && !staleByAge;
                 if (fresh) {
                     _rawFileCache.get(toOpen); // increment frequency
                     rawBuffer = cached.buffer;
                 } else {
                     try {
                         rawBuffer = await fs.promises.readFile(toOpen);
-                        const newEntry = {
+                        refreshOrInsert(_rawFileCache, toOpen, {
                             buffer: rawBuffer,
                             mtime: fileStat.mtime.getTime(),
                             size: fileStat.size,
                             insertedAt: Date.now(),
-                        };
-                        // If the entry was only stale-by-age (mtime+size still match),
-                        // refresh in place to preserve the existing LFU frequency.
-                        const canRefreshInPlace = cached
-                            && expiredByAge
-                            && cached.mtime === fileStat.mtime.getTime()
-                            && cached.size === fileStat.size;
-                        if (!canRefreshInPlace || !_rawFileCache.refresh(toOpen, newEntry)) {
-                            if (cached) _rawFileCache.delete(toOpen);
-                            _rawFileCache.set(toOpen, newEntry);
-                        }
+                        }, cached, staleByAge);
                     } catch {
                         rawBuffer = null; // Fall through to disk reads later
                     }
@@ -1374,11 +1378,11 @@ module.exports = function koaClassicServer(
                     const cacheKey = `${toOpen}:${encoding}`;
                     const cached = _compressedFileCache.peek(cacheKey);
                     const maxAge = serverCacheConfig.compressedFile.maxAge;
-                    const expiredByAge = maxAge > 0 && cached && (Date.now() - cached.insertedAt) >= maxAge;
+                    const staleByAge = maxAge > 0 && cached && (Date.now() - cached.insertedAt) >= maxAge;
                     const stale = !cached
                         || cached.mtime !== fileStat.mtime.getTime()
                         || cached.size !== fileStat.size
-                        || expiredByAge;
+                        || staleByAge;
 
                     let buf;
                     if (!stale) {
@@ -1390,20 +1394,12 @@ module.exports = function koaClassicServer(
                             const rawData = rawBuffer || await fs.promises.readFile(toOpen);
                             buf = await compressBuffer(rawData, encoding);
 
-                            const newEntry = {
+                            refreshOrInsert(_compressedFileCache, cacheKey, {
                                 buffer: buf,
                                 mtime: fileStat.mtime.getTime(),
                                 size: fileStat.size,
                                 insertedAt: Date.now(),
-                            };
-                            const canRefreshInPlace = cached
-                                && expiredByAge
-                                && cached.mtime === fileStat.mtime.getTime()
-                                && cached.size === fileStat.size;
-                            if (!canRefreshInPlace || !_compressedFileCache.refresh(cacheKey, newEntry)) {
-                                if (cached) _compressedFileCache.delete(cacheKey);
-                                _compressedFileCache.set(cacheKey, newEntry);
-                            }
+                            }, cached, staleByAge);
                         } catch (err) {
                             console.error('Compression error:', err);
                             // Fall back to uncompressed on any compression failure

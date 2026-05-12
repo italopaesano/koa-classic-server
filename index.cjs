@@ -136,6 +136,68 @@ function sendTemplateError(ctx, status, html, logMsg, err) {
     ctx.body = html;
 }
 
+// Attempts to render the requested file through the user's template engine.
+// Returns true if the request was handled (success, timeout, or error response
+// already written), false if no template applies (caller should continue with
+// normal file serving).
+//
+// The render function is invoked with (ctx, next, filePath, rawBuffer, signal).
+// The signal aborts on timeout (when templateOpts.renderTimeout > 0) and on
+// client disconnect. Cooperative renders that propagate the signal to fetch/db
+// release backend resources promptly; non-cooperative renders still get a 504
+// response, but their work continues in the background.
+async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts) {
+    if (templateOpts.ext.length === 0 || !templateOpts.render) return false;
+
+    const fileExt = path.extname(filePath).slice(1);
+    if (!fileExt || !templateOpts.ext.includes(fileExt)) return false;
+
+    const controller = new AbortController();
+    const onClientClose = () => controller.abort();
+    ctx.req.on('close', onClientClose);
+
+    const timeoutMs = templateOpts.renderTimeout;
+    let timer = null;
+    let timedOut = false;
+
+    const renderPromise = Promise.resolve().then(() =>
+        templateOpts.render(ctx, next, filePath, rawBuffer, controller.signal)
+    );
+    renderPromise.catch(() => {}); // swallow late rejections after timeout
+
+    try {
+        if (timeoutMs > 0) {
+            await Promise.race([
+                renderPromise,
+                new Promise((_, reject) => {
+                    timer = setTimeout(() => {
+                        timedOut = true;
+                        controller.abort();
+                        const err = new Error('Template render timeout');
+                        err.code = 'ETEMPLATETIMEOUT';
+                        reject(err);
+                    }, timeoutMs);
+                })
+            ]);
+        } else {
+            await renderPromise;
+        }
+    } catch (error) {
+        if (timedOut || error.code === 'ETEMPLATETIMEOUT') {
+            sendTemplateError(ctx, 504, _GATEWAY_TIMEOUT_HTML,
+                'Template render timeout after ' + timeoutMs + 'ms:', filePath);
+        } else {
+            sendTemplateError(ctx, 500, _TEMPLATE_ERROR_HTML,
+                'Template rendering error:', error);
+        }
+    } finally {
+        if (timer) clearTimeout(timer);
+        ctx.req.removeListener('close', onClientClose);
+    }
+
+    return true;
+}
+
 // Single-pass HTML escaping — one regex scan, one allocation, lookup table compiled once.
 const _HTML_ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
 const _HTML_ESCAPE_RE  = /[&<>"']/g;
@@ -1167,58 +1229,8 @@ module.exports = function koaClassicServer(
                 }
             }
 
-            // Template rendering — rawBuffer passed as optional 4th param so render functions
-            // can skip their own fs.readFile() call when the file is already in memory.
-            // 5th param is an AbortSignal: aborts on timeout or on client disconnect.
-            if (options.template.ext.length > 0 && options.template.render) {
-                const fileExt = path.extname(toOpen).slice(1); // Remove leading dot
-
-                if (fileExt && options.template.ext.includes(fileExt)) {
-                    const controller = new AbortController();
-                    const onClientClose = () => controller.abort();
-                    ctx.req.on('close', onClientClose);
-
-                    const timeoutMs = options.template.renderTimeout;
-                    let timer = null;
-                    let timedOut = false;
-
-                    const renderPromise = Promise.resolve().then(() =>
-                        options.template.render(ctx, next, toOpen, rawBuffer, controller.signal)
-                    );
-                    renderPromise.catch(() => {}); // swallow late rejections after timeout
-
-                    try {
-                        if (timeoutMs > 0) {
-                            await Promise.race([
-                                renderPromise,
-                                new Promise((_, reject) => {
-                                    timer = setTimeout(() => {
-                                        timedOut = true;
-                                        controller.abort();
-                                        const err = new Error('Template render timeout');
-                                        err.code = 'ETEMPLATETIMEOUT';
-                                        reject(err);
-                                    }, timeoutMs);
-                                })
-                            ]);
-                        } else {
-                            await renderPromise;
-                        }
-                        return;
-                    } catch (error) {
-                        if (timedOut || error.code === 'ETEMPLATETIMEOUT') {
-                            sendTemplateError(ctx, 504, _GATEWAY_TIMEOUT_HTML,
-                                'Template render timeout after ' + timeoutMs + 'ms:', toOpen);
-                        } else {
-                            sendTemplateError(ctx, 500, _TEMPLATE_ERROR_HTML,
-                                'Template rendering error:', error);
-                        }
-                        return;
-                    } finally {
-                        if (timer) clearTimeout(timer);
-                        ctx.req.removeListener('close', onClientClose);
-                    }
-                }
+            if (await tryRenderTemplate(ctx, next, toOpen, rawBuffer, options.template)) {
+                return;
             }
 
             // baseEtag — encoding-independent; used only for If-Range (Range requests skip compression)

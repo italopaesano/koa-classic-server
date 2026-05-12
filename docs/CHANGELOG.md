@@ -151,6 +151,18 @@ The `Host` header is intentionally not validated by the middleware — host vali
 
 No code change in `index.cjs` — documentation only.
 
+#### Security headers scope and limits (Security M-4)
+
+Clarify that the security headers emitted by the middleware (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`) are applied **only** to middleware-generated responses (directory listing + error pages). User-served static files are returned without these headers — by design, because the right policy is application-specific.
+
+The new *Best Practices → Sicurezza → Limiti dei Security Headers sui file statici* section in `docs/DOCUMENTATION.md` covers:
+
+- A table listing which headers are emitted automatically and on which responses.
+- An upstream Koa middleware example that adds `X-Content-Type-Options`, `Referrer-Policy`, `Strict-Transport-Security` to every response and a strict CSP only to HTML responses.
+- Notes on rolling out CSP via `Content-Security-Policy-Report-Only`, and on `COOP`/`COEP` for projects using `SharedArrayBuffer`.
+
+No code change in `index.cjs` — documentation only.
+
 ### ⚠️ Breaking Changes
 
 #### Dot-files hidden by default

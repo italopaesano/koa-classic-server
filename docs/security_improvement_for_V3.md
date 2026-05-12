@@ -17,7 +17,7 @@ Analisi di sicurezza del progetto `koa-classic-server` v3.0.0-alpha.0, con roadm
 - [x] [M-1] Timeout configurabile sul template rendering *(Medio)*
 - [x] [M-2] Cache staleness su filesystem NFS/distribuiti *(Medio)*
 - [x] [M-3] Documentare il rischio DNS Rebinding *(Basso)*
-- [ ] [M-4] Documentare i limiti dei security headers sui file statici *(Basso)*
+- [x] [M-4] Documentare i limiti dei security headers sui file statici *(Basso)*
 
 ### Nice-to-Have
 - [x] [N-1] Logger iniettabile dall'esterno
@@ -208,6 +208,8 @@ Aggiungere nella documentazione una sezione dedicata che spieghi:
 - Come aggiungere headers custom sui file statici tramite Koa middleware separato
 - Esempio con `ctx.set()` a monte di `koa-classic-server`
 
+**Stato V3:** documentato in `docs/DOCUMENTATION.md` → *Best Practices → Sicurezza → Limiti dei Security Headers sui file statici*, con tabella degli header impostati automaticamente, esempio di middleware Koa upstream con CSP/HSTS/Referrer-Policy, e note operative su CSP report-only e COOP/COEP.
+
 ---
 
 ## Nice-to-Have
@@ -257,6 +259,6 @@ Il directory listing processa le entry in batch da 64 elementi con `Promise.all(
 | M-1 | Timeout template rendering | Media | Implementato |
 | M-2 | Cache staleness NFS | Media | Implementato |
 | M-3 | Documentare DNS Rebinding | Bassa | Documentato |
-| M-4 | Documentare limiti security headers | Bassa | Da fare |
+| M-4 | Documentare limiti security headers | Bassa | Documentato |
 | N-1 | Logger iniettabile | Nice-to-have | Implementato |
 | N-2 | Protezione DoS directory listing | Nice-to-have | Implementato |

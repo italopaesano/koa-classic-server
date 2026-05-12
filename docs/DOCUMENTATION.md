@@ -1336,6 +1336,69 @@ app.use(koaClassicServer(rootDir));
 
 > ⚠️ Se il proxy a monte termina TLS e inoltra all'app, configura `app.proxy = true` e usa `ctx.hostname` con `X-Forwarded-Host` solo se il proxy è fidato.
 
+#### Limiti dei Security Headers sui file statici
+
+`koa-classic-server` imposta automaticamente i seguenti header SOLO sulle **risposte generate** dal middleware (directory listing HTML, pagine di errore 400/403/404/405/500):
+
+| Header | Valore |
+|---|---|
+| `Content-Security-Policy` | `default-src 'none'; ...` (hash-based per il listing, fully restrictive per gli errori) |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `no-referrer` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=()` |
+
+**Cosa NON riceve questi header**
+
+I **file statici** serviti dal disco (HTML, JS, CSS, immagini, font, video, qualsiasi altra estensione) sono restituiti **senza** alcun header di sicurezza aggiunto. Questo è **by-design**:
+
+- Le policy di sicurezza appropriate sono diverse caso per caso (CSP per app SPA, sandbox per documenti, COEP/COOP per pagine con SharedArrayBuffer, ecc.).
+- Imporre una CSP rigida di default romperebbe la maggior parte dei siti reali (script inline, CDN, Google Fonts, ecc.).
+- L'utente possiede la propria policy e deve dichiararla esplicitamente.
+
+> ⚠️ Non assumere che il middleware "metta in sicurezza" i tuoi file: gli header sopra elencati vengono inviati **solo** quando la risposta è generata dal middleware stesso.
+
+**Come aggiungere security headers ai file statici**
+
+Inserisci un middleware Koa **prima** di `koa-classic-server`. Il middleware si applica a ogni risposta uscente, statica o generata che sia, e i `ctx.set()` rimangono attivi anche dopo che il file server scrive il body:
+
+```javascript
+const Koa = require('koa');
+const koaClassicServer = require('koa-classic-server');
+
+const app = new Koa();
+
+// 1) Header globali su TUTTE le risposte (statiche + generate).
+app.use(async (ctx, next) => {
+  // Header sempre validi per un file server pubblico:
+  ctx.set('X-Content-Type-Options', 'nosniff');
+  ctx.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  ctx.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
+
+  // CSP per file HTML serviti dall'utente (mantieni il file server per gli altri MIME).
+  // Esempio strict-by-default per un sito statico moderno:
+  if (ctx.path.endsWith('.html') || ctx.path === '/' || ctx.path.endsWith('/')) {
+    ctx.set('Content-Security-Policy',
+      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+      "script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    );
+  }
+
+  await next();
+});
+
+// 2) Quindi il file server.
+app.use(koaClassicServer(__dirname + '/public'));
+
+app.listen(3000);
+```
+
+**Note operative**
+
+- Il middleware sopra **non sovrascrive** gli header che `koa-classic-server` imposta sulle proprie pagine (listing/errori): Koa preserva il primo `set()`, ma se vuoi essere esplicito puoi applicare le tue policy solo a `ctx.status < 400` e a `Content-Type` HTML.
+- Una CSP rigida con `default-src 'self'` rompe pagine che usano script inline o CDN: parti **report-only** (`Content-Security-Policy-Report-Only`) per rilevare le violazioni prima di enforce-arla.
+- Per progetti SPA/PWA che richiedono `SharedArrayBuffer`, considera anche `Cross-Origin-Opener-Policy: same-origin` e `Cross-Origin-Embedder-Policy: require-corp`.
+
 ---
 
 ### 2. Performance

@@ -20,7 +20,7 @@
 
 const autocannon = require('autocannon');
 const Koa = require('koa');
-const koaClassicServer = require('./index.cjs');
+const koaClassicServer = require('../index.cjs');
 const path = require('path');
 const fs = require('fs');
 

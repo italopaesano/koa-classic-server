@@ -14,7 +14,7 @@ Analisi di sicurezza del progetto `koa-classic-server` v3.0.0-alpha.0, con roadm
 - [ ] [PS-5] Dipendenze — superficie d'attacco minima
 
 ### Miglioramenti Prioritari
-- [ ] [M-1] Timeout configurabile sul template rendering *(Medio)*
+- [x] [M-1] Timeout configurabile sul template rendering *(Medio)*
 - [ ] [M-2] Cache staleness su filesystem NFS/distribuiti *(Medio)*
 - [ ] [M-3] Documentare il rischio DNS Rebinding *(Basso)*
 - [ ] [M-4] Documentare i limiti dei security headers sui file statici *(Basso)*
@@ -252,7 +252,7 @@ Il directory listing processa le entry in batch da 64 elementi con `Promise.all(
 | PS-3 | XSS Prevention nel listing | — | Implementato |
 | PS-4 | Security Headers CSP/HSTS | — | Implementato |
 | PS-5 | Dipendenze minimali | — | Implementato |
-| M-1 | Timeout template rendering | Media | Da fare |
+| M-1 | Timeout template rendering | Media | Implementato |
 | M-2 | Cache staleness NFS | Media | Da fare |
 | M-3 | Documentare DNS Rebinding | Bassa | Da fare |
 | M-4 | Documentare limiti security headers | Bassa | Da fare |

@@ -113,6 +113,31 @@ app.use(koaClassicServer('/public', {
 
 **Backward compatible:** when `logger` is omitted, the default is `console` — existing code and tests that spy on `console.error` / `console.warn` continue to work unchanged.
 
+#### `maxDirEntries` + `pageSize` — bounded and paginated directory listings (Security N-2)
+
+Two new top-level options harden the directory listing against indirect DoS via very large directories, and improve usability on big folders.
+
+```js
+app.use(koaClassicServer('/public', {
+  maxDirEntries: 10000,   // hard cap on entries enumerated (default 10000; 0 = disabled)
+  pageSize:      100      // entries per page in the listing UI (default 100; 0 = disabled)
+}));
+```
+
+**maxDirEntries**
+- Entries are streamed via `fs.promises.opendir()` and the iterator stops after `maxDirEntries` reads — memory and CPU are bounded regardless of how many files are actually on disk.
+- When the cap is reached, a yellow banner is added at the top of the listing and an `X-Dir-Truncated: <N>` response header is set, so monitoring can distinguish capped pages.
+- Default `10000` is permissive enough for normal use while bounding the worst case.
+
+**pageSize**
+- Pagination kicks in only when the visible entries exceed `pageSize`; small directories render in a single page exactly like before.
+- The current page is selected by `?page=N` (0-based). Invalid or out-of-range values clamp silently to the nearest valid page.
+- A numbered paginator (`« First | ‹ Prev | 0 1 … N-1 | Next › | Last »`) is rendered below the table, preserving any active `sort`/`order`. An `X-Dir-Pagination: <current>/<last>` header is also emitted.
+
+**CSP impact:** the listing CSS now includes rules for `.kcs-banner` and `.kcs-pagination`. The page's CSP hash is auto-recomputed at module load (no manual config change needed).
+
+**Backward compatibility:** sites that always served small directories see no visible change beyond the new headers, which are only set when applicable.
+
 ### ⚠️ Breaking Changes
 
 #### Dot-files hidden by default

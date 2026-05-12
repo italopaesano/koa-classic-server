@@ -1283,6 +1283,59 @@ app.use(koaClassicServer(rootDir, {
 }));
 ```
 
+#### DNS Rebinding — valida l'header `Host` a monte
+
+`koa-classic-server` **non valida l'header `Host`** delle richieste in entrata. Questo è intenzionale: la validazione del Virtual Host appartiene allo strato di rete (reverse proxy o middleware Koa applicativo), non a un file server.
+
+In assenza di tale validazione, un host LAN/loopback (es. `127.0.0.1`, `192.168.x.x`) è vulnerabile a **DNS rebinding**: un attaccante remoto può far risolvere il proprio dominio all'IP della vittima ed eseguire richieste cross-origin verso il server locale come se provenissero da un'origine legittima del browser.
+
+**Quando è un problema concreto**
+- Server raggiunto da `localhost` / IP privati senza reverse proxy davanti.
+- Browser dell'utente che visita pagine non fidate mentre il server è attivo.
+
+**Quando NON è un problema**
+- Deploy dietro reverse proxy (nginx, Caddy, Apache, Traefik) configurato con allowlist di `server_name` / hostname.
+- Server raggiungibile solo da IP pubblico dietro CDN/WAF.
+- Binding esplicito a interfaccia non instradabile (`app.listen(port, '127.0.0.1')`) e nessun browser locale espone l'utente a pagine ostili.
+
+**Mitigazione 1 — reverse proxy (raccomandato in produzione)**
+
+Esempio nginx:
+```nginx
+server {
+    listen 80;
+    server_name app.example.com;      # ← allowlist
+    location / { proxy_pass http://127.0.0.1:3000; }
+}
+# Tutte le richieste con Host diverso da app.example.com vengono rifiutate qui.
+```
+
+**Mitigazione 2 — middleware Koa applicativo (utile in dev/LAN)**
+
+Antepone una guardia su `ctx.host` PRIMA di `koa-classic-server`:
+
+```javascript
+const ALLOWED_HOSTS = new Set([
+  'app.example.com',
+  'localhost:3000',
+  '127.0.0.1:3000',
+]);
+
+app.use(async (ctx, next) => {
+  // ctx.host include la porta (es. "localhost:3000")
+  if (!ALLOWED_HOSTS.has(ctx.host)) {
+    ctx.status = 421; // Misdirected Request
+    ctx.body = 'Host not allowed';
+    return;
+  }
+  await next();
+});
+
+app.use(koaClassicServer(rootDir));
+```
+
+> ⚠️ Se il proxy a monte termina TLS e inoltra all'app, configura `app.proxy = true` e usa `ctx.hostname` con `X-Forwarded-Host` solo se il proxy è fidato.
+
 ---
 
 ### 2. Performance

@@ -9,15 +9,15 @@
         hidden: { dotFiles: { default: 'hidden' }, dotDirs: { default: 'visible' } }
       (adjust values to match your desired behaviour)[0m
 
-      732 |         if (dotFilesImplicit || dotDirsImplicit) {
-      733 |             _hiddenDefaultWarnEmitted = true;
-    > 734 |             _logger.warn(...warnPayload(_logger,
+      735 |         if (dotFilesImplicit || dotDirsImplicit) {
+      736 |             _hiddenDefaultWarnEmitted = true;
+    > 737 |             _logger.warn(...warnPayload(_logger,
           |                     ^
-      735 |                 '[koa-classic-server] WARNING: hidden.dotFiles.default and/or hidden.dotDirs.default are not explicitly set.\n' +
-      736 |                 '  Since v3.0.0 the defaults are: dotFiles → "hidden", dotDirs → "visible".\n' +
-      737 |                 '  To suppress this warning, add to your configuration:\n' +
+      738 |                 '[koa-classic-server] WARNING: hidden.dotFiles.default and/or hidden.dotDirs.default are not explicitly set.\n' +
+      739 |                 '  Since v3.0.0 the defaults are: dotFiles → "hidden", dotDirs → "visible".\n' +
+      740 |                 '  To suppress this warning, add to your configuration:\n' +
 
-      at koaClassicServer (index.cjs:734:21)
+      at koaClassicServer (index.cjs:737:21)
       at Object.koaClassicServer (__tests__/performance.test.js:139:17)
 
   console.log
@@ -27,22 +27,22 @@
       at Object.log (__tests__/performance.test.js:159:21)
 
   console.log
-       Average: 8.23ms
+       Average: 2.09ms
 
       at Object.log (__tests__/performance.test.js:160:21)
 
   console.log
-       Median:  1.83ms
+       Median:  1.66ms
 
       at Object.log (__tests__/performance.test.js:161:21)
 
   console.log
-       Min:     1.25ms
+       Min:     1.40ms
 
       at Object.log (__tests__/performance.test.js:162:21)
 
   console.log
-       Max:     574.85ms
+       Max:     22.92ms
 
       at Object.log (__tests__/performance.test.js:163:21)
 
@@ -53,22 +53,22 @@
       at Object.log (__tests__/performance.test.js:178:21)
 
   console.log
-       Average: 2.16ms
+       Average: 2.06ms
 
       at Object.log (__tests__/performance.test.js:179:21)
 
   console.log
-       Median:  1.97ms
+       Median:  1.93ms
 
       at Object.log (__tests__/performance.test.js:180:21)
 
   console.log
-       Min:     1.59ms
+       Min:     1.65ms
 
       at Object.log (__tests__/performance.test.js:181:21)
 
   console.log
-       Max:     6.34ms
+       Max:     4.47ms
 
       at Object.log (__tests__/performance.test.js:182:21)
 
@@ -79,22 +79,22 @@
       at Object.log (__tests__/performance.test.js:197:21)
 
   console.log
-       Average: 12.06ms
+       Average: 7.19ms
 
       at Object.log (__tests__/performance.test.js:198:21)
 
   console.log
-       Median:  7.71ms
+       Median:  5.82ms
 
       at Object.log (__tests__/performance.test.js:199:21)
 
   console.log
-       Min:     4.74ms
+       Min:     4.53ms
 
       at Object.log (__tests__/performance.test.js:200:21)
 
   console.log
-       Max:     42.88ms
+       Max:     21.60ms
 
       at Object.log (__tests__/performance.test.js:201:21)
 
@@ -105,22 +105,22 @@
       at Object.log (__tests__/performance.test.js:219:21)
 
   console.log
-       Average: 8.15ms
+       Average: 5.22ms
 
       at Object.log (__tests__/performance.test.js:220:21)
 
   console.log
-       Median:  6.56ms
+       Median:  4.65ms
 
       at Object.log (__tests__/performance.test.js:221:21)
 
   console.log
-       Min:     5.03ms
+       Min:     4.03ms
 
       at Object.log (__tests__/performance.test.js:222:21)
 
   console.log
-       Max:     66.87ms
+       Max:     17.47ms
 
       at Object.log (__tests__/performance.test.js:223:21)
 
@@ -131,22 +131,22 @@
       at Object.log (__tests__/performance.test.js:237:21)
 
   console.log
-       Average: 40.80ms
+       Average: 28.83ms
 
       at Object.log (__tests__/performance.test.js:238:21)
 
   console.log
-       Median:  40.72ms
+       Median:  28.80ms
 
       at Object.log (__tests__/performance.test.js:239:21)
 
   console.log
-       Min:     35.91ms
+       Min:     26.80ms
 
       at Object.log (__tests__/performance.test.js:240:21)
 
   console.log
-       Max:     46.22ms
+       Max:     31.02ms
 
       at Object.log (__tests__/performance.test.js:241:21)
 
@@ -162,22 +162,22 @@
       at Object.log (__tests__/performance.test.js:258:21)
 
   console.log
-       Average: 406.60ms
+       Average: 265.99ms
 
       at Object.log (__tests__/performance.test.js:259:21)
 
   console.log
-       Median:  395.70ms
+       Median:  266.27ms
 
       at Object.log (__tests__/performance.test.js:260:21)
 
   console.log
-       Min:     377.12ms
+       Min:     261.83ms
 
       at Object.log (__tests__/performance.test.js:261:21)
 
   console.log
-       Max:     457.50ms
+       Max:     271.55ms
 
       at Object.log (__tests__/performance.test.js:262:21)
 
@@ -187,7 +187,7 @@
       at Object.log (__tests__/performance.test.js:263:21)
 
   console.log
-       ⚠️  Expected to drop to ~121.98ms after optimization
+       ⚠️  Expected to drop to ~79.80ms after optimization
 
       at Object.log (__tests__/performance.test.js:264:21)
 
@@ -198,12 +198,12 @@
       at Object.log (__tests__/performance.test.js:281:21)
 
   console.log
-       Total time: 17.44ms
+       Total time: 13.28ms
 
       at Object.log (__tests__/performance.test.js:282:21)
 
   console.log
-       Avg per request: 1.74ms
+       Avg per request: 1.33ms
 
       at Object.log (__tests__/performance.test.js:283:21)
 
@@ -214,12 +214,12 @@
       at Object.log (__tests__/performance.test.js:300:21)
 
   console.log
-       Total time: 30.66ms
+       Total time: 18.73ms
 
       at Object.log (__tests__/performance.test.js:301:21)
 
   console.log
-       Avg per request: 6.13ms
+       Avg per request: 3.75ms
 
       at Object.log (__tests__/performance.test.js:302:21)
 
@@ -240,22 +240,22 @@
       at Object.log (__tests__/performance.test.js:321:21)
 
   console.log
-       Average: 1.19ms
+       Average: 1.26ms
 
       at Object.log (__tests__/performance.test.js:322:21)
 
   console.log
-       Median:  1.18ms
+       Median:  1.11ms
 
       at Object.log (__tests__/performance.test.js:323:21)
 
   console.log
-       Min:     0.81ms
+       Min:     0.92ms
 
       at Object.log (__tests__/performance.test.js:324:21)
 
   console.log
-       Max:     2.76ms
+       Max:     3.88ms
 
       at Object.log (__tests__/performance.test.js:325:21)
 
@@ -266,12 +266,12 @@
       at Object.log (__tests__/performance.test.js:347:21)
 
   console.log
-       Heap used increase: -4.07 MB
+       Heap used increase: 6.97 MB
 
       at Object.log (__tests__/performance.test.js:348:21)
 
   console.log
-       External increase: -0.14 MB
+       External increase: 0.25 MB
 
       at Object.log (__tests__/performance.test.js:349:21)
 
@@ -347,26 +347,26 @@
 
       at Object.log (__tests__/performance.test.js:369:13)
 
-PASS __tests__/performance.test.js (5.589 s)
+PASS __tests__/performance.test.js
   Performance Benchmarks - BASELINE (v1.2.0)
     File Serving Performance
-      ✓ Benchmark: Small file (1KB) - 100 iterations (829 ms)
-      ✓ Benchmark: Medium file (100KB) - 50 iterations (112 ms)
-      ✓ Benchmark: Large file (1MB) - 20 iterations (244 ms)
+      ✓ Benchmark: Small file (1KB) - 100 iterations (215 ms)
+      ✓ Benchmark: Medium file (100KB) - 50 iterations (107 ms)
+      ✓ Benchmark: Large file (1MB) - 20 iterations (146 ms)
     Directory Listing Performance
-      ✓ Benchmark: Small directory (100 files) - 50 iterations (409 ms)
-      ✓ Benchmark: Large directory (1,000 files) - 20 iterations (818 ms)
-      ✓ Benchmark: Very large directory (10,000 files) - 5 iterations (2035 ms)
+      ✓ Benchmark: Small directory (100 files) - 50 iterations (264 ms)
+      ✓ Benchmark: Large directory (1,000 files) - 20 iterations (579 ms)
+      ✓ Benchmark: Very large directory (10,000 files) - 5 iterations (1333 ms)
     Concurrent Request Performance
-      ✓ Benchmark: 10 concurrent small file requests (20 ms)
-      ✓ Benchmark: 5 concurrent directory listings (100 files each) (33 ms)
+      ✓ Benchmark: 10 concurrent small file requests (15 ms)
+      ✓ Benchmark: 5 concurrent directory listings (100 files each) (21 ms)
     404 Not Found Performance
-      ✓ Benchmark: Non-existent file - 50 iterations (62 ms)
+      ✓ Benchmark: Non-existent file - 50 iterations (65 ms)
     Memory Usage (Informational)
-      ✓ Memory usage during large directory listing (420 ms)
+      ✓ Memory usage during large directory listing (269 ms)
 
 Test Suites: 1 passed, 1 total
 Tests:       10 passed, 10 total
 Snapshots:   0 total
-Time:        5.74 s, estimated 6 s
+Time:        3.365 s, estimated 5 s
 Ran all test suites matching __tests__/performance.test.js.

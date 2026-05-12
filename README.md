@@ -15,7 +15,7 @@ The 3.0 series builds on 2.x with stronger security defaults, observability hook
 
 ### Key Features in Version 3.x
 
-✅ **Bounded directory listings** — `maxDirEntries` caps reads via `fs.opendir()` streaming, capping CPU/RAM on huge folders (banner + `X-Dir-Truncated` header)
+✅ **Bounded directory listings** — `maxDirEntries` caps how many entries are sorted, stat'd, and rendered per page (banner + `X-Dir-Truncated` header); opt-in RAM-bounded streaming reads planned for v3.1
 ✅ **Paginated listings** — `pageSize` adds 0-based `?page=N` navigation with First/Prev/Next/Last + `X-Dir-Pagination` header
 ✅ **Template render timeout + AbortSignal** — `template.renderTimeout` (default 30s) + a per-request `template.signal` so slow renders never wedge the server
 ✅ **Injectable logger** — pass any `{ error, warn, info, debug }`-shaped logger (Pino, Bunyan, Winston, console) for full observability
@@ -50,7 +50,7 @@ The 3.0 series builds on 2.x with stronger security defaults, observability hook
 - 🎨 **Template Engine Support** — EJS, Pug, Handlebars, Nunjucks, etc.
 - 🔒 **Enterprise Security** — Path traversal, XSS, race condition protection, CSP, dot-file hiding
 - ⚙️ **Highly Configurable** — URL prefixes, reserved paths, index files, hidden patterns
-- 🚀 **High Performance** — Async/await, non-blocking I/O, opendir streaming
+- 🚀 **High Performance** — Async/await, non-blocking I/O, single-syscall directory reads
 - 🔗 **Symlink Support** — Transparent resolution with directory listing indicators
 - 🌐 **Clean URLs** — Hide file extensions for SEO-friendly URLs via `hideExtension`
 - 🧪 **Well-Tested** — 532 passing tests with comprehensive coverage
@@ -171,7 +171,7 @@ app.use(koaClassicServer(__dirname + '/uploads', {
 
 **What happens on a directory with 1,000,000 files**
 
-- The middleware uses `fs.promises.opendir()` and stops after `maxDirEntries` reads — RAM and CPU are bounded regardless of disk size.
+- The middleware calls `fs.promises.readdir()` once and slices the result to `maxDirEntries` — sorting, stat'ing, and rendering are CPU-bounded by `maxDirEntries`. The initial `readdir()` itself is **not** bounded by `maxDirEntries` (see v3.1 roadmap for an opt-in streaming mode targeting adversarial-directory workloads).
 - A yellow banner appears at the top of the listing: *"Showing first 10000 entries (cap reached)…"*
 - The response carries `X-Dir-Truncated: 10000` so monitoring can flag capped pages.
 - Pagination is rendered below the table with `« First · ‹ Prev · 0 1 … N · Next › · Last »`, and an `X-Dir-Pagination: <current>/<last>` response header is set.
@@ -538,7 +538,7 @@ File metadata is verified before streaming. A file deleted between check and acc
 
 #### 8. Bounded Listings (V3)
 
-`maxDirEntries` caps directory enumeration via `opendir()` streaming — protects against indirect DoS on directories with millions of files.
+`maxDirEntries` caps the number of entries that are sorted, stat'd, and rendered per listing — bounds CPU and HTML size against accidentally-large folders. The initial `readdir()` is not bounded by this option; an opt-in streaming mode for adversarial-directory workloads is planned for v3.1.
 
 #### 9. Template Render Timeout (V3)
 
@@ -554,7 +554,7 @@ File metadata is verified before streaming. A file deleted between check and acc
 
 ### Optimizations
 
-- **`opendir()` streaming** — directory entries iterated without materializing the full array first
+- **Single-syscall `readdir()`** — directory entries fetched in one batched syscall, then sliced to `maxDirEntries` to cap rendering work
 - **Single `stat()`** per item — no double filesystem traversal
 - **Array `.join()`** for listing HTML — significantly less GC pressure than `+=`
 - **HTTP conditional responses** — 304s with `If-None-Match` / `If-Modified-Since` (when caching enabled)

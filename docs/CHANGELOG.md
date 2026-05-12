@@ -125,9 +125,10 @@ app.use(koaClassicServer('/public', {
 ```
 
 **maxDirEntries**
-- Entries are streamed via `fs.promises.opendir()` and the iterator stops after `maxDirEntries` reads — memory and CPU are bounded regardless of how many files are actually on disk.
-- When the cap is reached, a yellow banner is added at the top of the listing and an `X-Dir-Truncated: <N>` response header is set, so monitoring can distinguish capped pages.
-- Default `10000` is permissive enough for normal use while bounding the worst case.
+- Caps how many entries are sorted, stat'd, and rendered per directory listing. Excess entries trigger a yellow banner at the top of the page and an `X-Dir-Truncated: <N>` response header so monitoring can distinguish capped listings.
+- Implementation: the middleware calls `fs.promises.readdir()` once and then slices the result. This bounds rendering and CPU cost but **not** the size of the initial `readdir()` allocation. For typical static-file servers (where the directory contents are controlled by the operator) this is the right trade-off — it recovers v2-class listing performance.
+- Default `10000` is permissive enough for normal use while bounding rendering cost on accidentally-large folders.
+- **Caveat for adversarial workloads:** if you serve a directory writable by untrusted parties, an attacker creating millions of files could still force a large `readdir()` allocation. Tracked for v3.1 as an opt-in streaming read mode — see `docs/security_improvement_for_V3.md` → *Future Work*.
 
 **pageSize**
 - Pagination kicks in only when the visible entries exceed `pageSize`; small directories render in a single page exactly like before.

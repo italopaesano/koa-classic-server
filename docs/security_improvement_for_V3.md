@@ -16,7 +16,7 @@ Analisi di sicurezza del progetto `koa-classic-server` v3.0.0-alpha.0, con roadm
 ### Miglioramenti Prioritari
 - [x] [M-1] Timeout configurabile sul template rendering *(Medio)*
 - [x] [M-2] Cache staleness su filesystem NFS/distribuiti *(Medio)*
-- [ ] [M-3] Documentare il rischio DNS Rebinding *(Basso)*
+- [x] [M-3] Documentare il rischio DNS Rebinding *(Basso)*
 - [ ] [M-4] Documentare i limiti dei security headers sui file statici *(Basso)*
 
 ### Nice-to-Have
@@ -189,6 +189,8 @@ Non è necessario implementarlo nel middleware (responsabilità del reverse prox
 
 > **Nota di sicurezza:** questo middleware non valida l'header `Host`. In produzione, è necessario configurare un reverse proxy (nginx, Caddy) che accetti solo gli hostname attesi, oppure usare [`koa-host-header-safe`](https://github.com/search?q=koa+host+header) o simili.
 
+**Stato V3:** documentato in `docs/DOCUMENTATION.md` → *Best Practices → Sicurezza → DNS Rebinding*, con esempio nginx e middleware Koa di allowlist su `ctx.host`.
+
 ---
 
 ### [M-4] Documentare i limiti dei security headers sui file statici *(Priorità: Bassa)*
@@ -254,7 +256,7 @@ Il directory listing processa le entry in batch da 64 elementi con `Promise.all(
 | PS-5 | Dipendenze minimali | — | Implementato |
 | M-1 | Timeout template rendering | Media | Implementato |
 | M-2 | Cache staleness NFS | Media | Implementato |
-| M-3 | Documentare DNS Rebinding | Bassa | Da fare |
+| M-3 | Documentare DNS Rebinding | Bassa | Documentato |
 | M-4 | Documentare limiti security headers | Bassa | Da fare |
 | N-1 | Logger iniettabile | Nice-to-have | Implementato |
 | N-2 | Protezione DoS directory listing | Nice-to-have | Implementato |

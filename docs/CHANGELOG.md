@@ -138,6 +138,19 @@ app.use(koaClassicServer('/public', {
 
 **Backward compatibility:** sites that always served small directories see no visible change beyond the new headers, which are only set when applicable.
 
+### 📝 Documentation
+
+#### DNS Rebinding deployment guidance (Security M-3)
+
+The `Host` header is intentionally not validated by the middleware — host validation belongs to the reverse proxy or to a dedicated application-level guard. The new *Best Practices → Sicurezza → DNS Rebinding* section in `docs/DOCUMENTATION.md` explains:
+
+- When the risk applies (LAN/loopback exposure without a fronting proxy).
+- When it doesn't (reverse proxy with `server_name` allowlist, public IP behind CDN/WAF).
+- A drop-in nginx allowlist snippet.
+- A Koa middleware that checks `ctx.host` against an allowlist and returns `421 Misdirected Request`, plus a note on `app.proxy = true` + `X-Forwarded-Host` when terminating TLS upstream.
+
+No code change in `index.cjs` — documentation only.
+
 ### ⚠️ Breaking Changes
 
 #### Dot-files hidden by default

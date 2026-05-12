@@ -1,11 +1,21 @@
 const supertest = require('supertest');
+const crypto = require('crypto');
 const koaClassicServer = require('../index.cjs');
 const Koa = require('koa');
 const path = require('path');
 
 const root = path.join(__dirname, 'publicWwwTest');
 
-const LISTING_CSP = "default-src 'none'; style-src 'sha256-9izM/ygZXy3xF1fZ8DQP0Tovpqy5fBMn4e6vf7Xs04A='; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+// Compute the expected CSP hash from the actual inline CSS in the response, so
+// CSS edits to the listing template do not require updating a hardcoded hash here.
+async function expectedListingCsp(server, requestPath = '/') {
+    const res = await supertest(server).get(requestPath);
+    const m = res.text.match(/<style>([\s\S]*?)<\/style>/);
+    if (!m) throw new Error('No <style> block in listing HTML — cannot compute expected CSP');
+    const cssHash = 'sha256-' + crypto.createHash('sha256').update(m[1], 'utf8').digest('base64');
+    return `default-src 'none'; style-src '${cssHash}'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`;
+}
+
 const NOT_FOUND_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 const COMMON_HEADERS = {
@@ -30,7 +40,7 @@ describe('Security headers — directory listing page', () => {
 
   test('Content-Security-Policy uses hash-based style-src', async () => {
     const res = await supertest(server).get('/');
-    expect(res.headers['content-security-policy']).toBe(LISTING_CSP);
+    expect(res.headers['content-security-policy']).toBe(await expectedListingCsp(server));
   });
 
   test('X-Content-Type-Options: nosniff', async () => {
@@ -62,8 +72,10 @@ describe('Security headers — directory listing page', () => {
 
   test('CSP style-src hash in listing matches actual inline CSS', async () => {
     const res = await supertest(server).get('/');
-    // The hash must appear in the CSP header
-    expect(res.headers['content-security-policy']).toContain('sha256-9izM/ygZXy3xF1fZ8DQP0Tovpqy5fBMn4e6vf7Xs04A=');
+    const styleMatch = res.text.match(/<style>([\s\S]*?)<\/style>/);
+    expect(styleMatch).toBeTruthy();
+    const expectedHash = 'sha256-' + crypto.createHash('sha256').update(styleMatch[1], 'utf8').digest('base64');
+    expect(res.headers['content-security-policy']).toContain(expectedHash);
   });
 });
 
@@ -145,7 +157,7 @@ describe('Security headers — subdirectory listing page', () => {
   test('Listing of subdirectory also has security headers', async () => {
     const res = await supertest(server).get('/cartella/');
     expect(res.status).toBe(200);
-    expect(res.headers['content-security-policy']).toBe(LISTING_CSP);
+    expect(res.headers['content-security-policy']).toBe(await expectedListingCsp(server, '/cartella/'));
     for (const [header, value] of Object.entries(COMMON_HEADERS)) {
       expect(res.headers[header]).toBe(value);
     }

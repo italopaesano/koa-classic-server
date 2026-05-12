@@ -73,6 +73,36 @@ const LISTING_CSS = `
     th:nth-child(1), td:nth-child(1) { width: 50%; }
     th:nth-child(2), td:nth-child(2) { width: 30%; }
     th:nth-child(3), td:nth-child(3) { width: 20%; text-align: right; }
+    .kcs-banner {
+        max-width: 800px;
+        margin: 10px 0;
+        padding: 10px 14px;
+        background-color: #fff7e0;
+        border-left: 4px solid #e0a800;
+        font-size: 14px;
+        color: #5a4a00;
+    }
+    .kcs-pagination {
+        max-width: 800px;
+        margin: 16px 0;
+        font-size: 14px;
+    }
+    .kcs-pagination a, .kcs-pagination span {
+        display: inline-block;
+        padding: 4px 8px;
+        margin-right: 4px;
+    }
+    .kcs-pagination .kcs-page-current {
+        font-weight: bold;
+        background-color: #f0f0f0;
+        border-radius: 3px;
+    }
+    .kcs-pagination .kcs-page-ellipsis {
+        color: #888;
+    }
+    .kcs-pagination .kcs-page-disabled {
+        color: #bbb;
+    }
 `;
 
 // SHA-256 hash of the listing CSS, computed once at startup (zero per-request overhead).
@@ -452,6 +482,14 @@ module.exports = function koaClassicServer(
      opts = {
         method: ['GET'], // Supported methods, otherwise next() will be called
         showDirContents: true, // Show or hide directory contents
+        maxDirEntries: 10000,  // Cap on entries enumerated per directory listing. Reads stop after this
+                               // value via opendir() async iterator, capping CPU/RAM regardless of
+                               // directory size. Excess entries are not shown — a banner + the
+                               // X-Dir-Truncated response header advertise the truncation.
+                               // Must be finite number >= 0; 0 = disabled (no cap).
+        pageSize: 100,         // Number of entries per directory listing page. Pagination kicks in only
+                               // when visible entries > pageSize. Page index via ?page=N (0-based);
+                               // out-of-range values are clamped silently. 0 disables pagination.
         index: ["index.html"], // Index file name(s) - must be an ARRAY:
                                //   - Array of strings: ["index.html", "index.htm", "default.html"]
                                //   - Array of RegExp:  [/index\.html/i, /default\.(html|htm)/i]
@@ -544,6 +582,19 @@ module.exports = function koaClassicServer(
 
     options.method = Array.isArray(options.method) ? options.method : ['GET'];
     options.showDirContents = typeof options.showDirContents === 'boolean' ? options.showDirContents : true;
+
+    function validateNonNegativeInt(value, optionName, defaultValue) {
+        if (value === undefined) return defaultValue;
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+            throw new Error(
+                `[koa-classic-server] options.${optionName} must be a non-negative integer. ` +
+                'Use 0 to disable. Got: ' + String(value)
+            );
+        }
+        return value;
+    }
+    options.maxDirEntries = validateNonNegativeInt(options.maxDirEntries, 'maxDirEntries', 10000);
+    options.pageSize      = validateNonNegativeInt(options.pageSize,      'pageSize',      100);
 
     // Normalize index option to array format
     if (typeof options.index === 'string') {
@@ -1526,9 +1577,28 @@ module.exports = function koaClassicServer(
 
 
         async function show_dir(toOpen, ctx) {
-            let dir;
+            // Stream directory entries via opendir() — bounds memory even on huge
+            // directories. Reads at most maxDirEntries + 1 to detect truncation.
+            const maxDirEntries = options.maxDirEntries; // 0 = disabled (no cap)
+            const dir = [];
+            let truncated = false;
             try {
-                dir = await fs.promises.readdir(toOpen, { withFileTypes: true });
+                const handle = await fs.promises.opendir(toOpen);
+                try {
+                    for await (const entry of handle) {
+                        if (maxDirEntries > 0 && dir.length >= maxDirEntries) {
+                            truncated = true;
+                            break;
+                        }
+                        dir.push(entry);
+                    }
+                } finally {
+                    // If we broke out early, opendir's handle is still open.
+                    // The async iterator closes on completion but not on break.
+                    if (truncated) {
+                        try { await handle.close(); } catch { /* already closed */ }
+                    }
+                }
             } catch (error) {
                 _logger.error('Directory read error:', error);
                 ctx.status = 500;
@@ -1559,6 +1629,15 @@ module.exports = function koaClassicServer(
             // Build base URL for sorting links (without query params)
             const baseUrl = pageHrefOutPrefix.pathname;
 
+            // Preserves sort/order while overriding `page`; omits page when 0.
+            function buildQueryUrl(targetPage) {
+                const params = [];
+                if (ctx.query.sort)  params.push(`sort=${encodeURIComponent(ctx.query.sort)}`);
+                if (ctx.query.order) params.push(`order=${encodeURIComponent(ctx.query.order)}`);
+                if (targetPage > 0)  params.push(`page=${targetPage}`);
+                return params.length ? `${baseUrl}?${params.join('&')}` : baseUrl;
+            }
+
             // Helper to create sorting URL
             function getSortUrl(column) {
                 let newOrder = 'asc';
@@ -1577,6 +1656,12 @@ module.exports = function koaClassicServer(
             }
 
             const parts = [];
+            let totalPages = 1;     // populated in the non-empty branch below
+            let currentPage = 0;
+            if (truncated) {
+                parts.push(`<div class="kcs-banner">⚠ Showing first ${maxDirEntries} entries (cap reached). More files exist but are not listed. Adjust <code>maxDirEntries</code> to see more.</div>`);
+                ctx.set('X-Dir-Truncated', `${maxDirEntries}`);
+            }
             parts.push("<table>");
             parts.push("<thead>");
             parts.push("<tr>");
@@ -1713,8 +1798,21 @@ module.exports = function koaClassicServer(
                     return sortOrder === 'desc' ? -comparison : comparison;
                 });
 
+                // Pagination — slice the sorted items into the requested page (0-based).
+                const pageSize = options.pageSize; // 0 disables pagination
+                totalPages = pageSize > 0 ? Math.max(1, Math.ceil(items.length / pageSize)) : 1;
+                const rawPage = parseInt(ctx.query.page, 10);
+                const requestedPage = Number.isFinite(rawPage) && rawPage >= 0 ? rawPage : 0;
+                currentPage = Math.min(requestedPage, totalPages - 1); // silent clamp
+                const visibleItems = (pageSize > 0 && items.length > pageSize)
+                    ? items.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
+                    : items;
+                if (totalPages > 1) {
+                    ctx.set('X-Dir-Pagination', `${currentPage}/${totalPages - 1}`);
+                }
+
                 // Generate HTML for sorted items
-                for (const item of items) {
+                for (const item of visibleItems) {
                     let rowStart = '';
                     if (item.effectiveType === 1) {
                         rowStart = `<tr><td> FILE `;
@@ -1742,6 +1840,47 @@ module.exports = function koaClassicServer(
 
             parts.push("</tbody>");
             parts.push("</table>");
+
+            // Numbered paginator with First/Prev/Next/Last and ellipsis around the current page.
+            // Only emitted when pagination is meaningful (computed above; reuses currentPage/totalPages).
+            if (totalPages > 1) {
+                const pageWindow = 2;
+                const pagesToShow = new Set([0, totalPages - 1]);
+                for (let i = Math.max(0, currentPage - pageWindow); i <= Math.min(totalPages - 1, currentPage + pageWindow); i++) {
+                    pagesToShow.add(i);
+                }
+                const sortedPages = [...pagesToShow].sort((a, b) => a - b);
+
+                const pager = ['<nav class="kcs-pagination" aria-label="Pagination">'];
+                if (currentPage > 0) {
+                    pager.push(`<a href="${escapeHtml(buildQueryUrl(0))}">« First</a>`);
+                    pager.push(`<a href="${escapeHtml(buildQueryUrl(currentPage - 1))}">‹ Prev</a>`);
+                } else {
+                    pager.push(`<span class="kcs-page-disabled">« First</span>`);
+                    pager.push(`<span class="kcs-page-disabled">‹ Prev</span>`);
+                }
+                let prev = -1;
+                for (const p of sortedPages) {
+                    if (prev !== -1 && p - prev > 1) {
+                        pager.push(`<span class="kcs-page-ellipsis">…</span>`);
+                    }
+                    if (p === currentPage) {
+                        pager.push(`<span class="kcs-page-current">${p}</span>`);
+                    } else {
+                        pager.push(`<a href="${escapeHtml(buildQueryUrl(p))}">${p}</a>`);
+                    }
+                    prev = p;
+                }
+                if (currentPage < totalPages - 1) {
+                    pager.push(`<a href="${escapeHtml(buildQueryUrl(currentPage + 1))}">Next ›</a>`);
+                    pager.push(`<a href="${escapeHtml(buildQueryUrl(totalPages - 1))}">Last »</a>`);
+                } else {
+                    pager.push(`<span class="kcs-page-disabled">Next ›</span>`);
+                    pager.push(`<span class="kcs-page-disabled">Last »</span>`);
+                }
+                pager.push('</nav>');
+                parts.push(pager.join(''));
+            }
 
             const tableHtml = parts.join('');
 

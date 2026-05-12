@@ -49,6 +49,49 @@ app.use(koaClassicServer('/public', {
 **Blocked dot-dirs block sub-paths too:**
 `GET /.git/config` returns 404 if `.git` is in `dotDirs.blacklist`.
 
+#### `template.renderTimeout` — bounded template execution (Security M-1)
+
+The template `render` callback now runs under a configurable timeout (default **30 000 ms**, `0` = disabled). When a render exceeds the timeout the middleware responds **`504 Gateway Timeout`** with the usual security headers, instead of leaving the client connection blocked on a slow/hung render. Protects against DoS via connection exhaustion when a render performs unbounded I/O (DB queries, remote fetches, etc.).
+
+The `render` function now receives an **`AbortSignal` as 5th argument**. The signal aborts on timeout *and* when the client disconnects (even when `renderTimeout: 0`). Cooperative renders that propagate the signal to `fetch` / DB clients / `fs.promises.*` also free backend resources on timeout.
+
+```js
+app.use(koaClassicServer('/public', {
+  template: {
+    ext: ['ejs'],
+    renderTimeout: 5000,                                  // ms; 0 disables
+    render: async (ctx, next, filePath, rawBuffer, signal) => {
+      const data = await db.query('SELECT ...', { signal }); // honour signal
+      const ext  = await fetch('https://api/...', { signal });
+      signal.throwIfAborted();
+      ctx.type = 'text/html';
+      ctx.body = ejs.render(rawBuffer.toString(), { data, ext });
+    }
+  }
+}));
+```
+
+**Backward compatible:** existing 4-argument render functions keep working — the 5th argument is simply ignored.
+
+#### `serverCache.*.maxAge` — time-based cache invalidation (Security M-2)
+
+Both server-side caches (`serverCache.rawFile` and `serverCache.compressedFile`) accept a new `maxAge` option (ms, default `0` = disabled). When `> 0`, an entry is considered stale after `maxAge` ms regardless of `mtime + size`, forcing a fresh disk read on the next request.
+
+Designed for **NFS / SMB / Docker bind mounts** where the OS attribute cache can keep `stat()` returning a stale `mtime` for several seconds after a remote modification — making the mtime+size invariant insufficient to detect changes. `maxAge` bounds the worst-case staleness window to a known value.
+
+```js
+app.use(koaClassicServer('/public', {
+  serverCache: {
+    rawFile:        { enabled: true, maxAge: 30000 }, // refresh every 30 s
+    compressedFile: { enabled: true, maxAge: 30000 }
+  }
+}));
+```
+
+> **Limitation:** `maxAge` limits but does not eliminate NFS staleness. For strict freshness combine with a low `actimeo=` on the mount.
+
+Internally a new `LFUCache.refresh(key, fields)` method updates the entry in place while preserving its LFU frequency, so popular files refreshed by `maxAge` don't fall to the bottom of the eviction bucket.
+
 ### ⚠️ Breaking Changes
 
 #### Dot-files hidden by default

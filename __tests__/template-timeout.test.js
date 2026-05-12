@@ -143,6 +143,38 @@ describe('template.renderTimeout', () => {
         });
     });
 
+    describe('Render argument contract', () => {
+        let env;
+        afterEach(() => env && env.server.close());
+
+        test('render is called with (ctx, next, filePath, rawBuffer, signal) in that order', async () => {
+            let received;
+            env = buildServer(async (...args) => {
+                received = args;
+                args[0].body = 'ok';
+            }, { renderTimeout: 1000 });
+
+            await env.request.get(TEMPLATE_URL);
+
+            expect(received).toHaveLength(5);
+            // ctx: Koa context — must expose req/res/state
+            expect(received[0]).toBeDefined();
+            expect(received[0].req).toBeDefined();
+            expect(received[0].res).toBeDefined();
+            expect(received[0].state).toBeDefined();
+            // next: function (downstream middleware)
+            expect(typeof received[1]).toBe('function');
+            // filePath: absolute path to the requested file
+            expect(typeof received[2]).toBe('string');
+            expect(path.isAbsolute(received[2])).toBe(true);
+            expect(received[2]).toMatch(/simple\.ejs$/);
+            // rawBuffer: Buffer or null depending on serverCache.rawFile state
+            expect(received[3] === null || Buffer.isBuffer(received[3])).toBe(true);
+            // signal: AbortSignal
+            expect(received[4]).toBeInstanceOf(AbortSignal);
+        });
+    });
+
     describe('AbortSignal contract', () => {
         let env;
         afterEach(() => env && env.server.close());

@@ -141,14 +141,23 @@ app.use(koaClassicServer('/public', {
 - The current page is selected by `?page=N` (0-based). Invalid or out-of-range values clamp silently to the nearest valid page.
 - A numbered paginator (`« First | ‹ Prev | 0 1 … N-1 | Next › | Last »`) is rendered below the table, preserving any active `sort`/`order`. An `X-Dir-Pagination: <current>/<last>` header is also emitted.
 
-**Migration from v2 / v3.0.0-alpha.0**
+**Migration from v2**
 
-The factory throws helpful errors for the three legacy names — your editor's stack trace points you to the new shape:
+`showDirContents` (a v2-stable option) keeps working as a **backward-compatibility alias** for `dirListing.enabled`. v2 code that passes it continues to function unchanged. A one-time deprecation warning is emitted via the configured `logger.warn(...)` to encourage migration:
 
 ```
-options.showDirContents was relocated in v3.0.0.
+[koa-classic-server] DEPRECATION: options.showDirContents was renamed to dirListing.enabled in v3.0.0.
+  The old name is currently accepted as an alias and may be removed in a future major version.
   Replace with: dirListing: { enabled: true }
+```
 
+Passing both `showDirContents` and `dirListing.enabled` at the same time throws — pick one.
+
+**Migration from v3.0.0-alpha.0**
+
+The two V3-alpha-only legacy names throw helpful errors at startup (no v2 user can have these in production):
+
+```
 options.maxDirEntries was relocated in v3.0.0.
   Replace with: dirListing: { maxEntries: 10000 }
 

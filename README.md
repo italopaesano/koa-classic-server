@@ -641,7 +641,7 @@ npm run test:performance
 | `index: 'index.html'` | accepted | **throws** — must be an array |
 | `cacheMaxAge` | accepted | **removed** — use `browserCacheMaxAge` |
 | `enableCaching` | accepted | **removed** — use `browserCacheEnabled` |
-| `showDirContents` | accepted | **relocated** — use `dirListing: { enabled: true }` |
+| `showDirContents` | accepted | accepted as **deprecated alias** — emits a one-time warning, prefer `dirListing: { enabled: true }` |
 | Dot-files | served | **hidden by default** (`hidden.dotFiles.default: 'hidden'`) |
 | Logger | `console` only | `logger` option injects any logger; default still `console` |
 | Template `render` signature | `(ctx, next, filePath)` | `(ctx, next, filePath, { signal })` — old signature still works, `signal` is opt-in |

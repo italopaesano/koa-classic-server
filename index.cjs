@@ -1252,6 +1252,14 @@ module.exports = function koaClassicServer(
                 const originalUrlObj = new URL(_origin + ctx.originalUrl);
                 let redirectPath = originalUrlObj.pathname;
 
+                // Collapse leading slashes: a Location header starting with "//" (or "/\")
+                // is a protocol-relative URL and would let "GET //evil.com/foo.ejs" redirect
+                // off-origin. path.normalize() upstream already collapses these for the
+                // filesystem check, so the source-of-truth URL has a single leading slash.
+                if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
+                    redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
+                }
+
                 redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
 
                 // Special case: /index.ejs → /, /sezione/index.ejs → /sezione/

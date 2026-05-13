@@ -808,18 +808,29 @@ module.exports = function koaClassicServer(
         return false;
     }
 
+    // Compiled-RegExp caches for glob patterns. Patterns come from `hidden.*` config and are
+    // immutable after factory init, so memoization is bounded by the operator's config size
+    // and avoids recompiling the same regex on every directory entry during a listing.
+    const _nameGlobRegexCache = new Map();
+    const _pathGlobRegexCache = new Map();
+
     // Matches a bare filename against a simple glob pattern (* = any chars except /, ? = one char).
     function nameGlobMatch(name, pattern) {
         if (!pattern.includes('*') && !pattern.includes('?')) {
             return name === pattern;
         }
-        const regexStr = '^' +
-            pattern
-                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-                .replace(/\*/g, '[^/]*')
-                .replace(/\?/g, '[^/]')
-            + '$';
-        return new RegExp(regexStr).test(name);
+        let re = _nameGlobRegexCache.get(pattern);
+        if (re === undefined) {
+            const regexStr = '^' +
+                pattern
+                    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                    .replace(/\*/g, '[^/]*')
+                    .replace(/\?/g, '[^/]')
+                + '$';
+            re = new RegExp(regexStr);
+            _nameGlobRegexCache.set(pattern, re);
+        }
+        return re.test(name);
     }
 
     // Returns true if `relPath` matches any pattern in the list.
@@ -845,19 +856,24 @@ module.exports = function koaClassicServer(
      *   - '?'  matches any single character except '/'
      */
     function pathGlobMatch(relPath, pattern) {
-        const hasSlash = pattern.includes('/');
-        const escaped = pattern
-            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-            .replace(/\*\*/g, '\x00')
-            .replace(/\*/g, '[^/]*')
-            .replace(/\?/g, '[^/]')
-            .replace(/\x00/g, '.*');
+        let re = _pathGlobRegexCache.get(pattern);
+        if (re === undefined) {
+            const hasSlash = pattern.includes('/');
+            const escaped = pattern
+                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                .replace(/\*\*/g, '\x00')
+                .replace(/\*/g, '[^/]*')
+                .replace(/\?/g, '[^/]')
+                .replace(/\x00/g, '.*');
 
-        const regexStr = hasSlash
-            ? '^' + escaped + '($|/)'    // path-anchored from root
-            : '(^|/)' + escaped + '$';   // basename match at any depth
+            const regexStr = hasSlash
+                ? '^' + escaped + '($|/)'    // path-anchored from root
+                : '(^|/)' + escaped + '$';   // basename match at any depth
 
-        return new RegExp(regexStr).test(relPath);
+            re = new RegExp(regexStr);
+            _pathGlobRegexCache.set(pattern, re);
+        }
+        return re.test(relPath);
     }
 
     /**

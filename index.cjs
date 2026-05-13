@@ -4,8 +4,12 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const zlib = require("zlib");
+const util = require("util");
 const mime = require("mime-types");
 const { Readable } = require('stream');
+
+const _brotliCompressAsync = util.promisify(zlib.brotliCompress);
+const _gzipAsync           = util.promisify(zlib.gzip);
 
 // Pre-computed module-level constants
 const _LOG_1024 = Math.log(1024);
@@ -1058,23 +1062,14 @@ module.exports = function koaClassicServer(
     }
 
     // Compress a Buffer using the given encoding ('br' or 'gzip').
-    // Uses maximum quality — appropriate for serverCache mode (cost paid once).
+    // Quality is maxed out: serverCache pays this cost once per file, not per request.
     function compressBuffer(data, encoding) {
-        return new Promise((resolve, reject) => {
-            if (encoding === 'br') {
-                zlib.brotliCompress(
-                    data,
-                    { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 } },
-                    (err, result) => { if (err) reject(err); else resolve(result); }
-                );
-            } else {
-                zlib.gzip(
-                    data,
-                    { level: zlib.constants.Z_BEST_COMPRESSION },
-                    (err, result) => { if (err) reject(err); else resolve(result); }
-                );
-            }
-        });
+        if (encoding === 'br') {
+            return _brotliCompressAsync(data, {
+                params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 }
+            });
+        }
+        return _gzipAsync(data, { level: zlib.constants.Z_BEST_COMPRESSION });
     }
 
     /**

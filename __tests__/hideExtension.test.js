@@ -547,4 +547,61 @@ describe('hideExtension option tests', () => {
             }).not.toThrow();
         });
     });
+
+    // ==========================================
+    // Security: open-redirect via protocol-relative URL
+    // ==========================================
+    describe('Open-redirect guard on hideExtension Location header', () => {
+        let app, server, port;
+
+        beforeAll((done) => {
+            app = new Koa();
+            app.use(koaClassicServer(rootDir, {
+                dirListing: { enabled: true },
+                hideExtension: { ext: '.ejs' }
+            }));
+            server = app.listen(0, () => {
+                port = server.address().port;
+                done();
+            });
+        });
+
+        afterAll(() => { server.close(); });
+
+        // Send the request path as raw bytes so the leading "//" survives any
+        // client-side URL normalization. supertest/url.parse would collapse it.
+        function rawGet(path) {
+            const http = require('http');
+            return new Promise((resolve, reject) => {
+                const req = http.request({
+                    host: '127.0.0.1',
+                    port,
+                    method: 'GET',
+                    path
+                }, (res) => {
+                    res.resume();
+                    resolve({ status: res.statusCode, location: res.headers.location });
+                });
+                req.on('error', reject);
+                req.end();
+            });
+        }
+
+        test('GET //evil.com/foo.ejs → Location must not be protocol-relative', async () => {
+            const res = await rawGet('//evil.com/foo.ejs');
+            expect(res.status).toBe(301);
+            expect(res.location).toBeDefined();
+            // The Location must not start with "//" or "/\" (would navigate off-origin)
+            expect(res.location.startsWith('//')).toBe(false);
+            expect(res.location.startsWith('/\\')).toBe(false);
+            expect(res.location).toBe('/evil.com/foo');
+        });
+
+        test('GET ///a/b.ejs → leading slashes collapsed in Location', async () => {
+            const res = await rawGet('///a/b.ejs');
+            expect(res.status).toBe(301);
+            expect(res.location.startsWith('//')).toBe(false);
+            expect(res.location).toBe('/a/b');
+        });
+    });
 });

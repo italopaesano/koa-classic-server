@@ -4,8 +4,12 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const zlib = require("zlib");
+const util = require("util");
 const mime = require("mime-types");
 const { Readable } = require('stream');
+
+const _brotliCompressAsync = util.promisify(zlib.brotliCompress);
+const _gzipAsync           = util.promisify(zlib.gzip);
 
 // Pre-computed module-level constants
 const _LOG_1024 = Math.log(1024);
@@ -794,46 +798,53 @@ module.exports = function koaClassicServer(
 
     const hiddenConfig = normalizeHiddenConfig(options.hidden);
 
-    // Returns true if `name` matches any pattern in the list.
-    // Patterns are matched against the bare filename (case-sensitive).
-    // Each entry can be a string (exact match or simple glob with * and ?) or a RegExp.
-    function matchesNameList(name, patterns) {
+    // Returns true if `value` matches any pattern in the list.
+    // RegExp patterns are tested directly; string patterns go through `globMatch`.
+    // Non-string non-RegExp entries are ignored (defensive — config validation should reject them).
+    function matchesPatternList(value, patterns, globMatch) {
         for (const pattern of patterns) {
             if (pattern instanceof RegExp) {
-                if (pattern.test(name)) return true;
+                if (pattern.test(value)) return true;
             } else if (typeof pattern === 'string') {
-                if (nameGlobMatch(name, pattern)) return true;
+                if (globMatch(value, pattern)) return true;
             }
         }
         return false;
     }
+
+    // Match against a list using filename-glob semantics (case-sensitive, no path component).
+    function matchesNameList(name, patterns) {
+        return matchesPatternList(name, patterns, nameGlobMatch);
+    }
+
+    // Compiled-RegExp caches for glob patterns. Patterns come from `hidden.*` config and are
+    // immutable after factory init, so memoization is bounded by the operator's config size
+    // and avoids recompiling the same regex on every directory entry during a listing.
+    const _nameGlobRegexCache = new Map();
+    const _pathGlobRegexCache = new Map();
 
     // Matches a bare filename against a simple glob pattern (* = any chars except /, ? = one char).
     function nameGlobMatch(name, pattern) {
         if (!pattern.includes('*') && !pattern.includes('?')) {
             return name === pattern;
         }
-        const regexStr = '^' +
-            pattern
-                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-                .replace(/\*/g, '[^/]*')
-                .replace(/\?/g, '[^/]')
-            + '$';
-        return new RegExp(regexStr).test(name);
+        let re = _nameGlobRegexCache.get(pattern);
+        if (re === undefined) {
+            const regexStr = '^' +
+                pattern
+                    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                    .replace(/\*/g, '[^/]*')
+                    .replace(/\?/g, '[^/]')
+                + '$';
+            re = new RegExp(regexStr);
+            _nameGlobRegexCache.set(pattern, re);
+        }
+        return re.test(name);
     }
 
-    // Returns true if `relPath` matches any pattern in the list.
-    // Patterns are matched against the full relative path from rootDir (case-sensitive).
-    // Each entry can be a string glob or a RegExp.
+    // Match against a list using path-aware glob semantics (anchored to rootDir, supports **).
     function matchesPathList(relPath, patterns) {
-        for (const pattern of patterns) {
-            if (pattern instanceof RegExp) {
-                if (pattern.test(relPath)) return true;
-            } else if (typeof pattern === 'string') {
-                if (pathGlobMatch(relPath, pattern)) return true;
-            }
-        }
-        return false;
+        return matchesPatternList(relPath, patterns, pathGlobMatch);
     }
 
     /**
@@ -845,19 +856,24 @@ module.exports = function koaClassicServer(
      *   - '?'  matches any single character except '/'
      */
     function pathGlobMatch(relPath, pattern) {
-        const hasSlash = pattern.includes('/');
-        const escaped = pattern
-            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-            .replace(/\*\*/g, '\x00')
-            .replace(/\*/g, '[^/]*')
-            .replace(/\?/g, '[^/]')
-            .replace(/\x00/g, '.*');
+        let re = _pathGlobRegexCache.get(pattern);
+        if (re === undefined) {
+            const hasSlash = pattern.includes('/');
+            const escaped = pattern
+                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                .replace(/\*\*/g, '\x00')
+                .replace(/\*/g, '[^/]*')
+                .replace(/\?/g, '[^/]')
+                .replace(/\x00/g, '.*');
 
-        const regexStr = hasSlash
-            ? '^' + escaped + '($|/)'    // path-anchored from root
-            : '(^|/)' + escaped + '$';   // basename match at any depth
+            const regexStr = hasSlash
+                ? '^' + escaped + '($|/)'    // path-anchored from root
+                : '(^|/)' + escaped + '$';   // basename match at any depth
 
-        return new RegExp(regexStr).test(relPath);
+            re = new RegExp(regexStr);
+            _pathGlobRegexCache.set(pattern, re);
+        }
+        return re.test(relPath);
     }
 
     /**
@@ -1046,23 +1062,14 @@ module.exports = function koaClassicServer(
     }
 
     // Compress a Buffer using the given encoding ('br' or 'gzip').
-    // Uses maximum quality — appropriate for serverCache mode (cost paid once).
+    // Quality is maxed out: serverCache pays this cost once per file, not per request.
     function compressBuffer(data, encoding) {
-        return new Promise((resolve, reject) => {
-            if (encoding === 'br') {
-                zlib.brotliCompress(
-                    data,
-                    { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 } },
-                    (err, result) => { if (err) reject(err); else resolve(result); }
-                );
-            } else {
-                zlib.gzip(
-                    data,
-                    { level: zlib.constants.Z_BEST_COMPRESSION },
-                    (err, result) => { if (err) reject(err); else resolve(result); }
-                );
-            }
-        });
+        if (encoding === 'br') {
+            return _brotliCompressAsync(data, {
+                params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 }
+            });
+        }
+        return _gzipAsync(data, { level: zlib.constants.Z_BEST_COMPRESSION });
     }
 
     /**
@@ -1210,7 +1217,9 @@ module.exports = function koaClassicServer(
             return;
         }
 
-        // Hidden check: block requests that traverse a hidden directory
+        // Hidden check: block requests that traverse a hidden directory.
+        // Stops at length-1 because the leaf (the file or dir being served) is
+        // checked separately by the file/listing path with its real stat.isDirectory().
         if (requestedPath !== '') {
             const segments = normalizedPath.split(path.sep).filter(Boolean);
             for (let i = 0; i < segments.length - 1; i++) {
@@ -1234,8 +1243,9 @@ module.exports = function koaClassicServer(
             const rawPath = urlToUse.split('?')[0];
             const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
 
-            // Check if URL ends with the configured extension → redirect to clean URL
-            // Use the original path (before trailing slash stripping) for accurate matching
+            // Strip a trailing slash before the extension check so URLs like /foo.html/
+            // still match (the slash is URL formality, not part of the filename) — without
+            // this, /foo.html/ would skip the redirect and 404 trying to open it as a dir.
             const pathForExtCheck = hadTrailingSlash ? rawPath.slice(0, -1) : requestedPath;
             if (pathForExtCheck.endsWith(hideExt)) {
                 // Build redirect target using ctx.originalUrl (always, regardless of useOriginalUrl)
@@ -1680,7 +1690,6 @@ module.exports = function koaClassicServer(
             const sortBy = ctx.query.sort || 'name';
             const sortOrder = ctx.query.order || 'asc';
 
-            // Build base URL for sorting links (without query params)
             const baseUrl = pageHrefOutPrefix.pathname;
 
             // Preserves sort/order while overriding `page`; omits page when 0.
@@ -1692,7 +1701,6 @@ module.exports = function koaClassicServer(
                 return params.length ? `${baseUrl}?${params.join('&')}` : baseUrl;
             }
 
-            // Helper to create sorting URL
             function getSortUrl(column) {
                 let newOrder = 'asc';
                 if (sortBy === column && sortOrder === 'asc') {
@@ -1701,7 +1709,6 @@ module.exports = function koaClassicServer(
                 return `${baseUrl}?sort=${column}&order=${newOrder}`;
             }
 
-            // Helper to get sort indicator
             function getSortIndicator(column) {
                 if (sortBy === column) {
                     return sortOrder === 'asc' ? ' ↑' : ' ↓';
@@ -1823,30 +1830,25 @@ module.exports = function koaClassicServer(
                 }
                 const items = rawItems.filter(Boolean);
 
-                // Sort items based on query parameters
+                // Places directories before non-directories; falls back to `tieBreaker`
+                // when both items are in the same bucket. `effectiveType === 2` covers plain
+                // dirs and dir-resolved symlinks, matching the rest of the listing logic.
+                const compareDirsFirst = (a, b, tieBreaker) => {
+                    const aIsDir = a.effectiveType === 2;
+                    const bIsDir = b.effectiveType === 2;
+                    if (aIsDir !== bIsDir) return aIsDir ? -1 : 1;
+                    return tieBreaker(a, b);
+                };
+
                 items.sort((a, b) => {
                     let comparison = 0;
 
                     if (sortBy === 'name') {
                         comparison = a.name.localeCompare(b.name);
                     } else if (sortBy === 'type') {
-                        // Sort directories first, then by mime type (using effectiveType for symlinks)
-                        if (a.effectiveType === 2 && b.effectiveType !== 2) {
-                            comparison = -1;
-                        } else if (a.effectiveType !== 2 && b.effectiveType === 2) {
-                            comparison = 1;
-                        } else {
-                            comparison = a.mimeType.localeCompare(b.mimeType);
-                        }
+                        comparison = compareDirsFirst(a, b, (x, y) => x.mimeType.localeCompare(y.mimeType));
                     } else if (sortBy === 'size') {
-                        // Directories always at top when sorting by size (using effectiveType for symlinks)
-                        if (a.effectiveType === 2 && b.effectiveType !== 2) {
-                            comparison = -1;
-                        } else if (a.effectiveType !== 2 && b.effectiveType === 2) {
-                            comparison = 1;
-                        } else {
-                            comparison = a.sizeBytes - b.sizeBytes;
-                        }
+                        comparison = compareDirsFirst(a, b, (x, y) => x.sizeBytes - y.sizeBytes);
                     }
 
                     return sortOrder === 'desc' ? -comparison : comparison;

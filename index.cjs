@@ -14,6 +14,12 @@ const _LOG_1024 = Math.log(1024);
 // hidden.dotDirs.default are not explicitly set by the caller.
 let _hiddenDefaultWarnEmitted = false;
 
+// Emitted at most once per process lifetime when the caller passes the v2-era
+// `showDirContents` option instead of the v3 `dirListing.enabled`. The old
+// name is accepted as a backward-compatibility alias and may be removed in a
+// future major version.
+let _showDirContentsDeprecationWarned = false;
+
 // Default list of MIME types that benefit from compression.
 // User-provided compression.mimeTypes replaces this list entirely.
 const DEFAULT_COMPRESSIBLE_MIME_TYPES = [
@@ -589,13 +595,8 @@ module.exports = function koaClassicServer(
 
     options.method = Array.isArray(options.method) ? options.method : ['GET'];
 
-    // ── V3 breaking-change guards: helpful errors for renamed/relocated options ──
-    if (opts.showDirContents !== undefined) {
-        throw new Error(
-            '[koa-classic-server] options.showDirContents was relocated in v3.0.0.\n' +
-            `  Replace with: dirListing: { enabled: ${opts.showDirContents} }`
-        );
-    }
+    // ── V3 breaking-change guards: helpful errors for V3-alpha-only renamed options ──
+    // These were introduced in v3.0.0-alpha.0 only; no v2 user can have them in production.
     if (opts.maxDirEntries !== undefined) {
         throw new Error(
             '[koa-classic-server] options.maxDirEntries was relocated in v3.0.0.\n' +
@@ -625,10 +626,34 @@ module.exports = function koaClassicServer(
     if (userDirListing !== undefined && (typeof userDirListing !== 'object' || userDirListing === null || Array.isArray(userDirListing))) {
         throw new Error('[koa-classic-server] options.dirListing must be an object.');
     }
+
+    // V3 backward-compat alias: showDirContents (v2-stable) maps to dirListing.enabled.
+    // The alias may be removed in a future major version. Emits a one-time deprecation
+    // warning per process. Throws if both names are passed (the user picked one of them
+    // by mistake — surface the conflict rather than silently choosing one).
+    let aliasEnabled; // undefined unless showDirContents was passed
+    if (opts.showDirContents !== undefined) {
+        if (userDirListing && userDirListing.enabled !== undefined) {
+            throw new Error(
+                '[koa-classic-server] options.showDirContents and options.dirListing.enabled are both set.\n' +
+                '  These configure the same thing — pick one.'
+            );
+        }
+        if (!_showDirContentsDeprecationWarned) {
+            _showDirContentsDeprecationWarned = true;
+            _logger.warn(...warnPayload(_logger,
+                '[koa-classic-server] DEPRECATION: options.showDirContents was renamed to dirListing.enabled in v3.0.0.\n' +
+                '  The old name is currently accepted as an alias and may be removed in a future major version.\n' +
+                `  Replace with: dirListing: { enabled: ${opts.showDirContents} }`
+            ));
+        }
+        aliasEnabled = !!opts.showDirContents;
+    }
+
     options.dirListing = {
         enabled: userDirListing && userDirListing.enabled !== undefined
             ? !!userDirListing.enabled
-            : true,
+            : (aliasEnabled !== undefined ? aliasEnabled : true),
         maxEntries: validateNonNegativeInt(
             userDirListing && userDirListing.maxEntries,
             'dirListing.maxEntries',

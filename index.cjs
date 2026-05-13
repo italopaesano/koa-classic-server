@@ -794,18 +794,23 @@ module.exports = function koaClassicServer(
 
     const hiddenConfig = normalizeHiddenConfig(options.hidden);
 
-    // Returns true if `name` matches any pattern in the list.
-    // Patterns are matched against the bare filename (case-sensitive).
-    // Each entry can be a string (exact match or simple glob with * and ?) or a RegExp.
-    function matchesNameList(name, patterns) {
+    // Returns true if `value` matches any pattern in the list.
+    // RegExp patterns are tested directly; string patterns go through `globMatch`.
+    // Non-string non-RegExp entries are ignored (defensive — config validation should reject them).
+    function matchesPatternList(value, patterns, globMatch) {
         for (const pattern of patterns) {
             if (pattern instanceof RegExp) {
-                if (pattern.test(name)) return true;
+                if (pattern.test(value)) return true;
             } else if (typeof pattern === 'string') {
-                if (nameGlobMatch(name, pattern)) return true;
+                if (globMatch(value, pattern)) return true;
             }
         }
         return false;
+    }
+
+    // Match against a list using filename-glob semantics (case-sensitive, no path component).
+    function matchesNameList(name, patterns) {
+        return matchesPatternList(name, patterns, nameGlobMatch);
     }
 
     // Compiled-RegExp caches for glob patterns. Patterns come from `hidden.*` config and are
@@ -833,18 +838,9 @@ module.exports = function koaClassicServer(
         return re.test(name);
     }
 
-    // Returns true if `relPath` matches any pattern in the list.
-    // Patterns are matched against the full relative path from rootDir (case-sensitive).
-    // Each entry can be a string glob or a RegExp.
+    // Match against a list using path-aware glob semantics (anchored to rootDir, supports **).
     function matchesPathList(relPath, patterns) {
-        for (const pattern of patterns) {
-            if (pattern instanceof RegExp) {
-                if (pattern.test(relPath)) return true;
-            } else if (typeof pattern === 'string') {
-                if (pathGlobMatch(relPath, pattern)) return true;
-            }
-        }
-        return false;
+        return matchesPatternList(relPath, patterns, pathGlobMatch);
     }
 
     /**

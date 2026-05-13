@@ -307,3 +307,114 @@ Il caso d'uso target di `'bounded'`: hosting multi-tenant con directory scrivibi
 - Non è regressione rispetto a v2 (v2 aveva esattamente questo profilo memoria)
 - Caso d'uso adversarial-directory minoritario nel target del middleware
 - Aggiungere un'opzione API non banale richiede design review e test approfonditi, meglio non aggiungerla in fretta nel rush release di 3.0
+
+---
+
+### [F-1bis] Brainstorm — hybrid automatico fast/bounded *(da decidere in v3.1)*
+
+In sede di discussione dei default v3.0 è emersa la richiesta di valutare un **terzo modo**: una scelta automatica fra `fast` e `bounded` basata sulla dimensione effettiva della directory, in modo che 99% degli operatori non debbano configurare nulla. Documento qui i risultati del brainstorm così la decisione finale per v3.1 ha già contesto.
+
+#### Vincolo tecnico: chicken-and-egg
+
+Per scegliere il path PRIMA di leggere serve un modo *economico* di stimare il numero di entry. `readdir()` (fast) lo scopri solo *dopo* aver pagato l'allocazione completa — quindi il danno è già fatto. `opendir()` (bounded) lo scopri streamando — ma se stai streamando hai già pagato l'overhead per-entry, non c'è più nulla da salvare.
+
+L'hybrid puramente automatico richiede una di queste premesse:
+
+1. **Size hint dal FS** (`fs.stat().size` su directory)
+2. **Probe-and-commit** (leggi le prime N entry, poi decidi)
+3. **Cache di metadati da richieste precedenti**
+
+Tutte e tre hanno problemi.
+
+#### Approccio A — `fs.stat()` size hint
+
+Su ext4/xfs/tmpfs la `size` di una directory è grossolanamente correlata col numero di entry (~24-64 byte per entry). Una stat() extra costa ~0.1 ms.
+
+```javascript
+const dirStat = await fs.promises.stat(toOpen);
+if (dirStat.size > THRESHOLD_BYTES) {
+    return streamingRead(toOpen, maxEntries);  // bounded
+} else {
+    return fastRead(toOpen, maxEntries);       // readdir + slice
+}
+```
+
+**Pro:** decisione *prima* dell'allocazione, costo ridotto, semplice.
+**Contro decisivo:**
+- **FS-dependent**: NFS / remote FS / FUSE / overlayfs spesso ritornano `size: 0` o valori non significativi per le directory.
+- **False negative**: dir con `size` piccola ma molte entry (nomi corti, hash table compatta) → bypassa il safe path → OOM possibile.
+- **False positive**: dir con `size` grande ma poche entry (nomi molto lunghi) → safe path inutile → 3-4× più lento del necessario.
+- Soglia magica filesystem-dependent.
+
+Funziona ~85% dei casi su FS POSIX locali, ma "85%" su un comportamento di sicurezza non è abbastanza.
+
+#### Approccio B — Probe-and-commit
+
+Apri sempre con `opendir()`. Leggi le prime N entry (es. 5000) via streaming, poi decidi:
+
+```javascript
+const handle = await fs.opendir(toOpen);
+const buffer = [];
+for await (const entry of handle) {
+    buffer.push(entry);
+    if (buffer.length >= PROBE_LIMIT) break;
+}
+// dir piccola → buffer è già il risultato finale
+// dir grande → continua streaming (slow) o butta e ricomincia con readdir (work duplicato)
+```
+
+**Pro:** niente heuristica FS-dependent, decisione basata su dato reale.
+**Contro decisivo:**
+- Paghi sempre l'overhead opendir per le prime N entry (N=5000 → ~155 ms anche su dir di 100 file).
+- Per dir piccole è una regressione netta.
+- Se sopra threshold devi scegliere fra continuare streaming (lento) o re-leggere via readdir (lavoro duplicato).
+
+Non hybridizza davvero: regressione per i casi piccoli.
+
+#### Approccio C — Cache di metadati
+
+Ricorda il numero di entry dalla richiesta precedente alla stessa directory.
+
+**Contro:**
+- Prima richiesta sempre slow.
+- Stale cache su FS che cambiano.
+- Multi-process unsafe.
+- Memory overhead.
+
+Scartato in fase di brainstorm.
+
+#### Cosa fanno nginx e Apache
+
+Ricerca rapida sul comportamento di altri server statici:
+
+| Server | Modulo | Strategia | Note |
+|---|---|---|---|
+| **nginx** | `autoindex` | `opendir()` + iterazione sempre | Performance "decente, non eccellente". Documentazione raccomanda di disabilitarlo in produzione. |
+| **Apache HTTPd** | `mod_autoindex` | `opendir()` + iterazione sempre | Idem. Considerato feature di dev/admin, non hot path. |
+| **lighttpd** | `mod_dirlisting` | `opendir()` + iterazione | Stesso pattern. |
+| **caddy** | listing module | `os.ReadDir()` (Go), che è l'equivalente di readdir+slice | Niente hybrid. |
+
+**Pattern industria**: nessuno fa hybrid automatico. La scelta universale è **`opendir()` sempre** (accetta la lentezza come prezzo della sicurezza) oppure **`readdir()` sempre** (caddy, accetta la potenziale RAM exhaustion).
+
+La motivazione consensuale: *autoindex non è un hot path. Chi serve milioni di file con autoindex acceso o ha una specifica esigenza (lo configurerà) o sta abusando della feature (servirà disabilitarlo).*
+
+#### Conclusione del brainstorm
+
+L'hybrid automatico ha tre realizzazioni teoriche, **nessuna soddisfacente**:
+
+| Approccio | Pro | Contro decisivo |
+|---|---|---|
+| A — stat() heuristic | trasparente | FS-dependent, soglia magica, false-negative pericolosi |
+| B — probe-and-commit | non heuristica | overhead sempre, lavoro duplicato |
+| C — cache | trasparente per richieste successive | prima sempre slow, stale, unsafe |
+
+Le opzioni *robuste* restano due:
+
+1. **`readMode: 'fast' | 'bounded'` esplicito** (la proposta originale [F-1]) — operatore sceglie consapevolmente
+2. **`readMode: 'auto' | 'fast' | 'bounded'`** con `auto` = approccio A — friendly per i casi POSIX comuni, escape hatch per workload critici
+
+**Raccomandazione per v3.1:** preferire (1) — è quello che fanno tutti gli altri server. La variante (2) con `auto` come default amichevole è tecnicamente possibile ma il caveat "best-effort, fragile su NFS/FUSE" rende l'opzione `auto` più rumorosa da documentare di quanto valga.
+
+**Decisione finale rimandata al freeze 3.1.**
+
+---

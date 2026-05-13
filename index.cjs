@@ -1243,8 +1243,9 @@ module.exports = function koaClassicServer(
             const rawPath = urlToUse.split('?')[0];
             const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
 
-            // Check if URL ends with the configured extension → redirect to clean URL
-            // Use the original path (before trailing slash stripping) for accurate matching
+            // Strip a trailing slash before the extension check so URLs like /foo.html/
+            // still match (the slash is URL formality, not part of the filename) — without
+            // this, /foo.html/ would skip the redirect and 404 trying to open it as a dir.
             const pathForExtCheck = hadTrailingSlash ? rawPath.slice(0, -1) : requestedPath;
             if (pathForExtCheck.endsWith(hideExt)) {
                 // Build redirect target using ctx.originalUrl (always, regardless of useOriginalUrl)

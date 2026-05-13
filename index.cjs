@@ -1217,7 +1217,9 @@ module.exports = function koaClassicServer(
             return;
         }
 
-        // Hidden check: block requests that traverse a hidden directory
+        // Hidden check: block requests that traverse a hidden directory.
+        // Stops at length-1 because the leaf (the file or dir being served) is
+        // checked separately by the file/listing path with its real stat.isDirectory().
         if (requestedPath !== '') {
             const segments = normalizedPath.split(path.sep).filter(Boolean);
             for (let i = 0; i < segments.length - 1; i++) {
@@ -1687,7 +1689,6 @@ module.exports = function koaClassicServer(
             const sortBy = ctx.query.sort || 'name';
             const sortOrder = ctx.query.order || 'asc';
 
-            // Build base URL for sorting links (without query params)
             const baseUrl = pageHrefOutPrefix.pathname;
 
             // Preserves sort/order while overriding `page`; omits page when 0.
@@ -1699,7 +1700,6 @@ module.exports = function koaClassicServer(
                 return params.length ? `${baseUrl}?${params.join('&')}` : baseUrl;
             }
 
-            // Helper to create sorting URL
             function getSortUrl(column) {
                 let newOrder = 'asc';
                 if (sortBy === column && sortOrder === 'asc') {
@@ -1708,7 +1708,6 @@ module.exports = function koaClassicServer(
                 return `${baseUrl}?sort=${column}&order=${newOrder}`;
             }
 
-            // Helper to get sort indicator
             function getSortIndicator(column) {
                 if (sortBy === column) {
                     return sortOrder === 'asc' ? ' ↑' : ' ↓';

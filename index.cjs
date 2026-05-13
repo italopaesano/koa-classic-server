@@ -10,10 +10,6 @@ const { Readable } = require('stream');
 // Pre-computed module-level constants
 const _LOG_1024 = Math.log(1024);
 
-// Emitted at most once per process lifetime when hidden.dotFiles.default or
-// hidden.dotDirs.default are not explicitly set by the caller.
-let _hiddenDefaultWarnEmitted = false;
-
 // Emitted at most once per process lifetime when the caller passes the v2-era
 // `showDirContents` option instead of the v3 `dirListing.enabled`. The old
 // name is accepted as a backward-compatibility alias and may be removed in a
@@ -490,14 +486,18 @@ module.exports = function koaClassicServer(
         dirListing: {                   // Directory listing configuration (V3+).
             enabled:        true,       // Render the directory listing HTML when no index file matches.
                                         //   Set to false to return 404 instead of a listing.
-            maxEntries:     10000,      // Cap on entries shown / sorted / stat'd per listing.
+            maxEntries:     100000,     // Soft cap on entries shown / sorted / stat'd per listing.
                                         //   Implementation: fs.promises.readdir() then slice(0, maxEntries).
-                                        //   Bounds the rendering / CPU cost, NOT the size of the initial
-                                        //   readdir() allocation. Excess entries are not shown: a banner +
-                                        //   the X-Dir-Truncated response header advertise the truncation.
+                                        //   This is a SAFETY NET against catastrophic operational accidents
+                                        //   (broken log rotation, mistakenly mounted huge FS) — not a policy
+                                        //   restriction on what the operator can serve. 99% of legitimate
+                                        //   deployments never hit this cap. Excess entries are not shown:
+                                        //   a banner + the X-Dir-Truncated response header advertise the
+                                        //   truncation. Bounds the rendering / CPU cost, NOT the size of the
+                                        //   initial readdir() allocation.
                                         //   Must be a finite integer >= 0; 0 = disabled (no cap).
                                         //   For directories writable by untrusted parties, see the v3.1
-                                        //   TODO [F-1] in docs/security_improvement_for_V3.md.
+                                        //   TODO [F-1] in docs/security_improvement_for_V3.md (`readMode`).
             entriesPerPage: 100,        // Entries per page in the listing UI. Pagination kicks in only
                                         //   when visible entries > entriesPerPage. Page index via
                                         //   ?page=N (0-based); out-of-range values are clamped silently.
@@ -531,8 +531,10 @@ module.exports = function koaClassicServer(
             redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301)
         },
         hidden: {            // Block files/dirs from listing and serving (HTTP 404)
-            dotFiles: {      // Dot-files (names starting with '.'): hidden by default
-                default: 'hidden',   // 'hidden' | 'visible' — system default: 'hidden'
+            dotFiles: {      // Dot-files (names starting with '.'): visible by default — design philosophy
+                default: 'visible',  // 'hidden' | 'visible' — system default: 'visible'
+                                     //   To protect .env / .git / etc., set 'hidden' explicitly OR add to
+                                     //   `blacklist` / `alwaysHide`. See README "Security Checklist".
                 whitelist: [],       // Always visible (string exact/glob or RegExp). Overrides default and alwaysHide.
                 blacklist: [],       // Always hidden (string or RegExp). Overrides whitelist.
             },
@@ -756,7 +758,7 @@ module.exports = function koaClassicServer(
     function normalizeHiddenConfig(hidden) {
         if (!hidden || typeof hidden !== 'object' || Array.isArray(hidden)) {
             return {
-                dotFiles: { default: 'hidden', whitelist: [], blacklist: [] },
+                dotFiles: { default: 'visible', whitelist: [], blacklist: [] },
                 dotDirs:  { default: 'visible', whitelist: [], blacklist: [] },
                 alwaysHide: []
             };
@@ -784,32 +786,13 @@ module.exports = function koaClassicServer(
         }
 
         return {
-            dotFiles: normalizeCategory(hidden.dotFiles, 'hidden', 'dotFiles'),
+            dotFiles: normalizeCategory(hidden.dotFiles, 'visible', 'dotFiles'),
             dotDirs:  normalizeCategory(hidden.dotDirs,  'visible', 'dotDirs'),
             alwaysHide: filterPatternList(hidden.alwaysHide),
         };
     }
 
     const hiddenConfig = normalizeHiddenConfig(options.hidden);
-
-    // One-time per-process warning when the caller relies on implicit defaults for
-    // hidden.dotFiles.default or hidden.dotDirs.default.  Since v3.0.0 dotFiles are
-    // hidden by default ('hidden') while dotDirs are visible by default ('visible').
-    // Explicitly declaring the values makes intent clear and silences the warning.
-    if (!_hiddenDefaultWarnEmitted) {
-        const dotFilesImplicit = opts.hidden?.dotFiles?.default === undefined;
-        const dotDirsImplicit  = opts.hidden?.dotDirs?.default  === undefined;
-        if (dotFilesImplicit || dotDirsImplicit) {
-            _hiddenDefaultWarnEmitted = true;
-            _logger.warn(...warnPayload(_logger,
-                '[koa-classic-server] WARNING: hidden.dotFiles.default and/or hidden.dotDirs.default are not explicitly set.\n' +
-                '  Since v3.0.0 the defaults are: dotFiles → "hidden", dotDirs → "visible".\n' +
-                '  To suppress this warning, add to your configuration:\n' +
-                '    hidden: { dotFiles: { default: \'hidden\' }, dotDirs: { default: \'visible\' } }\n' +
-                '  (adjust values to match your desired behaviour)'
-            ));
-        }
-    }
 
     // Returns true if `name` matches any pattern in the list.
     // Patterns are matched against the bare filename (case-sensitive).

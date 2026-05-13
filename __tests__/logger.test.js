@@ -130,18 +130,10 @@ describe('options.logger', () => {
             expect(logger.warn.mock.calls[0][0]).toMatch(/hideExtension\.ext should start with a dot/);
         });
 
-        test('hidden implicit-default warning routes to logger.warn', () => {
-            // The "implicit hidden default" warning fires at most once per process
-            // (suppressed by a module-level flag). Use isolateModules to get a
-            // fresh copy of the module so the flag starts unset.
-            const logger = makeLogger();
-            jest.isolateModules(() => {
-                const isolated = require('../index.cjs');
-                isolated(fixturesDir, { logger });
-            });
-            expect(logger.warn).toHaveBeenCalledTimes(1);
-            expect(logger.warn.mock.calls[0][0]).toMatch(/hidden\.dotFiles\.default and\/or hidden\.dotDirs\.default/);
-        });
+        // Note: prior to v3.0.0 there was an "implicit hidden default" warning
+        // that fired when hidden.dotFiles.default was left unset. The default
+        // was reverted to 'visible' (design philosophy: file server first),
+        // and the warning was removed. Test removed accordingly.
 
         test('LFU eviction warning routes to logger.warn', async () => {
             const logger = makeLogger();

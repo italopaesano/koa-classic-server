@@ -192,12 +192,54 @@ The new *Best Practices → Sicurezza → Limiti dei Security Headers sui file s
 
 No code change in `index.cjs` — documentation only.
 
+### 🎯 Design Philosophy
+
+v3.0.0 codifies the project's design intent in a new top-level `CLAUDE.md`: **koa-classic-server is an HTTP file server first**. The contract with the operator is: *"if a file is in `rootDir`, `GET` on its path returns it"*. Defaults serve files without applying surprise restrictions — the operator's directory is the source of truth.
+
+This drove a revision of two v3-alpha defaults late in the cycle (see *Breaking Changes* below) and shapes how new features will be designed going forward. Operators harden via explicit configuration; the README and `docs/DOCUMENTATION.md` now ship a **Security Checklist** and a **Suggested Production Security Configuration** to help with that.
+
 ### ⚠️ Breaking Changes
 
-#### Dot-files hidden by default
-`hidden.dotFiles.default` is `'hidden'` by default. In v2.x, dot-files (`.env`, `.gitignore`, etc.) were served normally. In v3.x they return 404 unless explicitly allowed.
+#### Dot-files visible by default (philosophy alignment)
 
-To restore v2.x behavior: `hidden: { dotFiles: { default: 'visible' } }`
+Earlier in the v3.0.0 alpha cycle, `hidden.dotFiles.default` was flipped to `'hidden'` as a security-by-default choice. This created surprise behavior — `GET /.env` returning 404 even when the file exists — which violates the "file server first" design philosophy.
+
+**Final v3.0.0 behavior:** `hidden.dotFiles.default` is `'visible'`, restoring v2 behavior. The implicit-default warning that fired in alpha when the option was omitted is also removed.
+
+| Default | v2 | v3.0.0-alpha early | **v3.0.0 final** |
+|---|---|---|---|
+| `hidden.dotFiles.default` | `'visible'` | `'hidden'` | **`'visible'`** |
+| Implicit-default runtime warning | — | emitted | **removed** |
+
+**Operators upgrading from v2:** no change in behavior — your existing dot-files keep being served. **Migration to harden** (recommended for production): set `hidden.dotFiles.default: 'hidden'` explicitly and whitelist `.well-known` for ACME. See the *Security Checklist* in `README.md`.
+
+#### `dirListing.maxEntries` default raised from 10,000 → 100,000
+
+The earlier v3-alpha default of `10,000` was tight enough that operators with normal-sized media catalogs, releases archives, or asset directories would hit truncation silently (the listing banner would appear). This violated the "no surprise restrictions" rule — the cap was acting as a policy restriction rather than a safety net.
+
+**Final v3.0.0 behavior:** `dirListing.maxEntries` defaults to `100,000` — high enough that 99% of legitimate deployments never hit it, low enough to bound rendering cost on accidentally-huge directories (log rotation broken, mistakenly mounted FS).
+
+| Default | v3.0.0-alpha early | **v3.0.0 final** |
+|---|---|---|
+| `dirListing.maxEntries` | `10000` | **`100000`** |
+| `dirListing.entriesPerPage` | `100` | `100` (unchanged) |
+
+**Caveat:** even with `maxEntries: 100000`, the initial `fs.promises.readdir()` allocation is not bounded. For adversarial-directory workloads (multi-tenant uploads, untrusted writes), this gap will be closed by the v3.1 `dirListing.readMode: 'bounded'` option — tracked under `[F-1]` in `docs/security_improvement_for_V3.md`.
+
+#### Dot-files hardening is now opt-in (was implicit "secure by default")
+
+Operators who *want* the v3-alpha behavior (dot-files hidden by default, including `.env`, `.git/config`, etc.) must now opt in explicitly:
+
+```javascript
+app.use(koaClassicServer('/public', {
+  hidden: {
+    dotFiles: { default: 'hidden', whitelist: ['.well-known'] },
+    dotDirs:  { default: 'hidden', whitelist: ['.well-known'] },
+  },
+}));
+```
+
+This snippet now appears in the *Suggested Production Security Configuration* in both `README.md` and `docs/DOCUMENTATION.md`.
 
 #### Removed string format for `index` option
 - **Removed**: `index: 'index.html'` — passing a non-empty string now throws an `Error` at startup

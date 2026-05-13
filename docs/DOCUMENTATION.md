@@ -1399,6 +1399,117 @@ app.listen(3000);
 - Una CSP rigida con `default-src 'self'` rompe pagine che usano script inline o CDN: parti **report-only** (`Content-Security-Policy-Report-Only`) per rilevare le violazioni prima di enforce-arla.
 - Per progetti SPA/PWA che richiedono `SharedArrayBuffer`, considera anche `Cross-Origin-Opener-Policy: same-origin` e `Cross-Origin-Embedder-Policy: require-corp`.
 
+#### Security Checklist & Suggested Configuration
+
+`koa-classic-server` parte dal principio **"file server first"** (vedi [`CLAUDE.md`](../CLAUDE.md)): i default servono i file senza restrizioni di policy nascoste. L'operatore irrobustisce il deploy tramite **configurazione esplicita**.
+
+##### Checklist per categoria
+
+**Static site / public asset serving**
+
+| ✓ | Cosa | Snippet |
+|---|---|---|
+| ☐ | Nascondi dot-files con potenziali segreti | `hidden: { dotFiles: { default: 'hidden', whitelist: ['.well-known'] } }` |
+| ☐ | Blocca dot-directories tipo `.git` | `hidden: { dotDirs: { default: 'hidden', whitelist: ['.well-known'] } }` |
+| ☐ | Disabilita listing in produzione | `dirListing: { enabled: false }` + `index` |
+| ☐ | Abilita HTTP caching | `browserCacheEnabled: true, browserCacheMaxAge: 86400` |
+| ☐ | Restringi i metodi | `method: ['GET', 'HEAD']` |
+| ☐ | Riserva path applicativi | `urlsReserved: ['/api', '/admin']` |
+| ☐ | Aggiungi security headers upstream sui file utente | middleware Koa upstream (vedi *Limiti dei Security Headers* sopra) |
+
+**User uploads / multi-tenant / directory scrivibili da terzi**
+
+| ✓ | Cosa | Snippet |
+|---|---|---|
+| ☐ | Cap entries più stretto contro dir gonfiate | `dirListing: { maxEntries: 1000 }` |
+| ☐ | Hide dot-files a ogni profondità | `hidden: { dotFiles: { default: 'hidden' }, dotDirs: { default: 'hidden' } }` |
+| ☐ | Blocklist path-aware per pattern noti | `hidden: { alwaysHide: ['*.key', '*.pem', /\.secret$/, 'config/secrets/**'] }` |
+| ☐ | Monitora la crescita dir esternamente (cron + alert) | — |
+
+> **Caveat v3.0:** `dirListing.maxEntries` bounda rendering/CPU ma NON la lettura iniziale `readdir()`. Per workload adversarial (utenti non fidati che possono creare milioni di file) la protezione RAM completa arriverà con il `readMode: 'bounded'` di v3.1 (vedi `[F-1]` in `docs/security_improvement_for_V3.md`).
+
+**Production hygiene (qualsiasi deploy)**
+
+| ✓ | Cosa | Snippet |
+|---|---|---|
+| ☐ | Allowlist Host upstream | nginx `server_name` o middleware Koa allowlist su `ctx.host` |
+| ☐ | Disabilita template engine se non SSR | ometti `template` |
+| ☐ | Tune `template.renderTimeout` | abbassa da 30 s per SLA stretti |
+| ☐ | Logger strutturato (Pino/Winston) | `logger: pino()` |
+| ☐ | Pin patch version + `npm audit` in CI | `package.json` + workflow CI |
+
+##### Suggested production security configuration
+
+Una sola configurazione di partenza che copre l'80% dei deploy. Tweak per workload specifici.
+
+```javascript
+const Koa  = require('koa');
+const pino = require('pino')({ level: 'info' });
+const path = require('path');
+const koaClassicServer = require('koa-classic-server');
+
+const app = new Koa();
+
+// 1) Host allowlist — mitiga DNS rebinding su esposizione LAN/loopback.
+const ALLOWED_HOSTS = new Set([
+  'app.example.com',
+  'localhost:3000',
+]);
+app.use(async (ctx, next) => {
+  if (!ALLOWED_HOSTS.has(ctx.host)) {
+    ctx.status = 421;
+    ctx.body = 'Misdirected Request';
+    return;
+  }
+  await next();
+});
+
+// 2) Security headers sui file utente (il middleware li imposta solo su
+//    listing/errori, NON sui file statici — by design).
+app.use(async (ctx, next) => {
+  ctx.set('X-Content-Type-Options',    'nosniff');
+  ctx.set('Referrer-Policy',           'strict-origin-when-cross-origin');
+  ctx.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
+  await next();
+});
+
+// 3) Il file server con default irrobustiti per produzione.
+app.use(koaClassicServer(path.join(__dirname, 'public'), {
+  method: ['GET', 'HEAD'],
+
+  index: ['index.html'],
+
+  dirListing: {
+    enabled:        process.env.NODE_ENV !== 'production',
+    maxEntries:     10000,                // più stretto del default 100000 anti-OOM
+    entriesPerPage: 100,
+  },
+
+  hidden: {
+    dotFiles: {
+      default:   'hidden',                // hardening esplicito vs default 'visible' filosofico
+      whitelist: ['.well-known'],         // ACME / Let's Encrypt
+    },
+    dotDirs: {
+      default:   'hidden',
+      whitelist: ['.well-known'],
+    },
+    alwaysHide: ['*.key', '*.pem', /^backup-/, /\.secret$/],
+  },
+
+  browserCacheEnabled: true,
+  browserCacheMaxAge:  86400,             // 24 h cache
+
+  logger: pino,                           // structured logging
+
+  urlsReserved: ['/api', '/admin'],       // route applicative gestite altrove
+}));
+
+app.listen(3000);
+```
+
+Per **user-uploads / multi-tenant**: oltre al blocco sopra, riduci `dirListing.maxEntries` a `1000` e monitora la dimensione della directory dall'esterno fino a quando v3.1 non aggiunge il `readMode: 'bounded'`.
+
 ---
 
 ### 2. Performance

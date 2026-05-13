@@ -11,62 +11,12 @@ function createApp(hiddenOpts) {
   return app.listen();
 }
 
-// ─── Implicit default warning ─────────────────────────────────────────────────
-// This describe block MUST be first: the warning flag is module-level and fires
-// only once per Jest worker process.  Jest isolates each test FILE into its own
-// module registry, so the flag starts as false when this file loads.
-
-describe('hidden option — implicit default warning', () => {
-  let warnSpy;
-
-  beforeAll(() => {
-    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-  });
-
-  afterAll(() => {
-    warnSpy.mockRestore();
-  });
-
-  test('warns when dotFiles.default and dotDirs.default are not explicitly set', () => {
-    warnSpy.mockClear();
-    koaClassicServer(root, {}); // no hidden config at all — both defaults implicit
-    const warnings = warnSpy.mock.calls.filter(c =>
-      c[1] && c[1].includes('dotFiles') && c[1].includes('dotDirs')
-    );
-    expect(warnings.length).toBe(1);
-    expect(warnings[0][1]).toContain('hidden.dotFiles.default');
-    expect(warnings[0][1]).toContain('v3.0.0');
-  });
-
-  test('does not warn again on subsequent calls (once per process)', () => {
-    warnSpy.mockClear();
-    koaClassicServer(root, {}); // flag already set from the test above
-    const warnings = warnSpy.mock.calls.filter(c =>
-      c[1] && c[1].includes('dotFiles')
-    );
-    expect(warnings.length).toBe(0);
-  });
-
-  test('no warning when both dotFiles.default and dotDirs.default are explicitly set', () => {
-    // Use jest.isolateModules to obtain a fresh copy of index.cjs whose flag is false,
-    // then verify that an explicit configuration emits no warning.
-    let fresh;
-    jest.isolateModules(() => {
-      fresh = require('../index.cjs');
-    });
-    warnSpy.mockClear();
-    fresh(root, {
-      hidden: {
-        dotFiles: { default: 'hidden' },
-        dotDirs:  { default: 'visible' },
-      }
-    });
-    const warnings = warnSpy.mock.calls.filter(c =>
-      c[1] && c[1].includes('dotFiles')
-    );
-    expect(warnings.length).toBe(0);
-  });
-});
+// Note: prior to v3.0.0 the dotFiles default was 'hidden' (a v3-alpha
+// security-by-default choice) and a once-per-process warning was emitted
+// when the option was implicit. The default was reverted to 'visible' to
+// align with the "HTTP file server first" design philosophy (see
+// CLAUDE.md). The warning is no longer emitted because the default is no
+// longer a surprising restriction; tests for it have been removed.
 
 // ─── Option validation ────────────────────────────────────────────────────────
 
@@ -100,14 +50,49 @@ describe('hidden option — validation', () => {
   });
 });
 
-// ─── dotFiles default: 'hidden' (system default) ─────────────────────────────
+// ─── dotFiles — default visible (system default in v3.0+) ────────────────────
 
-describe('dotFiles — default hidden (system default)', () => {
+describe('dotFiles — default visible (system default)', () => {
   let server;
   beforeAll(() => { server = createApp(undefined); });
   afterAll(() => server.close());
 
-  test('GET /.env returns 404', async () => {
+  // Per the V3 "HTTP file server first" philosophy (see CLAUDE.md), dot-files
+  // are visible by default. Operators harden by setting hidden.dotFiles.default
+  // to 'hidden' or by using blacklist / alwaysHide.
+  test('GET /.env returns 200 by default', async () => {
+    const res = await supertest(server).get('/.env');
+    expect(res.status).toBe(200);
+  });
+
+  test('GET /.gitignore returns 200 by default', async () => {
+    const res = await supertest(server).get('/.gitignore');
+    expect(res.status).toBe(200);
+  });
+
+  test('directory listing includes dot-files', async () => {
+    const res = await supertest(server).get('/');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('.env');
+    expect(res.text).toContain('.gitignore');
+  });
+
+  test('regular files remain accessible', async () => {
+    const res = await supertest(server).get('/normal.txt');
+    expect(res.status).toBe(200);
+  });
+});
+
+// ─── dotFiles default: 'hidden' (opt-in hardening) ───────────────────────────
+
+describe('dotFiles — explicit default hidden (opt-in)', () => {
+  let server;
+  beforeAll(() => {
+    server = createApp({ dotFiles: { default: 'hidden' } });
+  });
+  afterAll(() => server.close());
+
+  test('GET /.env returns 404 when dotFiles.default = "hidden"', async () => {
     const res = await supertest(server).get('/.env');
     expect(res.status).toBe(404);
   });
@@ -139,7 +124,7 @@ describe('dotFiles — default hidden (system default)', () => {
   });
 });
 
-// ─── dotFiles default: 'visible' ─────────────────────────────────────────────
+// ─── dotFiles default: 'visible' (kept for completeness with explicit opt-in) ─
 
 describe('dotFiles — default visible', () => {
   let server;
@@ -400,9 +385,9 @@ describe('alwaysHide — secondary to dotFiles whitelist', () => {
 
 // ─── deep tree: dot-files hidden at any depth ─────────────────────────────────
 
-describe('hidden entries at any depth in directory tree', () => {
+describe('hidden entries at any depth in directory tree (opt-in dotFiles.default=hidden)', () => {
   let server;
-  beforeAll(() => { server = createApp(undefined); });
+  beforeAll(() => { server = createApp({ dotFiles: { default: 'hidden' } }); });
   afterAll(() => server.close());
 
   test('GET /subdir/.env returns 404 (dot-file hidden at any depth)', async () => {

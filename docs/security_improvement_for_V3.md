@@ -57,17 +57,18 @@ Test di copertura: `__tests__/security.test.js` verifica `/../package.json`, `/%
 
 ### [PS-2] Hidden Files/Directories
 
-Introdotta in v3.0.0, l'opzione `hidden` permette un controllo granulare (righe 334–346, 602–616):
+Introdotta in v3.0.0, l'opzione `hidden` permette un controllo granulare sulla visibilità di file e directory (righe ~537–550, ~760–795 in `index.cjs`):
 
-- **Dot-files nascosti di default** (`hidden.dotFiles.default = 'hidden'`)
-- **Dot-directory visibili di default** (`hidden.dotDirs.default = 'visible'`)
-- **Blacklist assoluta** per `.git`, `.svn` (prevalenza su qualsiasi altra regola)
-- **Whitelist** per `.well-known` (sempre visibile)
-- **Pattern `alwaysHide`** — supporta glob e `RegExp`
+- **Default `'visible'`** per dot-files e dot-directory (allineato alla *design philosophy* — vedi `CLAUDE.md`)
+- **Blacklist assoluta** per pattern come `.git`, `.svn` (prevale su whitelist e default)
+- **Whitelist** per `.well-known` (sempre visibile; utile per ACME / Let's Encrypt)
+- **Pattern `alwaysHide`** — supporta glob e `RegExp` per match path-aware
 
 Priority logic: `blacklist > whitelist > alwaysHide > default`.
 
-Test di copertura: `__tests__/hidden-option.test.js`.
+> **Cambio rispetto al ciclo v3-alpha:** una prima implementazione di PS-2 aveva impostato `dotFiles.default: 'hidden'` come hardening-by-default + un warning runtime se omesso. Quella scelta è stata revertita alla finale v3.0.0 perché violava il principio "HTTP file server first" (`GET /.env` ritornava 404 anche se il file esisteva — sorpresa per l'operatore). PS-2 ora fornisce *meccanismi* di hardening; la *policy* (cosa nascondere) è scelta esplicita dell'operatore, documentata nella **Security Checklist** di `README.md` e `DOCUMENTATION.md`.
+
+Test di copertura: `__tests__/hidden-option.test.js` — copre sia il default `'visible'` (system behavior) sia il path opt-in `default: 'hidden'`.
 
 ---
 

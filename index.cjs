@@ -1835,30 +1835,25 @@ module.exports = function koaClassicServer(
                 }
                 const items = rawItems.filter(Boolean);
 
-                // Sort items based on query parameters
+                // Places directories before non-directories; falls back to `tieBreaker`
+                // when both items are in the same bucket. `effectiveType === 2` covers plain
+                // dirs and dir-resolved symlinks, matching the rest of the listing logic.
+                const compareDirsFirst = (a, b, tieBreaker) => {
+                    const aIsDir = a.effectiveType === 2;
+                    const bIsDir = b.effectiveType === 2;
+                    if (aIsDir !== bIsDir) return aIsDir ? -1 : 1;
+                    return tieBreaker(a, b);
+                };
+
                 items.sort((a, b) => {
                     let comparison = 0;
 
                     if (sortBy === 'name') {
                         comparison = a.name.localeCompare(b.name);
                     } else if (sortBy === 'type') {
-                        // Sort directories first, then by mime type (using effectiveType for symlinks)
-                        if (a.effectiveType === 2 && b.effectiveType !== 2) {
-                            comparison = -1;
-                        } else if (a.effectiveType !== 2 && b.effectiveType === 2) {
-                            comparison = 1;
-                        } else {
-                            comparison = a.mimeType.localeCompare(b.mimeType);
-                        }
+                        comparison = compareDirsFirst(a, b, (x, y) => x.mimeType.localeCompare(y.mimeType));
                     } else if (sortBy === 'size') {
-                        // Directories always at top when sorting by size (using effectiveType for symlinks)
-                        if (a.effectiveType === 2 && b.effectiveType !== 2) {
-                            comparison = -1;
-                        } else if (a.effectiveType !== 2 && b.effectiveType === 2) {
-                            comparison = 1;
-                        } else {
-                            comparison = a.sizeBytes - b.sizeBytes;
-                        }
+                        comparison = compareDirsFirst(a, b, (x, y) => x.sizeBytes - y.sizeBytes);
                     }
 
                     return sortOrder === 'desc' ? -comparison : comparison;

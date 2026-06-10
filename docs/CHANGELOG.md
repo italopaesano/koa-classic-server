@@ -5,7 +5,7 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.1] - 2026-06-10
 
 ### 🐛 Bug Fix
 
@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `HEAD` on a listable directory (no index) → **200**, matches `GET`
   - `HEAD` on a non-existent template/static path → **404**, matches `GET`
 - All 556 tests pass across 21 test suites (zero regressions)
+
+### 📦 Package Changes
+- **Version**: `3.0.0` → `3.0.1`
+- **Semver**: Patch version bump (bug fix only, no API changes)
 
 ## [3.0.0] - 2026-05-13
 

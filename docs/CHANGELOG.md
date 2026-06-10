@@ -5,6 +5,32 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-06-10
+
+### 🐛 Bug Fix
+
+#### Fixed `HEAD` on template-engine routes returning 404 (HTTP conformance, RFC 9110 §9.3.2)
+- **Issue**: When `HEAD` was enabled (`method: ['GET', 'HEAD']`), a `GET` on a route served by the template engine (e.g. `index.ejs` as the index of `/`) returned **200**, but a `HEAD` on the same route returned **404**. The static-file branch already handled `HEAD` correctly, and directory listings worked incidentally, so only the template branch was affected.
+- **Root cause**: `loadFile()` calls `tryRenderTemplate()` before the static-serving branch and returns as soon as it reports the request was handled. `tryRenderTemplate()` invoked the operator's `render` callback with the real `ctx.method` and did nothing `HEAD`-specific. A render that does not itself set a body on non-`GET` requests (a common pattern — operators guard render work behind a `GET` check) therefore left `ctx.status` at Koa's default **404** for `HEAD`, even though `GET` rendered normally.
+- **Impact**: MEDIUM — breaks caches, reverse proxies, link-checkers, and uptime monitors that issue `HEAD`. `HEAD` must be identical to `GET` minus the body (same status code and headers).
+- **Fix**: In `tryRenderTemplate()`, a `HEAD` request now runs the render exactly as a `GET` (the method is presented as `GET` for the duration of the render, then restored) so it resolves, validates, and sets `Content-Type` / status identically. The new `stripBodyForHead()` helper then replaces the rendered body with an empty buffer and restores `Content-Length` to the byte length the `GET` body would have had — sending the correct status and headers with no body. The `GET` path and all public options are unchanged; compatible with Koa 2 and Koa 3.
+- **Code**:
+  - `tryRenderTemplate()` — present `ctx.method` as `GET` for the render, restore to `HEAD` and call `stripBodyForHead()` in `finally`
+  - `stripBodyForHead()` — new helper: empty body + restored `Content-Length`, preserving the status and headers the render produced
+
+### 🧪 Testing
+- Added `__tests__/head-method.test.js` (9 tests) covering, with both a method-aware and a method-agnostic render:
+  - `HEAD` on a directory whose index is a template → **200**, status/`Content-Type`/`Content-Length` match `GET`, empty body
+  - `HEAD` on a directly-requested template file → **200**, matches `GET`
+  - `HEAD` on a static file → **200**, matches `GET` (and still advertises `Accept-Ranges`)
+  - `HEAD` on a listable directory (no index) → **200**, matches `GET`
+  - `HEAD` on a non-existent template/static path → **404**, matches `GET`
+- All 556 tests pass across 21 test suites (zero regressions)
+
+### 📦 Package Changes
+- **Version**: `3.0.0` → `3.0.1`
+- **Semver**: Patch version bump (bug fix only, no API changes)
+
 ## [3.0.0] - 2026-05-13
 
 ### 🆕 New Features

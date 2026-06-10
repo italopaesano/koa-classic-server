@@ -198,6 +198,28 @@ function sendTemplateError(ctx, status, html, logMsg, err, logger) {
     ctx.body = html;
 }
 
+// Rewrites an already-rendered response into an RFC 9110 §9.3.2 compliant HEAD
+// response: the status and headers produced by the render are preserved, the
+// body is replaced with an empty buffer (so no content is sent), and
+// Content-Length is restored to the byte length the GET body would have had.
+// Reassigning ctx.body to a non-stream value also makes Koa auto-destroy a
+// previous stream body, so no file descriptor leaks. Stream / non-buffer bodies
+// (uncommon for template renders) carry no Content-Length, matching the static
+// streaming-HEAD branch.
+function stripBodyForHead(ctx) {
+    if (ctx.headerSent) return;       // render already flushed — status/headers are locked
+    const body = ctx.body;
+    if (body == null) return;         // render produced no body (redirect, pass-through, ...) — leave status as-is
+    const hasKnownLength = typeof body === 'string' || Buffer.isBuffer(body);
+    const length = hasKnownLength ? Buffer.byteLength(body) : null;
+    ctx.body = Buffer.alloc(0);
+    if (length !== null) {
+        ctx.set('Content-Length', String(length)); // body setter zeroed it — restore the real length
+    } else {
+        ctx.remove('Content-Length');               // unknown length — omit, like static streaming HEAD
+    }
+}
+
 // Attempts to render the requested file through the user's template engine.
 // Returns true if the request was handled (success, timeout, or error response
 // already written), false if no template applies (caller should continue with
@@ -213,6 +235,16 @@ async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts, l
 
     const fileExt = path.extname(filePath).slice(1);
     if (!fileExt || !templateOpts.ext.includes(fileExt)) return false;
+
+    // RFC 9110 §9.3.2: HEAD must mirror GET (same status + headers, no body). The
+    // user's render is run exactly as for GET — by presenting ctx.method as GET for
+    // the duration of the render — so it resolves, validates, and sets Content-Type
+    // / status identically; stripBodyForHead() then discards the body and restores
+    // Content-Length. Without this, a render that early-returns on non-GET never
+    // sets ctx.body, leaving ctx.status at Koa's default 404 for HEAD even though
+    // GET returns 200.
+    const isHeadRequest = ctx.method === 'HEAD';
+    if (isHeadRequest) ctx.method = 'GET';
 
     const controller = new AbortController();
     const onClientClose = () => controller.abort();
@@ -255,6 +287,10 @@ async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts, l
     } finally {
         if (timer) clearTimeout(timer);
         ctx.req.removeListener('close', onClientClose);
+        if (isHeadRequest) {
+            ctx.method = 'HEAD';
+            stripBodyForHead(ctx);
+        }
     }
 
     return true;

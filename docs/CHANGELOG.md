@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fix**: New opt-in `staticSecurityHeaders` option. `staticSecurityHeaders: { nosniff: true }` adds `X-Content-Type-Options: nosniff` to static file responses (200 / 206 / 304). **Default off** — no behavior change on upgrade, consistent with the "hardening is opt-in" design philosophy. Template-rendered output is intentionally unaffected (the operator sets headers in their `render`). Other headers (X-Frame-Options, Referrer-Policy, HSTS) remain the reverse proxy's responsibility (`[M-3]`/`[M-4]`).
 - **Code** (`index.cjs`): `staticSecurityHeaders` validation at factory init; `nosniff` set in `loadFile()` after the template early-return so it covers all static branches.
 
+### 📚 Documentation — canonical Security Hardening Guide
+- Added **`docs/SECURITY_HARDENING.md`** as the single source of truth for hardening: threat-model profiles (trusted content / internal tool / user-uploads & multi-tenant), per-topic recommendations (dot-files, symlinks, directory listing & size, `nosniff`, `Host`/DNS rebinding, methods, template, logging, deps), per-profile checklists, residual risks, OS-level hardening, and a copy-paste **maximally-hardened configuration**.
+- Consolidated to avoid drift: `README.md` and `docs/DOCUMENTATION.md` now link to the guide instead of duplicating the checklist and suggested configuration; `CLAUDE.md` points contributors to the guide as the canonical location for hardening docs.
+
 ### 📚 Documentation — hardened DNS-rebinding guidance (V-5, docs-only)
 - The middleware still does not validate the `Host` header (deliberate design choice `[M-3]`: Virtual-Host policy belongs to the reverse proxy or an app-level allowlist, not a file server). No code change.
 - Strengthened `docs/DOCUMENTATION.md → DNS Rebinding` (Mitigation 2) with a robust example: `normalizeHost()` (case + trailing-dot FQDN), use of the **raw** `ctx.get('host')` instead of `ctx.host`, and an explicit footgun note on trusting a forgeable `X-Forwarded-Host` under `app.proxy`.

@@ -65,7 +65,7 @@ When proposing a new feature, ask: *"does this change the default observable beh
 
 - **New options should default to "transparent / pass-through".** A new feature that changes default observable behavior must be defended in the PR description: why is this a safety net and not a restriction?
 
-- **Security hardening lives in documentation, not in defaults.** When you find a hardening opportunity, the first instinct should be to add a row to the *Security Checklist* in `README.md` and `docs/DOCUMENTATION.md`, not to change a default. Defaults serve operators; the checklist guides them when they need to harden.
+- **Security hardening lives in documentation, not in defaults.** When you find a hardening opportunity, the first instinct should be to add it to the canonical *Security Hardening Guide* (`docs/SECURITY_HARDENING.md`), not to change a default. Defaults serve operators; the guide guides them when they need to harden. Keep the guide the single source of truth — `README.md` and `docs/DOCUMENTATION.md` link to it rather than duplicating checklists (this avoids the drift that previously caused, e.g., the `maxEntries` 10000/100000 mismatch).
 
 - **Breaking-change cost is real.** This middleware has v2-era stable options. Renaming or changing default behavior of stable options breaks every operator on upgrade. Justify breaks by **structural necessity**, not by aesthetic preference. Renaming `showDirContents` → `dirListing.enabled` was justified because it was needed to group related listing options under a namespace. Renaming `hideExtension.redirect` → `redirectStatusCode` would be aesthetic only and was therefore declined.
 
@@ -77,8 +77,9 @@ When proposing a new feature, ask: *"does this change the default observable beh
 
 ## Key references
 
-- **`README.md`** — user-facing entry point. Contains Security Checklist and Suggested Security Configuration sections.
-- **`docs/DOCUMENTATION.md`** — full API reference and Best Practices guide.
+- **`docs/SECURITY_HARDENING.md`** — **canonical** security hardening guide (threat model, per-topic recommendations, per-profile checklists, maximally-hardened config). Single source of truth; README and DOCUMENTATION link here.
+- **`README.md`** — user-facing entry point. Built-in Protection overview; links to the hardening guide.
+- **`docs/DOCUMENTATION.md`** — full API reference (per-option docs, incl. `symlinks` / `staticSecurityHeaders`); links to the hardening guide for best practices.
 - **`docs/CHANGELOG.md`** — version history; breaking changes documented under *⚠️ Breaking Changes*.
 - **`docs/security_improvement_for_V3.md`** — audit roadmap for v3 security improvements (implemented + Future Work under `[F-1]`).
 - **`__tests__/`** — 543+ tests asserting behavior contracts. Run with `npm test`.

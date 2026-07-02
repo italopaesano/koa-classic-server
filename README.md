@@ -224,7 +224,7 @@ app.use(koaClassicServer(__dirname + '/public', {
 
 ### 8. Hidden Files & Dot-File Protection (V3 default: hidden)
 
-Dot-files and dot-directories are **visible by default in v3** — aligned with the "file server first" philosophy (see [`CLAUDE.md`](./CLAUDE.md)). For production deployments where `.env`, `.git/config`, etc. could be served accidentally, **opt into hardening** explicitly via `hidden.dotFiles.default: 'hidden'`. This is the first item on the [Security Checklist](#design-philosophy--security-checklist).
+Dot-files and dot-directories are **visible by default in v3** — aligned with the "file server first" philosophy (see [`CLAUDE.md`](./CLAUDE.md)). For production deployments where `.env`, `.git/config`, etc. could be served accidentally, **opt into hardening** explicitly via `hidden.dotFiles.default: 'hidden'`. See the [Security Hardening Guide → Dot-files and dot-directories](./docs/SECURITY_HARDENING.md#31-dot-files-and-dot-directories-env-git-keys).
 
 ```javascript
 app.use(koaClassicServer(__dirname + '/www', {
@@ -552,11 +552,11 @@ The middleware emits the following on directory listings and error pages (404/40
 | `Referrer-Policy` | `no-referrer` |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=()` |
 
-> ⚠️ User-served static files (HTML/JS/CSS on disk) are returned **without** these headers — by design. See [docs/DOCUMENTATION.md → Limiti dei Security Headers](./docs/DOCUMENTATION.md#limiti-dei-security-headers-sui-file-statici) for an upstream-middleware example that applies your own CSP/HSTS to static files.
+> ⚠️ User-served static files (HTML/JS/CSS on disk) are returned **without** these headers — by design. Enable `staticSecurityHeaders: { nosniff: true }` and see the [Security Hardening Guide → Security headers on static files](./docs/SECURITY_HARDENING.md#35-security-headers-on-static-files) for applying your own CSP/HSTS via an upstream middleware.
 
 #### 5. DNS Rebinding
 
-The middleware does not validate the `Host` header — that belongs to the reverse proxy or an application-level allowlist. See [docs/DOCUMENTATION.md → DNS Rebinding](./docs/DOCUMENTATION.md#dns-rebinding--valida-lheader-host-a-monte) for nginx + Koa allowlist examples.
+The middleware does not validate the `Host` header — that belongs to the reverse proxy or an application-level allowlist. See the [Security Hardening Guide → Host validation / DNS rebinding](./docs/SECURITY_HARDENING.md#36-host-validation--dns-rebinding) for nginx + Koa allowlist examples.
 
 #### 6. Reserved URLs
 
@@ -582,130 +582,18 @@ File metadata is verified before streaming. A file deleted between check and acc
 - [Security improvement roadmap →](./docs/security_improvement_for_V3.md)
 - [Security tests →](./__tests__/security.test.js)
 
-### Design philosophy & Security Checklist
+### Hardening & production configuration
 
-koa-classic-server follows the principle: **"if a file is in `rootDir`, `GET` on its path returns it"**. The defaults serve files without applying surprise restrictions — the operator is the source of truth. See [`CLAUDE.md`](./CLAUDE.md) for the full design philosophy.
+koa-classic-server follows the principle **"if a file is in `rootDir`, `GET` on its path returns it"** — defaults are transparent and the operator is the source of truth (see [`CLAUDE.md`](./CLAUDE.md)). Hardening is therefore **opt-in via explicit configuration**.
 
-This means hardening is **opt-in via explicit configuration**. The checklist below covers the most common production concerns. Each item is one or two lines of configuration; not all of them apply to every deployment.
+The full, canonical hardening reference lives in one place to avoid drift:
 
-#### ✅ Static site / public asset serving
+📖 **[Security Hardening Guide → `docs/SECURITY_HARDENING.md`](./docs/SECURITY_HARDENING.md)**
 
-- [ ] **Hide dot-files** that may contain secrets:
-  `hidden: { dotFiles: { default: 'hidden', whitelist: ['.well-known'] } }`
-- [ ] **Block dot-directories** like `.git`:
-  `hidden: { dotDirs: { default: 'hidden', whitelist: ['.well-known'] } }`
-- [ ] **Disable directory listing** in production:
-  `dirListing: { enabled: false }` (combine with an `index` file)
-- [ ] **Enable browser HTTP caching**:
-  `browserCacheEnabled: true, browserCacheMaxAge: 86400`
-- [ ] **Restrict methods** to read-only (default already `['GET']`):
-  `method: ['GET', 'HEAD']`
-- [ ] **Reserve sensitive paths** for app routes:
-  `urlsReserved: ['/api', '/admin']`
-- [ ] **Enable `nosniff` on static responses** to stop MIME sniffing:
-  `staticSecurityHeaders: { nosniff: true }` (opt-in; off by default). Adds `X-Content-Type-Options: nosniff` to 200/206/304 static responses.
-- [ ] **Add upstream security headers** for user-served HTML (X-Frame-Options, Referrer-Policy, HSTS, CSP — not auto-added by this middleware — see *DNS Rebinding / Headers* in `docs/DOCUMENTATION.md`).
-
-#### ✅ User uploads, multi-tenant, untrusted-write directories
-
-- [ ] **Lower the entry cap** for accidentally-large dirs:
-  `dirListing: { maxEntries: 1000 }` (default 10000 is a safety net, not a security feature)
-- [ ] **Hide dot-files at every depth**:
-  `hidden: { dotFiles: { default: 'hidden' }, dotDirs: { default: 'hidden' } }`
-- [ ] **Add path-aware blocklists** for known secret patterns:
-  `hidden: { alwaysHide: ['*.key', '*.pem', /\.secret$/, 'config/secrets/**'] }`
-- [ ] **Contain symlinks** so a planted link cannot escape `rootDir`:
-  `symlinks: 'follow-within-root'` (or `'deny'` to forbid all in-tree symlinks). Default `'follow'` serves symlink targets outside `rootDir`. See *Symlink Support → `symlinks` policy*.
-- [ ] **Enable `nosniff`** to blunt content-sniffing XSS from uploaded files:
-  `staticSecurityHeaders: { nosniff: true }`
-- [ ] **Monitor directory growth externally** (cron + alert) — the v3.0 cap bounds rendering CPU but not the initial `readdir()` allocation. See `[F-1]` in `docs/security_improvement_for_V3.md` for the v3.1 streaming-read opt-in tracking this gap.
-
-#### ✅ Production hygiene (any deployment)
-
-- [ ] **Validate `Host` header upstream** (nginx `server_name` allowlist or app-level middleware) — this middleware does NOT validate `Host`. See *DNS Rebinding* in `docs/DOCUMENTATION.md`.
-- [ ] **Disable template-engine in production** if you don't use SSR — minimizes attack surface:
-  omit the `template` option entirely
-- [ ] **Tune `template.renderTimeout`** if you do use SSR — default 30 s is conservative; tighten for tight-SLA services
-- [ ] **Inject a real logger** instead of `console`:
-  `logger: pino()` so security-relevant warnings reach your aggregation
-- [ ] **Pin the latest patch version** in `package.json` and run `npm audit` in CI
-
-### Suggested production security configuration
-
-A single configuration block that covers most production deployments. Start here and tune for your workload (static site vs uploads vs internal admin):
-
-```javascript
-const Koa  = require('koa');
-const pino = require('pino')({ level: 'info' });
-const path = require('path');
-const koaClassicServer = require('koa-classic-server');
-
-const app = new Koa();
-
-// 1) Validate Host header — mitigates DNS rebinding on LAN / loopback exposure.
-//    Static allowlist, enforced before everything else. Behind a reverse proxy,
-//    prefer nginx `server_name` and drop this guard. See DOCUMENTATION.md → DNS Rebinding.
-const ALLOWED_HOSTS = new Set([
-  'app.example.com',
-  'localhost:3000',
-]);
-const normalizeHost = (h) => (h || '').toLowerCase().replace(/\.$/, '');
-app.use(async (ctx, next) => {
-  // Use the RAW Host (ctx.get('host')), not ctx.host: with app.proxy=true the latter
-  // trusts X-Forwarded-Host, which the client can forge if the proxy doesn't sanitize it.
-  if (!ALLOWED_HOSTS.has(normalizeHost(ctx.get('host')))) {
-    ctx.status = 421;
-    ctx.body = 'Misdirected Request';
-    return;
-  }
-  await next();
-});
-
-// 2) Apply security headers to user-served HTML/JS/CSS. The middleware
-//    sets these only on its own generated pages (listing + errors).
-app.use(async (ctx, next) => {
-  ctx.set('X-Content-Type-Options',     'nosniff');
-  ctx.set('Referrer-Policy',            'strict-origin-when-cross-origin');
-  ctx.set('Strict-Transport-Security',  'max-age=63072000; includeSubDomains');
-  await next();
-});
-
-// 3) The file server with hardened defaults.
-app.use(koaClassicServer(path.join(__dirname, 'public'), {
-  method: ['GET', 'HEAD'],            // read-only
-
-  index: ['index.html'],              // serve index when present
-
-  dirListing: {
-    enabled: process.env.NODE_ENV !== 'production',
-    maxEntries: 10000,                // the default soft cap (lower it further for untrusted dirs)
-    entriesPerPage: 100,
-  },
-
-  hidden: {
-    dotFiles: {
-      default: 'hidden',              // hide .env / .htaccess / etc by default
-      whitelist: ['.well-known'],     // expose ACME / Let's Encrypt
-    },
-    dotDirs: {
-      default: 'hidden',
-      whitelist: ['.well-known'],
-    },
-    alwaysHide: ['*.key', '*.pem', /^backup-/, /\.secret$/],
-  },
-
-  browserCacheEnabled: true,
-  browserCacheMaxAge:  86400,         // 24 h — bandwidth savings on cache hits
-
-  logger: pino,                       // pipe internal warnings to structured logs
-
-  urlsReserved: ['/api', '/admin'],   // routes handled by other middleware
-}));
-
-app.listen(3000);
-```
-
-For multi-tenant or user-upload scenarios, also drop `dirListing.maxEntries` to `1000` and monitor the served directory's size externally.
+It covers a threat-model-based approach (trusted content / internal tool / user-uploads &
+multi-tenant), per-topic recommendations (dot-files, symlinks, listings & directory size,
+`nosniff`, `Host`/DNS rebinding, and more), per-profile checklists, residual risks, and a
+**copy-paste maximally-hardened configuration**.
 
 ---
 
@@ -995,8 +883,8 @@ Contributions are welcome:
 ## Known Limitations
 
 - `urlsReserved` only matches first-level path segments
-- The middleware does not validate the `Host` header — configure a reverse proxy or an upstream allowlist (see [DOCUMENTATION.md → DNS Rebinding](./docs/DOCUMENTATION.md#dns-rebinding--valida-lheader-host-a-monte))
-- Static files are returned without security headers — apply your own upstream middleware (see [DOCUMENTATION.md → Limiti dei Security Headers](./docs/DOCUMENTATION.md#limiti-dei-security-headers-sui-file-statici))
+- The middleware does not validate the `Host` header — configure a reverse proxy or an upstream allowlist (see [Security Hardening Guide → Host validation / DNS rebinding](./docs/SECURITY_HARDENING.md#36-host-validation--dns-rebinding))
+- Static files are returned without security headers by default — enable `staticSecurityHeaders: { nosniff: true }` and/or apply upstream middleware (see [Security Hardening Guide → Security headers on static files](./docs/SECURITY_HARDENING.md#35-security-headers-on-static-files))
 
 See [DEBUG_REPORT.md](./docs/DEBUG_REPORT.md) for technical details.
 

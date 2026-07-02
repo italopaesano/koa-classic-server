@@ -631,6 +631,14 @@ module.exports = function koaClassicServer(
             mimeTypes: [],                // compressible MIME types (replaces default list if provided)
         },
         // compression: false            // shorthand to disable all compression
+        staticSecurityHeaders: {   // Opt-in security headers on STATIC file responses (V3.1+).
+            nosniff: false,        // false (default) — no change. true → sets
+                                   //   'X-Content-Type-Options: nosniff' on 200/206/304 static
+                                   //   responses, stopping MIME sniffing (content-sniffing XSS on
+                                   //   user-uploaded files). Does NOT apply to template-rendered
+                                   //   output. Off by default: hardening is opt-in. Other headers
+                                   //   (X-Frame-Options, HSTS, ...) stay with the reverse proxy.
+        },
         logger: console,    // Logger used for internal errors and warnings.
                             // Must expose error(...) and warn(...). Pass pino/winston/bunyan
                             // or any compatible object to integrate with aggregated logging.
@@ -1162,6 +1170,22 @@ module.exports = function koaClassicServer(
         return _isWithinRoot(real, realRootDir);
     }
 
+    // ── staticSecurityHeaders (V3.1+) — opt-in security headers on static responses ──
+    // Off by default (design philosophy: hardening is opt-in, documentation over defaults).
+    // Currently supports `nosniff` (X-Content-Type-Options: nosniff), which stops browsers
+    // from MIME-sniffing a response and interpreting it against the declared Content-Type
+    // (a content-sniffing XSS vector when serving user-uploaded files). Other headers
+    // (X-Frame-Options, Referrer-Policy, HSTS) remain the reverse proxy's responsibility.
+    const _ssh = options.staticSecurityHeaders;
+    if (_ssh !== undefined && (typeof _ssh !== 'object' || _ssh === null || Array.isArray(_ssh))) {
+        throw new Error(
+            '[koa-classic-server] options.staticSecurityHeaders must be an object, e.g. { nosniff: true }.'
+        );
+    }
+    const staticSecurityHeaders = {
+        nosniff: !!(_ssh && _ssh.nosniff),
+    };
+
     const compressionConfig = normalizeCompressionConfig(options.compression);
     const serverCacheConfig = normalizeServerCacheConfig(options.serverCache);
 
@@ -1576,6 +1600,15 @@ module.exports = function koaClassicServer(
 
             // Advertise range support on all file responses (including 304)
             ctx.set('Accept-Ranges', 'bytes');
+
+            // Opt-in static security headers (V-4). Applies to all static file
+            // responses (200 / 206 / 304). Placed after the template early-return,
+            // so template-rendered output is unaffected (that is the operator's
+            // responsibility inside their render function). Off by default — see
+            // the design philosophy: hardening is opt-in, not a default.
+            if (staticSecurityHeaders.nosniff) {
+                ctx.set('X-Content-Type-Options', 'nosniff');
+            }
 
             // Cache-Control set early — applies to all responses (200, 206, 304)
             if (options.browserCacheEnabled) {

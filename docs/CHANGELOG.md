@@ -35,11 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Behavior change**: `../` traversal now responds **404** instead of **403**. (Existing tests already accepted either.)
 - **Code** (`index.cjs`): `startsWith(normalizedRootDir)` → `_isWithinRoot(..., normalizedRootDir)` at both sites; 403 branch replaced with `sendNotFound()`.
 
+### 🔒 New (opt-in) — static security headers (V-4)
+- **Issue**: Security headers (incl. `X-Content-Type-Options: nosniff`) were set only on middleware-generated pages (directory listing, error pages), never on static files served from disk. When serving user-uploaded content, a browser MIME-sniffing a response can interpret it against the declared `Content-Type` — a content-sniffing XSS vector (already documented as `[M-4]`).
+- **Fix**: New opt-in `staticSecurityHeaders` option. `staticSecurityHeaders: { nosniff: true }` adds `X-Content-Type-Options: nosniff` to static file responses (200 / 206 / 304). **Default off** — no behavior change on upgrade, consistent with the "hardening is opt-in" design philosophy. Template-rendered output is intentionally unaffected (the operator sets headers in their `render`). Other headers (X-Frame-Options, Referrer-Policy, HSTS) remain the reverse proxy's responsibility (`[M-3]`/`[M-4]`).
+- **Code** (`index.cjs`): `staticSecurityHeaders` validation at factory init; `nosniff` set in `loadFile()` after the template early-return so it covers all static branches.
+
 ### 🧪 Testing
 - Added `__tests__/symlinks-policy.test.js` (19 tests): factory validation (invalid value, missing `rootDir` in protected vs `follow` mode), all three modes for escaping file/dir symlinks, in-root symlinks, `rootDir`-is-a-symlink in `follow-within-root` and `deny`, escaping index file, and the non-clickable/size-hidden listing rendering.
 - Added `__tests__/malformed-request.test.js` (13 tests): malformed percent-encoding, invalid Host, null-byte regression, well-formed requests (valid encoding/Host/404), and behavior under `urlPrefix`.
 - Added `__tests__/boundary-check.test.js` (9 tests): traversal → 404, sibling-directory-sharing-the-root-prefix unreachable, root/normal requests unaffected, `hideExtension` boundary.
-- Full suite: **597 tests** pass across 24 suites (zero regressions).
+- Added `__tests__/static-security-headers.test.js` (7 tests): default-off, nosniff on 200/206/304, generated pages unchanged, template output excluded, factory validation.
+- Full suite: **604 tests** pass across 25 suites (zero regressions).
 
 ### 📦 Package Changes
 - **Version**: `3.0.1` → `3.1.0`

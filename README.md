@@ -600,7 +600,9 @@ This means hardening is **opt-in via explicit configuration**. The checklist bel
   `method: ['GET', 'HEAD']`
 - [ ] **Reserve sensitive paths** for app routes:
   `urlsReserved: ['/api', '/admin']`
-- [ ] **Add upstream security headers** for user-served HTML (not auto-added by this middleware — see *DNS Rebinding / Headers* in `docs/DOCUMENTATION.md`).
+- [ ] **Enable `nosniff` on static responses** to stop MIME sniffing:
+  `staticSecurityHeaders: { nosniff: true }` (opt-in; off by default). Adds `X-Content-Type-Options: nosniff` to 200/206/304 static responses.
+- [ ] **Add upstream security headers** for user-served HTML (X-Frame-Options, Referrer-Policy, HSTS, CSP — not auto-added by this middleware — see *DNS Rebinding / Headers* in `docs/DOCUMENTATION.md`).
 
 #### ✅ User uploads, multi-tenant, untrusted-write directories
 
@@ -612,6 +614,8 @@ This means hardening is **opt-in via explicit configuration**. The checklist bel
   `hidden: { alwaysHide: ['*.key', '*.pem', /\.secret$/, 'config/secrets/**'] }`
 - [ ] **Contain symlinks** so a planted link cannot escape `rootDir`:
   `symlinks: 'follow-within-root'` (or `'deny'` to forbid all in-tree symlinks). Default `'follow'` serves symlink targets outside `rootDir`. See *Symlink Support → `symlinks` policy*.
+- [ ] **Enable `nosniff`** to blunt content-sniffing XSS from uploaded files:
+  `staticSecurityHeaders: { nosniff: true }`
 - [ ] **Monitor directory growth externally** (cron + alert) — the v3.0 cap bounds rendering CPU but not the initial `readdir()` allocation. See `[F-1]` in `docs/security_improvement_for_V3.md` for the v3.1 streaming-read opt-in tracking this gap.
 
 #### ✅ Production hygiene (any deployment)

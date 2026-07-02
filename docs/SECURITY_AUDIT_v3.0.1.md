@@ -26,7 +26,7 @@ che la vulnerabilità viene affrontata (fix + test + documentazione).
 - [x] [V-3] Boundary check con `startsWith` senza separatore di path — *risolto in v3.1.0*
 
 ### ⚪ Osservazioni minori (già note / documentate altrove)
-- [ ] [V-4] File statici senza `X-Content-Type-Options: nosniff` *(già `[M-4]`)*
+- [x] [V-4] File statici senza `X-Content-Type-Options: nosniff` *(già `[M-4]`)* — *opzione opt-in aggiunta in v3.1.0*
 - [ ] [V-5] Nessuna validazione dell'header `Host` — DNS rebinding *(già `[M-3]`)*
 - [ ] [V-6] DoS da directory con milioni di file — `readdir` non bounded *(già `[F-1]`)*
 
@@ -173,12 +173,30 @@ Confrontare con `normalizedRootDir + path.sep`, gestendo il caso `fullPath === n
 
 ### [V-4] File statici senza `X-Content-Type-Options: nosniff`
 
-**Stato:** ⬜ Da valutare
+**Stato:** ✅ Risolto in v3.1.0 (opzione opt-in `staticSecurityHeaders.nosniff`, default off)
 
-I security header vengono impostati solo sulle pagine generate dal middleware (listing/errori),
+I security header venivano impostati solo sulle pagine generate dal middleware (listing/errori),
 non sui file statici serviti da disco. Già documentato come `[M-4]` in
-`docs/security_improvement_for_V3.md`. Rilevante solo se si servono contenuti caricati da utenti.
-Da decidere se aggiungere `nosniff` opt-in sui file statici o limitarsi alla documentazione.
+`docs/security_improvement_for_V3.md`. Rilevante quando si servono contenuti caricati da utenti
+(MIME sniffing → content-sniffing XSS).
+
+**Correzione (v3.1.0)**
+
+Nuova opzione opt-in `staticSecurityHeaders: { nosniff: true }` che aggiunge
+`X-Content-Type-Options: nosniff` alle risposte statiche (200/206/304). Default `false`
+(nessun cambio di comportamento). Non si applica all'output del template engine (responsabilità
+dell'operatore nella sua `render`). Gli altri header restano al reverse proxy (coerente con `[M-3]`/`[M-4]`).
+
+**Definition of done**
+- [x] Opzione `staticSecurityHeaders` validata a factory-time (throw se non-oggetto)
+- [x] `nosniff` applicato a 200/206/304, escluso il template render, escluse le pagine generate (che già lo hanno)
+- [x] Test `__tests__/static-security-headers.test.js` (7 test)
+- [x] Security Checklist + DOCUMENTATION + CHANGELOG aggiornati
+
+**Decisioni di design (v3.1.0)**
+- Opzione dedicata built-in (non hook generico né solo-doc): mirata, semplice, testabile.
+- Default off (opt-in) — coerente con la design philosophy "hardening opt-in, non nei default".
+- Solo `nosniff` in scope; X-Frame-Options/Referrer-Policy/HSTS restano al reverse proxy.
 
 ---
 
@@ -208,6 +226,6 @@ Nessuna azione immediata; qui solo per completezza.
 | V-1 | Symlink escape oltre `rootDir`                | Alta     | ✅ Risolto (v3.1.0) |
 | V-2 | Percent-encoding malformato → 500             | Media    | ✅ Risolto (v3.1.0) |
 | V-3 | Boundary check `startsWith` senza separatore  | Bassa    | ✅ Risolto (v3.1.0) |
-| V-4 | File statici senza `nosniff`                  | Minore   | Da valutare   |
+| V-4 | File statici senza `nosniff`                  | Minore   | ✅ Risolto (v3.1.0) |
 | V-5 | Nessuna validazione `Host` (DNS rebinding)    | Minore   | Da valutare   |
 | V-6 | DoS da directory enormi                       | Minore   | Da valutare   |

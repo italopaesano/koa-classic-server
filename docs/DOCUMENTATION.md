@@ -262,6 +262,17 @@ symlinks: 'deny'
 
 Le modalità protette (`'follow-within-root'`, `'deny'`) costano un `realpath()` per path servito e richiedono che `rootDir` esista all'istanziazione. `rootDir` può essere esso stesso un symlink in ogni modalità. Dettagli completi nella sezione *Gestione dei Link Simbolici → Opzione `symlinks`*.
 
+#### `staticSecurityHeaders` (Object)
+
+Header di sicurezza **opt-in** sulle risposte dei file statici (V3.1+). Default: nessuno.
+
+```javascript
+// Aggiunge X-Content-Type-Options: nosniff alle risposte statiche (200/206/304)
+staticSecurityHeaders: { nosniff: true }
+```
+
+Impedisce il MIME sniffing (content-sniffing XSS su file caricati dagli utenti). Default `nosniff: false` (nessun cambio di comportamento). Non si applica all'output del template engine. Dettagli nella sezione *Security Headers → Eccezione opt-in `staticSecurityHeaders.nosniff`*.
+
 #### `dirListing.enabled` (Boolean)
 
 Controlla se mostrare il contenuto delle directory.
@@ -1397,6 +1408,22 @@ I **file statici** serviti dal disco (HTML, JS, CSS, immagini, font, video, qual
 - L'utente possiede la propria policy e deve dichiararla esplicitamente.
 
 > ⚠️ Non assumere che il middleware "metta in sicurezza" i tuoi file: gli header sopra elencati vengono inviati **solo** quando la risposta è generata dal middleware stesso.
+
+**Eccezione opt-in: `staticSecurityHeaders.nosniff` (V3.1+)**
+
+Un'unica eccezione mirata è disponibile come opzione **opt-in** (default off):
+
+```javascript
+app.use(koaClassicServer(rootDir, {
+  staticSecurityHeaders: { nosniff: true }
+}));
+```
+
+Con `nosniff: true`, il middleware aggiunge `X-Content-Type-Options: nosniff` alle risposte dei **file statici** (200/206/304). Questo impedisce al browser di fare MIME sniffing e interpretare la risposta contro il `Content-Type` dichiarato — il classico vettore di content-sniffing XSS quando si servono file caricati dagli utenti. Note:
+
+- Default `false`: nessun cambio di comportamento all'upgrade (coerente con la design philosophy "hardening opt-in").
+- **Non** si applica all'output del template engine (è responsabilità dell'operatore impostarlo nella propria `render`).
+- Gli altri header (X-Frame-Options, Referrer-Policy, HSTS, CSP) restano fuori scope: usali col middleware a monte qui sotto o col reverse proxy.
 
 **Come aggiungere security headers ai file statici**
 

@@ -510,7 +510,7 @@ Notes:
 - **`rootDir` may itself be a symlink** (atomic-deploy / Capistrano / Nix) in every mode: the boundary is pinned to `realpath(rootDir)` resolved once at factory init.
 - Protected modes require `rootDir` to **exist at factory time** (they resolve its realpath up front) and throw otherwise.
 - In the directory listing, blocked symlinks appear as `( Blocked Symlink )`, non-clickable, and do not expose the target's size.
-- Residual risk: the check is realpath-based, so a symlink swapped between the check and the file open (TOCTOU) is not fully prevented. For hostile multi-tenant setups combine with OS-level isolation (chroot, per-tenant mounts, `nosymfollow`).
+- Residual risk: the check is realpath-based, so (a) a symlink swapped between the check and the file open (TOCTOU) is not fully prevented, and (b) **hardlinks** cannot be detected — a hardlink has no resolvable target path, so its `realpath` is inside `rootDir` even when it points to an external inode. For hostile multi-tenant setups combine with OS-level isolation (chroot, per-tenant mounts, `nosymfollow`, a dedicated upload filesystem).
 
 ---
 

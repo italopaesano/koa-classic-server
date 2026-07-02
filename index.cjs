@@ -1450,8 +1450,9 @@ module.exports = function koaClassicServer(
 
         // Symlink boundary check (V-1): in protected modes reject any requested file
         // or directory whose realpath escapes rootDir (or, in 'deny' mode, any symlink
-        // resolved below rootDir). No-op in the default 'follow' mode.
-        if (!(await symlinkAllowed(toOpen))) {
+        // resolved below rootDir). The `_symlinkMode !== 'follow'` guard short-circuits
+        // before any await so the default 'follow' mode stays truly zero-overhead.
+        if (_symlinkMode !== 'follow' && !(await symlinkAllowed(toOpen))) {
             sendNotFound(ctx);
             return;
         }
@@ -1468,7 +1469,8 @@ module.exports = function koaClassicServer(
                             const indexPath = path.join(toOpen, indexFile.name);
                             // Symlink boundary check (V-1): an index file may itself be a
                             // symlink escaping rootDir — validate before serving it.
-                            if (!(await symlinkAllowed(indexPath))) {
+                            // Guarded so the default 'follow' mode skips the await entirely.
+                            if (_symlinkMode !== 'follow' && !(await symlinkAllowed(indexPath))) {
                                 sendNotFound(ctx);
                                 return;
                             }

@@ -859,7 +859,10 @@ app.use(koaClassicServer(rootDir, { symlinks: 'follow-within-root' }));
 - **`rootDir` può essere esso stesso un symlink** (deploy atomico / Capistrano / Nix) in ogni modalità: il confine è ancorato a `realpath(rootDir)` risolto una sola volta all'init.
 - Le modalità protette richiedono che `rootDir` **esista al momento dell'istanziazione** (risolvono subito il realpath) e lanciano un errore altrimenti.
 - Nel listing i symlink bloccati appaiono come `( Blocked Symlink )`, non cliccabili, senza esporre la size del target.
-- **Rischio residuo**: il controllo è basato su `realpath`, quindi non previene del tutto un TOCTOU (symlink scambiato tra il controllo e l'apertura del file). Per scenari multi-tenant ostili combinare con isolamento a livello OS (chroot, mount per-tenant, `nosymfollow`).
+- **Rischio residuo**:
+  - **TOCTOU**: il controllo è basato su `realpath`, quindi non previene del tutto uno scambio del symlink tra il controllo e l'apertura del file.
+  - **Hardlink**: un hardlink non ha un "target path" risolvibile — il suo `realpath` è dentro `rootDir` anche se punta all'inode di un file esterno. I check path-based (inclusi questi) **non** possono rilevarlo.
+  - Per scenari multi-tenant ostili combinare con isolamento a livello OS (chroot, mount per-tenant, `nosymfollow`, filesystem dedicato per gli upload).
 
 ### MIME Types
 

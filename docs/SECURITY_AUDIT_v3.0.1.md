@@ -20,7 +20,7 @@ che la vulnerabilità viene affrontata (fix + test + documentazione).
 - [x] [V-1] Symlink escape oltre `rootDir` (path traversal via link simbolico) — *risolto in v3.1.0*
 
 ### 🟠 Priorità media
-- [ ] [V-2] URL con percent-encoding malformato → 500 invece di 400
+- [x] [V-2] URL con percent-encoding malformato → 500 invece di 400 — *risolto in v3.1.0*
 
 ### 🟡 Priorità bassa / hardening
 - [ ] [V-3] Boundary check con `startsWith` senza separatore di path
@@ -98,7 +98,7 @@ nella Security Checklist di `README.md` e `docs/DOCUMENTATION.md`.
 
 ### [V-2] URL con percent-encoding malformato → 500
 
-**Stato:** ⬜ Da affrontare
+**Stato:** ✅ Risolto in v3.1.0
 
 **Descrizione**
 
@@ -125,8 +125,16 @@ Avvolgere il `decodeURIComponent` in try/catch e rispondere 400, coerentemente c
 null-byte già presente.
 
 **Definition of done**
-- [ ] try/catch attorno al decode con risposta 400
-- [ ] Test per `/%`, `/%E0%A4%A` e altri encoding malformati
+- [x] try/catch attorno al decode con risposta 400
+- [x] Scope esteso: anche `new URL()` sull'Host header malformato (secondo vettore di 500 emerso in analisi) → 400
+- [x] Helper `sendBadRequest()` condiviso; guardia null-byte rifattorizzata per usarlo
+- [x] Test per `/%`, `/%zz`, `/%E0%A4%A`, `/a%2fb%`, `/%c3%28`, Host malformato, null-byte (regressione), path validi, urlPrefix — `__tests__/malformed-request.test.js` (13 test)
+
+**Decisioni di design (v3.1.0)**
+- Scope completo: preambolo di parsing URL (`new URL` + `decodeURIComponent`) protetto → 400.
+- Risposta plain text `'Bad Request'`, coerente con le guardie null-byte (400) e traversal (403) esistenti.
+- Nessun logging delle richieste malformate (evita log-spam / DoS da input client-controllato).
+- Accumulato nella release 3.1.0 dell'audit.
 
 ---
 
@@ -193,7 +201,7 @@ Nessuna azione immediata; qui solo per completezza.
 | ID  | Descrizione                                   | Priorità | Stato        |
 |-----|-----------------------------------------------|----------|--------------|
 | V-1 | Symlink escape oltre `rootDir`                | Alta     | ✅ Risolto (v3.1.0) |
-| V-2 | Percent-encoding malformato → 500             | Media    | Da affrontare |
+| V-2 | Percent-encoding malformato → 500             | Media    | ✅ Risolto (v3.1.0) |
 | V-3 | Boundary check `startsWith` senza separatore  | Bassa    | Da affrontare |
 | V-4 | File statici senza `nosniff`                  | Minore   | Da valutare   |
 | V-5 | Nessuna validazione `Host` (DNS rebinding)    | Minore   | Da valutare   |

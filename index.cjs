@@ -158,6 +158,14 @@ function sendNotFound(ctx) {
     ctx.body = _NOT_FOUND_HTML;
 }
 
+// Plain-text 400 for malformed requests (bad percent-encoding, invalid Host,
+// null byte). Kept minimal and header-light to match the existing null-byte /
+// traversal guards — the response body carries no attacker-controlled data.
+function sendBadRequest(ctx) {
+    ctx.status = 400;
+    ctx.body = 'Bad Request';
+}
+
 // Validates and returns a logger compatible with our contract. The minimum
 // surface is `{ error: Function, warn: Function }` — any object exposing both
 // (console, pino, winston, bunyan, ...) is accepted as-is.
@@ -1276,11 +1284,18 @@ module.exports = function koaClassicServer(
         const urlToUse = options.useOriginalUrl ? ctx.originalUrl : ctx.url;
         const _origin  = ctx.protocol + '://' + ctx.host;
         const fullUrl  = _origin + urlToUse;
+        // Parse the request URL. `new URL()` throws on an invalid Host header
+        // (e.g. "Host: bad host") — reject as 400 rather than letting it surface as 500.
         let pageHref = '';
-        if (fullUrl.charAt(fullUrl.length - 1) === '/') {
-            pageHref = new URL(fullUrl.slice(0, -1));
-        } else {
-            pageHref = new URL(fullUrl);
+        try {
+            if (fullUrl.charAt(fullUrl.length - 1) === '/') {
+                pageHref = new URL(fullUrl.slice(0, -1));
+            } else {
+                pageHref = new URL(fullUrl);
+            }
+        } catch {
+            sendBadRequest(ctx);
+            return;
         }
 
         // Check URL prefix
@@ -1299,7 +1314,12 @@ module.exports = function koaClassicServer(
             let a_pathnameOutPrefix = a_pathname.slice(_urlPrefixParts.length);
             let s_pathnameOutPrefix = a_pathnameOutPrefix.join("/");
             let hrefOutPrefix = pageHref.origin + '/' + s_pathnameOutPrefix;
-            pageHrefOutPrefix = new URL(hrefOutPrefix);
+            try {
+                pageHrefOutPrefix = new URL(hrefOutPrefix);
+            } catch {
+                sendBadRequest(ctx);
+                return;
+            }
         }
 
         // Check reserved URLs (first level only)
@@ -1318,14 +1338,21 @@ module.exports = function koaClassicServer(
         if (pageHrefOutPrefix.pathname === "/") {
             requestedPath = "";
         } else {
-            requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
+            // decodeURIComponent() throws URIError on malformed percent-encoding
+            // (e.g. "/%", "/%zz", a truncated UTF-8 sequence) — reject as 400
+            // rather than letting it surface as an unhandled 500.
+            try {
+                requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
+            } catch {
+                sendBadRequest(ctx);
+                return;
+            }
         }
 
         // Null byte guard: path.normalize() throws ERR_INVALID_ARG_VALUE for paths
         // containing \0. Reject early with 400 Bad Request before it reaches fs calls.
         if (requestedPath.includes('\0')) {
-            ctx.status = 400;
-            ctx.body = 'Bad Request';
+            sendBadRequest(ctx);
             return;
         }
 

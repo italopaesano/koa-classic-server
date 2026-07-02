@@ -21,13 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Residual risk**: realpath-based check does not fully prevent TOCTOU (a symlink swapped between check and open). For hostile multi-tenant setups combine with OS-level isolation.
 - **Code** (`index.cjs`): `symlinks` validation + pinned `realRootDir` (`fs.realpathSync.native`) at factory init; `symlinkAllowed()` / `_isWithinRoot()` helpers; boundary checks on the served path, the resolved index file, and each listing entry.
 
+### 🐛 Bug Fix — malformed requests return 400 instead of 500 (V-2)
+- **Issue**: Client-controlled inputs surfaced as **500 Internal Server Error** instead of **400 Bad Request**:
+  - Malformed percent-encoding in the path (`/%`, `/%zz`, a truncated UTF-8 sequence) — `decodeURIComponent()` throws `URIError`.
+  - An invalid `Host` header (e.g. `Host: bad host with spaces`) — `new URL()` throws.
+- **Impact**: LOW — a 500 on client-controlled input is log noise and a probing surface; the correct response is 400. Inconsistent with the existing null-byte guard, which already returned 400.
+- **Fix**: The URL-parsing prologue (`new URL()` for the request URL and the `urlPrefix` reconstruction, plus `decodeURIComponent()`) is wrapped and returns **400 Bad Request** on failure. A shared `sendBadRequest()` helper is introduced and the existing null-byte guard refactored to use it. No logging of malformed requests (avoids log-spam / DoS from client input). Well-formed requests — including valid percent-encoding and valid Host headers — are unaffected.
+- **Code** (`index.cjs`): `sendBadRequest()` helper; try/catch around `new URL(fullUrl)`, the `urlPrefix` `new URL()`, and `decodeURIComponent()`.
+
 ### 🧪 Testing
 - Added `__tests__/symlinks-policy.test.js` (19 tests): factory validation (invalid value, missing `rootDir` in protected vs `follow` mode), all three modes for escaping file/dir symlinks, in-root symlinks, `rootDir`-is-a-symlink in `follow-within-root` and `deny`, escaping index file, and the non-clickable/size-hidden listing rendering.
-- Full suite: **575 tests** pass across 22 suites (zero regressions).
+- Added `__tests__/malformed-request.test.js` (13 tests): malformed percent-encoding, invalid Host, null-byte regression, well-formed requests (valid encoding/Host/404), and behavior under `urlPrefix`.
+- Full suite: **588 tests** pass across 23 suites (zero regressions).
 
 ### 📦 Package Changes
 - **Version**: `3.0.1` → `3.1.0`
-- **Semver**: Minor bump — additive, opt-in feature; default behavior unchanged (no breaking change).
+- **Semver**: Minor bump — additive, opt-in `symlinks` feature (default unchanged) plus the V-2 bug fix; no breaking change.
 
 ## [3.0.1] - 2026-06-10
 

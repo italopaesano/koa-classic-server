@@ -524,9 +524,11 @@ Notes:
 GET /../../etc/passwd            → 403 Forbidden
 GET /%2e%2e%2fpackage.json       → 403 Forbidden
 GET /file\0.txt                  → 400 Bad Request   (null-byte guard)
+GET /%                           → 400 Bad Request   (malformed percent-encoding)
+Host: bad host                   → 400 Bad Request   (invalid Host header)
 ```
 
-Defense in depth: null-byte rejection → `path.normalize()` → resolved-path boundary check against `rootDir`.
+Defense in depth: malformed-request rejection (bad percent-encoding / invalid `Host` → 400) → null-byte rejection → `path.normalize()` → resolved-path boundary check against `rootDir`. Malformed inputs return **400**, never an unhandled 500.
 
 #### 2. XSS in Directory Listing
 

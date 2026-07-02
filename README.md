@@ -305,10 +305,12 @@ const koaClassicServer = require('koa-classic-server');
 
 const app = new Koa();
 
-// Allowlist Host headers to mitigate DNS rebinding (see docs/DOCUMENTATION.md → Sicurezza).
+// Allowlist Host headers to mitigate DNS rebinding (see docs/DOCUMENTATION.md → DNS Rebinding).
+// Uses raw ctx.get('host') (not ctx.host) to avoid trusting a forgeable X-Forwarded-Host.
 const ALLOWED_HOSTS = new Set(['app.example.com', 'localhost:3000']);
+const normalizeHost = (h) => (h || '').toLowerCase().replace(/\.$/, '');
 app.use(async (ctx, next) => {
-  if (!ALLOWED_HOSTS.has(ctx.host)) { ctx.status = 421; ctx.body = 'Host not allowed'; return; }
+  if (!ALLOWED_HOSTS.has(normalizeHost(ctx.get('host')))) { ctx.status = 421; ctx.body = 'Host not allowed'; return; }
   await next();
 });
 
@@ -641,12 +643,17 @@ const koaClassicServer = require('koa-classic-server');
 const app = new Koa();
 
 // 1) Validate Host header — mitigates DNS rebinding on LAN / loopback exposure.
+//    Static allowlist, enforced before everything else. Behind a reverse proxy,
+//    prefer nginx `server_name` and drop this guard. See DOCUMENTATION.md → DNS Rebinding.
 const ALLOWED_HOSTS = new Set([
   'app.example.com',
   'localhost:3000',
 ]);
+const normalizeHost = (h) => (h || '').toLowerCase().replace(/\.$/, '');
 app.use(async (ctx, next) => {
-  if (!ALLOWED_HOSTS.has(ctx.host)) {
+  // Use the RAW Host (ctx.get('host')), not ctx.host: with app.proxy=true the latter
+  // trusts X-Forwarded-Host, which the client can forge if the proxy doesn't sanitize it.
+  if (!ALLOWED_HOSTS.has(normalizeHost(ctx.get('host')))) {
     ctx.status = 421;
     ctx.body = 'Misdirected Request';
     return;

@@ -40,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fix**: New opt-in `staticSecurityHeaders` option. `staticSecurityHeaders: { nosniff: true }` adds `X-Content-Type-Options: nosniff` to static file responses (200 / 206 / 304). **Default off** — no behavior change on upgrade, consistent with the "hardening is opt-in" design philosophy. Template-rendered output is intentionally unaffected (the operator sets headers in their `render`). Other headers (X-Frame-Options, Referrer-Policy, HSTS) remain the reverse proxy's responsibility (`[M-3]`/`[M-4]`).
 - **Code** (`index.cjs`): `staticSecurityHeaders` validation at factory init; `nosniff` set in `loadFile()` after the template early-return so it covers all static branches.
 
+### 📚 Documentation — hardened DNS-rebinding guidance (V-5, docs-only)
+- The middleware still does not validate the `Host` header (deliberate design choice `[M-3]`: Virtual-Host policy belongs to the reverse proxy or an app-level allowlist, not a file server). No code change.
+- Strengthened `docs/DOCUMENTATION.md → DNS Rebinding` (Mitigation 2) with a robust example: `normalizeHost()` (case + trailing-dot FQDN), use of the **raw** `ctx.get('host')` instead of `ctx.host`, and an explicit footgun note on trusting a forgeable `X-Forwarded-Host` under `app.proxy`.
+- Aligned the `Host` allowlist examples in `README.md` (quick start + Suggested production security configuration) to the robust form.
+
 ### 🧪 Testing
 - Added `__tests__/symlinks-policy.test.js` (19 tests): factory validation (invalid value, missing `rootDir` in protected vs `follow` mode), all three modes for escaping file/dir symlinks, in-root symlinks, `rootDir`-is-a-symlink in `follow-within-root` and `deny`, escaping index file, and the non-clickable/size-hidden listing rendering.
 - Added `__tests__/malformed-request.test.js` (13 tests): malformed percent-encoding, invalid Host, null-byte regression, well-formed requests (valid encoding/Host/404), and behavior under `urlPrefix`.

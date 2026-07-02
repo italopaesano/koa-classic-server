@@ -27,7 +27,7 @@ che la vulnerabilità viene affrontata (fix + test + documentazione).
 
 ### ⚪ Osservazioni minori (già note / documentate altrove)
 - [x] [V-4] File statici senza `X-Content-Type-Options: nosniff` *(già `[M-4]`)* — *opzione opt-in aggiunta in v3.1.0*
-- [ ] [V-5] Nessuna validazione dell'header `Host` — DNS rebinding *(già `[M-3]`)*
+- [x] [V-5] Nessuna validazione dell'header `Host` — DNS rebinding *(già `[M-3]`)* — *docs-only, rafforzata in v3.1.0*
 - [ ] [V-6] DoS da directory con milioni di file — `readdir` non bounded *(già `[F-1]`)*
 
 ---
@@ -202,10 +202,31 @@ dell'operatore nella sua `render`). Gli altri header restano al reverse proxy (c
 
 ### [V-5] Nessuna validazione dell'header `Host` (DNS rebinding)
 
-**Stato:** ⬜ Da valutare
+**Stato:** ✅ Chiusa come docs-only in v3.1.0 (nessun codice — scelta di design `[M-3]`)
 
-Il middleware non valida `Host`. Già documentato come `[M-3]`, delegato al reverse proxy.
-Nessuna azione sul codice prevista; verificare solo che la documentazione sia adeguata.
+Il middleware non valida `Host`. È una **scelta di design deliberata**: la validazione del Virtual Host
+è responsabilità dello strato di rete (reverse proxy `server_name`) o di un middleware Koa a monte,
+non di un file server. `Host` nel codice serve solo a costruire l'URL da cui estrarre il `pathname`;
+non gate l'accesso e non viene riflesso nel body (nessuna XSS riflessa / header injection). L'unico
+rischio è il **DNS rebinding** quando il server è esposto **direttamente** (loopback/LAN, senza proxy).
+
+**Perché non nel codice**
+- La validazione di `Host` fatta bene ha footgun reali (fiducia in `X-Forwarded-Host`, normalizzazione
+  porta/case/FQDN, falsa sicurezza): il reverse proxy la fa in modo più robusto e centralizzato.
+- La policy sugli hostname è globale (deve proteggere tutta l'app), non specifica del file server.
+- `Host` protegge dal rebinding, ma **non** è un controllo di "provenienza" del client (per quello: IP allowlist/firewall/auth).
+
+**Correzione (v3.1.0, solo documentazione)**
+- Rafforzata la sezione `DOCUMENTATION.md → DNS Rebinding` (Mitigazione 2): esempio robusto con
+  `normalizeHost()`, uso del **Host grezzo** `ctx.get('host')` invece di `ctx.host`, e nota esplicita
+  sul footgun `X-Forwarded-Host` / `app.proxy`.
+- Allineati gli esempi `Host` nel `README.md` (quick start + Suggested production security configuration)
+  alla versione robusta.
+
+**Definition of done**
+- [x] Documentazione DNS rebinding rafforzata (esempio robusto + footgun)
+- [x] Esempi README allineati (`ctx.get('host')` + `normalizeHost`)
+- [x] Voce Security Checklist già presente ("Validate Host header upstream")
 
 ---
 
@@ -227,5 +248,5 @@ Nessuna azione immediata; qui solo per completezza.
 | V-2 | Percent-encoding malformato → 500             | Media    | ✅ Risolto (v3.1.0) |
 | V-3 | Boundary check `startsWith` senza separatore  | Bassa    | ✅ Risolto (v3.1.0) |
 | V-4 | File statici senza `nosniff`                  | Minore   | ✅ Risolto (v3.1.0) |
-| V-5 | Nessuna validazione `Host` (DNS rebinding)    | Minore   | Da valutare   |
+| V-5 | Nessuna validazione `Host` (DNS rebinding)    | Minore   | ✅ Docs-only (v3.1.0) |
 | V-6 | DoS da directory enormi                       | Minore   | Da valutare   |

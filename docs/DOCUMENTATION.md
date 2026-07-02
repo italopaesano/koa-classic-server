@@ -1361,31 +1361,58 @@ server {
 # Tutte le richieste con Host diverso da app.example.com vengono rifiutate qui.
 ```
 
-**Mitigazione 2 — middleware Koa applicativo (utile in dev/LAN)**
+**Mitigazione 2 — middleware Koa applicativo (utile in dev/LAN, senza proxy davanti)**
 
-Antepone una guardia su `ctx.host` PRIMA di `koa-classic-server`:
+L'allowlist è **configurazione statica**, definita una volta all'avvio; l'enforcement è una guardia per-richiesta registrata **PRIMA** di `koa-classic-server` (anzi, prima di qualsiasi middleware da proteggere), cablata prima di `app.listen()`. Metterla a monte protegge **tutta** l'app, non solo il file server — per questo è preferibile a un controllo interno alla libreria.
 
 ```javascript
+const Koa = require('koa');
+const koaClassicServer = require('koa-classic-server');
+
+const app = new Koa();
+
+// 1) Allowlist STATICA, nota all'avvio.
+//    Includi la porta se il server è raggiunto direttamente su quella porta.
 const ALLOWED_HOSTS = new Set([
   'app.example.com',
+  'www.example.com',
   'localhost:3000',
   '127.0.0.1:3000',
 ]);
 
+// Normalizza per evitare sia bypass sia blocchi di client legittimi:
+// minuscole (Host è case-insensitive) + rimozione del punto finale FQDN ("host." → "host").
+function normalizeHost(h) {
+  return (h || '').toLowerCase().replace(/\.$/, '');
+}
+
+// 2) Guardia Host — deve girare per prima.
 app.use(async (ctx, next) => {
-  // ctx.host include la porta (es. "localhost:3000")
-  if (!ALLOWED_HOSTS.has(ctx.host)) {
-    ctx.status = 421; // Misdirected Request
+  // ⚠️ Usa il Host GREZZO: ctx.get('host'), NON ctx.host.
+  //    ctx.host, con app.proxy = true, si fida di X-Forwarded-Host, che è
+  //    falsificabile dal client se il proxy non lo sanitizza → bypass dell'allowlist.
+  const host = normalizeHost(ctx.get('host'));
+  if (!ALLOWED_HOSTS.has(host)) {
+    ctx.status = 421;            // 421 Misdirected Request (oppure 400 Bad Request)
     ctx.body = 'Host not allowed';
-    return;
+    return;                      // niente next() → koa-classic-server non viene raggiunto
   }
   await next();
 });
 
+// 3) File server DOPO la guardia.
 app.use(koaClassicServer(rootDir));
+
+app.listen(3000);
 ```
 
-> ⚠️ Se il proxy a monte termina TLS e inoltra all'app, configura `app.proxy = true` e usa `ctx.hostname` con `X-Forwarded-Host` solo se il proxy è fidato.
+**Footgun da conoscere (perché la libreria delega questa validazione)**
+
+- **`X-Forwarded-Host` / fiducia nel proxy**: se abiliti `app.proxy = true`, `ctx.host`/`ctx.hostname` iniziano a fidarsi di `X-Forwarded-Host`. Se il proxy a monte non imposta/sanitizza quell'header, un attaccante può mandare `Host: evil.com` + `X-Forwarded-Host: app.example.com` e **bypassare** l'allowlist. Dietro un proxy fidato, la cosa più robusta è far validare l'hostname **al proxy** (`server_name`) e non nell'app.
+- **Normalizzazione**: gestisci porta, maiuscole e punto finale FQDN, altrimenti l'allowlist o blocca client legittimi (availability) o è troppo lasca (bypass).
+- **Falsa sicurezza**: un check di `Host` mezzo-corretto è peggio di nessun check, perché induce a saltare le protezioni vere (proxy, TLS, auth).
+
+> ✅ In produzione con reverse proxy: usa la **Mitigazione 1** (`server_name`) e ometti la guardia applicativa. La Mitigazione 2 serve quando esponi il server **direttamente**, senza proxy (tool interni, dev, LAN).
 
 #### Limiti dei Security Headers sui file statici
 
@@ -1518,12 +1545,16 @@ const koaClassicServer = require('koa-classic-server');
 const app = new Koa();
 
 // 1) Host allowlist — mitiga DNS rebinding su esposizione LAN/loopback.
+//    Dietro reverse proxy, preferisci nginx `server_name` e ometti questa guardia.
 const ALLOWED_HOSTS = new Set([
   'app.example.com',
   'localhost:3000',
 ]);
+const normalizeHost = (h) => (h || '').toLowerCase().replace(/\.$/, '');
 app.use(async (ctx, next) => {
-  if (!ALLOWED_HOSTS.has(ctx.host)) {
+  // Host GREZZO (ctx.get('host')), non ctx.host: con app.proxy=true quest'ultimo
+  // si fida di X-Forwarded-Host, falsificabile dal client.
+  if (!ALLOWED_HOSTS.has(normalizeHost(ctx.get('host')))) {
     ctx.status = 421;
     ctx.body = 'Misdirected Request';
     return;

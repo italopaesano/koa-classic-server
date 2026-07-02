@@ -47,7 +47,7 @@
   "devDependencies": {
     "autocannon": "^8.0.0",
     "ejs": "^4.0.0",
-    "eslint": "^9.39.4",
+    "eslint": "^10.6.0",
     "inquirer": "^13.3.0",
     "jest": "^30.2.0",
     "supertest": "^7.2.2"

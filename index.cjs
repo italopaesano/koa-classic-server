@@ -158,6 +158,14 @@ function sendNotFound(ctx) {
     ctx.body = _NOT_FOUND_HTML;
 }
 
+// Plain-text 400 for malformed requests (bad percent-encoding, invalid Host,
+// null byte). Kept minimal and header-light to match the existing null-byte /
+// traversal guards — the response body carries no attacker-controlled data.
+function sendBadRequest(ctx) {
+    ctx.status = 400;
+    ctx.body = 'Bad Request';
+}
+
 // Validates and returns a logger compatible with our contract. The minimum
 // surface is `{ error: Function, warn: Function }` — any object exposing both
 // (console, pino, winston, bunyan, ...) is accepted as-is.
@@ -523,10 +531,20 @@ module.exports = function koaClassicServer(
     opts STRUCTURE
      opts = {
         method: ['GET'], // Supported methods, otherwise next() will be called
+        symlinks: 'follow', // Symlink policy (V3.1+). Opt-in protection against symlink escape:
+                            //   'follow'             (default) — follow symlinks anywhere, incl.
+                            //                        targets OUTSIDE rootDir. Zero overhead;
+                            //                        historical behavior (no rootDir existence check).
+                            //   'follow-within-root' — follow only while the resolved realpath stays
+                            //                        inside rootDir; escaping links return 404.
+                            //   'deny'               — never follow a symlink resolved below rootDir
+                            //                        (rootDir being a symlink itself is always allowed).
+                            //   Protected modes cost one fs.realpath() per served path and require
+                            //   rootDir to exist at factory time. See README "Security Checklist".
         dirListing: {                   // Directory listing configuration (V3+).
             enabled:        true,       // Render the directory listing HTML when no index file matches.
                                         //   Set to false to return 404 instead of a listing.
-            maxEntries:     100000,     // Soft cap on entries shown / sorted / stat'd per listing.
+            maxEntries:     10000,      // Soft cap on entries shown / sorted / stat'd per listing.
                                         //   Implementation: fs.promises.readdir() then slice(0, maxEntries).
                                         //   This is a SAFETY NET against catastrophic operational accidents
                                         //   (broken log rotation, mistakenly mounted huge FS) — not a policy
@@ -613,6 +631,14 @@ module.exports = function koaClassicServer(
             mimeTypes: [],                // compressible MIME types (replaces default list if provided)
         },
         // compression: false            // shorthand to disable all compression
+        staticSecurityHeaders: {   // Opt-in security headers on STATIC file responses (V3.1+).
+            nosniff: false,        // false (default) — no change. true → sets
+                                   //   'X-Content-Type-Options: nosniff' on 200/206/304 static
+                                   //   responses, stopping MIME sniffing (content-sniffing XSS on
+                                   //   user-uploaded files). Does NOT apply to template-rendered
+                                   //   output. Off by default: hardening is opt-in. Other headers
+                                   //   (X-Frame-Options, HSTS, ...) stay with the reverse proxy.
+        },
         logger: console,    // Logger used for internal errors and warnings.
                             // Must expose error(...) and warn(...). Pass pino/winston/bunyan
                             // or any compatible object to integrate with aggregated logging.
@@ -1066,6 +1092,100 @@ module.exports = function koaClassicServer(
         return { rawFile, compressedFile };
     }
 
+    // ── symlinks policy (V3.1+) — opt-in protection against symlink escape ──
+    // 'follow'             (default) : follow symlinks anywhere, including targets
+    //                                  outside rootDir. Zero overhead — current behavior.
+    // 'follow-within-root'          : follow symlinks only while the resolved realpath
+    //                                  stays inside rootDir; escaping links return 404.
+    // 'deny'                        : never follow a symlink resolved BELOW rootDir
+    //                                  (rootDir itself being a symlink is always allowed).
+    // Protected modes cost one fs.realpath() per served path. See the Security Checklist.
+    if (options.symlinks === undefined) {
+        options.symlinks = 'follow';
+    } else if (
+        options.symlinks !== 'follow' &&
+        options.symlinks !== 'follow-within-root' &&
+        options.symlinks !== 'deny'
+    ) {
+        throw new Error(
+            '[koa-classic-server] options.symlinks must be one of "follow", "follow-within-root", "deny". ' +
+            'Got: ' + String(options.symlinks)
+        );
+    }
+    const _symlinkMode = options.symlinks;
+
+    // realpath of rootDir, resolved once at init (pinned). This is what makes a
+    // rootDir that is ITSELF a symlink work in protected modes: the boundary check
+    // compares against the real target, not the (unresolved) symlink path.
+    // In 'follow' mode we skip this entirely (and keep the historical behavior of
+    // NOT requiring rootDir to exist at factory time).
+    let realRootDir = normalizedRootDir;
+    if (_symlinkMode !== 'follow') {
+        try {
+            realRootDir = fs.realpathSync.native(normalizedRootDir);
+        } catch (err) {
+            throw new Error(
+                `[koa-classic-server] rootDir must exist when symlinks mode is "${_symlinkMode}". ` +
+                'Original error: ' + err.message
+            );
+        }
+    }
+
+    // Case-insensitive path comparison on filesystems that are case-insensitive by
+    // default (APFS/HFS+ on macOS, NTFS on Windows) — otherwise a casing mismatch
+    // between realRootDir and a resolved path would produce spurious 404s.
+    const _caseInsensitiveFS = process.platform === 'darwin' || process.platform === 'win32';
+
+    function _isWithinRoot(resolved, root) {
+        if (_caseInsensitiveFS) {
+            resolved = resolved.toLowerCase();
+            root = root.toLowerCase();
+        }
+        if (resolved === root) return true;
+        const withSep = root.endsWith(path.sep) ? root : root + path.sep;
+        return resolved.startsWith(withSep);
+    }
+
+    // Returns true if serving `resolvedPath` is permitted under the current symlinks
+    // policy. In 'follow' mode this is a no-op (no syscall). In protected modes it
+    // resolves the realpath and checks it against realRootDir.
+    async function symlinkAllowed(resolvedPath) {
+        if (_symlinkMode === 'follow') return true;
+        let real;
+        try {
+            real = await fs.promises.realpath(resolvedPath);
+        } catch {
+            return false; // cannot resolve (broken/circular link, race) → treat as not found
+        }
+        if (_symlinkMode === 'deny') {
+            // Reject if ANY symlink was resolved below rootDir: the real path must equal
+            // the path obtained by swapping only the rootDir prefix (no inner resolution).
+            const rel = path.relative(normalizedRootDir, resolvedPath);
+            const expected = path.join(realRootDir, rel);
+            return _caseInsensitiveFS
+                ? real.toLowerCase() === expected.toLowerCase()
+                : real === expected;
+        }
+        // 'follow-within-root': the resolved target must stay inside rootDir.
+        return _isWithinRoot(real, realRootDir);
+    }
+
+    // ── staticSecurityHeaders (V3.1+) — opt-in security headers on static responses ──
+    // Off by default (design philosophy: hardening is opt-in, documentation over defaults).
+    // Currently supports `nosniff` (X-Content-Type-Options: nosniff), which stops browsers
+    // from MIME-sniffing a response and interpreting it against the declared Content-Type
+    // (a content-sniffing XSS vector when serving user-uploaded files). Other headers
+    // (X-Frame-Options, Referrer-Policy, HSTS) remain the reverse proxy's responsibility.
+    const _ssh = options.staticSecurityHeaders;
+    if (_ssh !== undefined && (typeof _ssh !== 'object' || _ssh === null || Array.isArray(_ssh))) {
+        throw new Error(
+            '[koa-classic-server] options.staticSecurityHeaders must be an object, e.g. { nosniff: true }.'
+        );
+    }
+    const staticSecurityHeaders = {
+        nosniff: !!(_ssh && _ssh.nosniff),
+    };
+
     const compressionConfig = normalizeCompressionConfig(options.compression);
     const serverCacheConfig = normalizeServerCacheConfig(options.serverCache);
 
@@ -1188,11 +1308,18 @@ module.exports = function koaClassicServer(
         const urlToUse = options.useOriginalUrl ? ctx.originalUrl : ctx.url;
         const _origin  = ctx.protocol + '://' + ctx.host;
         const fullUrl  = _origin + urlToUse;
+        // Parse the request URL. `new URL()` throws on an invalid Host header
+        // (e.g. "Host: bad host") — reject as 400 rather than letting it surface as 500.
         let pageHref = '';
-        if (fullUrl.charAt(fullUrl.length - 1) === '/') {
-            pageHref = new URL(fullUrl.slice(0, -1));
-        } else {
-            pageHref = new URL(fullUrl);
+        try {
+            if (fullUrl.charAt(fullUrl.length - 1) === '/') {
+                pageHref = new URL(fullUrl.slice(0, -1));
+            } else {
+                pageHref = new URL(fullUrl);
+            }
+        } catch {
+            sendBadRequest(ctx);
+            return;
         }
 
         // Check URL prefix
@@ -1211,7 +1338,12 @@ module.exports = function koaClassicServer(
             let a_pathnameOutPrefix = a_pathname.slice(_urlPrefixParts.length);
             let s_pathnameOutPrefix = a_pathnameOutPrefix.join("/");
             let hrefOutPrefix = pageHref.origin + '/' + s_pathnameOutPrefix;
-            pageHrefOutPrefix = new URL(hrefOutPrefix);
+            try {
+                pageHrefOutPrefix = new URL(hrefOutPrefix);
+            } catch {
+                sendBadRequest(ctx);
+                return;
+            }
         }
 
         // Check reserved URLs (first level only)
@@ -1230,26 +1362,37 @@ module.exports = function koaClassicServer(
         if (pageHrefOutPrefix.pathname === "/") {
             requestedPath = "";
         } else {
-            requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
+            // decodeURIComponent() throws URIError on malformed percent-encoding
+            // (e.g. "/%", "/%zz", a truncated UTF-8 sequence) — reject as 400
+            // rather than letting it surface as an unhandled 500.
+            try {
+                requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
+            } catch {
+                sendBadRequest(ctx);
+                return;
+            }
         }
 
         // Null byte guard: path.normalize() throws ERR_INVALID_ARG_VALUE for paths
         // containing \0. Reject early with 400 Bad Request before it reaches fs calls.
         if (requestedPath.includes('\0')) {
-            ctx.status = 400;
-            ctx.body = 'Bad Request';
+            sendBadRequest(ctx);
             return;
         }
 
         const normalizedPath = path.normalize(requestedPath);
         const fullPath = path.join(normalizedRootDir, normalizedPath);
 
-        // Security check: ensure resolved path is within rootDir.
+        // Security check: ensure resolved path is within rootDir. Uses the shared
+        // _isWithinRoot() helper, which is boundary-aware: it matches rootDir exactly
+        // or rootDir + path.sep, never a sibling (e.g. /srv/wwwsecret for root /srv/www) —
+        // hardened defense in depth against a future change to how fullPath is built.
         // Covers: ../ traversal, URL-encoded variants (%2e%2e%2f), and on Windows
         // backslash sequences (path.normalize converts \ to / before the check).
-        if (!fullPath.startsWith(normalizedRootDir)) {
-            ctx.status = 403;
-            ctx.body = 'Forbidden';
+        // Returns 404 (not 403) so "outside root" is indistinguishable from "not found",
+        // matching the symlink-escape and hidden-entry outcomes.
+        if (!_isWithinRoot(fullPath, normalizedRootDir)) {
+            sendNotFound(ctx);
             return;
         }
 
@@ -1325,8 +1468,8 @@ module.exports = function koaClassicServer(
             if (!extOfRequested && requestedPath !== '' && !requestedPath.endsWith('/') && !hadTrailingSlash) {
                 const pathWithExt = fullPath + hideExt;
 
-                // Security check: ensure resolved path is still within rootDir
-                if (pathWithExt.startsWith(normalizedRootDir)) {
+                // Security check: ensure resolved path is still within rootDir (boundary-aware)
+                if (_isWithinRoot(pathWithExt, normalizedRootDir)) {
                     try {
                         const statWithExt = await fs.promises.stat(pathWithExt);
                         if (statWithExt.isFile()) {
@@ -1360,6 +1503,15 @@ module.exports = function koaClassicServer(
             }
         }
 
+        // Symlink boundary check (V-1): in protected modes reject any requested file
+        // or directory whose realpath escapes rootDir (or, in 'deny' mode, any symlink
+        // resolved below rootDir). The `_symlinkMode !== 'follow'` guard short-circuits
+        // before any await so the default 'follow' mode stays truly zero-overhead.
+        if (_symlinkMode !== 'follow' && !(await symlinkAllowed(toOpen))) {
+            sendNotFound(ctx);
+            return;
+        }
+
         if (stat.isDirectory()) {
             // Handle directory
             if (options.dirListing.enabled) {
@@ -1370,6 +1522,13 @@ module.exports = function koaClassicServer(
                         const indexRelPath = path.relative(normalizedRootDir, path.join(toOpen, indexFile.name)).split(path.sep).join('/');
                         if (!isHiddenEntry(indexFile.name, indexRelPath, false)) {
                             const indexPath = path.join(toOpen, indexFile.name);
+                            // Symlink boundary check (V-1): an index file may itself be a
+                            // symlink escaping rootDir — validate before serving it.
+                            // Guarded so the default 'follow' mode skips the await entirely.
+                            if (_symlinkMode !== 'follow' && !(await symlinkAllowed(indexPath))) {
+                                sendNotFound(ctx);
+                                return;
+                            }
                             await loadFile(indexPath, indexFile.stat);
                             return;
                         }
@@ -1441,6 +1600,15 @@ module.exports = function koaClassicServer(
 
             // Advertise range support on all file responses (including 304)
             ctx.set('Accept-Ranges', 'bytes');
+
+            // Opt-in static security headers (V-4). Applies to all static file
+            // responses (200 / 206 / 304). Placed after the template early-return,
+            // so template-rendered output is unaffected (that is the operator's
+            // responsibility inside their render function). Off by default — see
+            // the design philosophy: hardening is opt-in, not a default.
+            if (staticSecurityHeaders.nosniff) {
+                ctx.set('X-Content-Type-Options', 'nosniff');
+            }
 
             // Cache-Control set early — applies to all responses (200, 206, 304)
             if (options.browserCacheEnabled) {
@@ -1838,10 +2006,18 @@ module.exports = function koaClassicServer(
                             const itemRelPath = dirRelPath ? dirRelPath + '/' + s_name : s_name;
                             if (isHiddenEntry(s_name, itemRelPath, itemIsDir)) return null;
 
+                            // Symlink boundary (V-1): in protected modes, flag entries whose
+                            // target escapes rootDir (or, in 'deny' mode, any symlink). Blocked
+                            // entries are rendered non-clickable and do not expose the target size.
+                            let isBlockedSymlink = false;
+                            if (_symlinkMode !== 'follow' && !isBrokenSymlink && (type === 3 || type === 0)) {
+                                if (!(await symlinkAllowed(itemPath))) isBlockedSymlink = true;
+                            }
+
                             // Get file size — reuse cachedStat if already available (avoids double stat for symlinks)
                             let sizeStr = '-';
                             let sizeBytes = 0;
-                            if (!isBrokenSymlink) {
+                            if (!isBrokenSymlink && !isBlockedSymlink) {
                                 try {
                                     const itemStat = cachedStat || await fs.promises.stat(itemPath);
                                     if (effectiveType === 1) {
@@ -1862,6 +2038,7 @@ module.exports = function koaClassicServer(
                                 effectiveType,
                                 isSymlink: type === 3,
                                 isBrokenSymlink,
+                                isBlockedSymlink,
                                 mimeType,
                                 sizeStr,
                                 sizeBytes,
@@ -1923,14 +2100,16 @@ module.exports = function koaClassicServer(
                     // Symlink indicator label
                     const symlinkLabel = item.isBrokenSymlink
                         ? ' ( Broken Symlink )'
-                        : item.isSymlink
-                            ? ' ( Symlink )'
-                            : '';
+                        : item.isBlockedSymlink
+                            ? ' ( Blocked Symlink )'
+                            : item.isSymlink
+                                ? ' ( Symlink )'
+                                : '';
 
                     if (item.isReserved) {
                         parts.push(`${rowStart} ${escapeHtml(item.name)}${symlinkLabel}</td> <td> DIR BUT RESERVED</td><td>${item.sizeStr}</td></tr>`);
-                    } else if (item.isBrokenSymlink) {
-                        // Broken symlink: name visible but not clickable
+                    } else if (item.isBrokenSymlink || item.isBlockedSymlink) {
+                        // Broken or policy-blocked symlink: name visible but not clickable
                         parts.push(`${rowStart} ${escapeHtml(item.name)}${symlinkLabel}</td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
                     } else {
                         parts.push(`${rowStart} <a href="${escapeHtml(item.itemUri)}">${escapeHtml(item.name)}</a>${symlinkLabel} </td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);

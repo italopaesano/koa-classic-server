@@ -5,6 +5,62 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-07-02
+
+### 🔒 Security — new `symlinks` policy (opt-in protection against symlink escape)
+
+#### `symlinks` option — contain symbolic links inside `rootDir`
+- **Issue (V-1)**: A symlink placed inside `rootDir` whose target lives **outside** `rootDir` was followed and served with no boundary check. The path-traversal defense validates the *requested path string* only; because `fs.promises.stat()` follows symlinks, the resolved target was never re-checked against `rootDir`. On deployments where `rootDir` contains directories writable by untrusted parties (uploads, spool, multi-tenant hosting), a planted symlink could read any file the process can access (`/etc/passwd`, keys, `.env` outside root). This contradicted the documented `[PS-1]` property *"the resolved path must start with rootDir"*, which did not hold for symlinks.
+- **Fix**: A new opt-in `symlinks` option:
+  - `'follow'` **(default)** — historical behavior, follow symlinks anywhere including outside `rootDir`. **Zero overhead**, no behavior change on upgrade.
+  - `'follow-within-root'` — follow only while the resolved `realpath` stays inside `rootDir`; escaping links return **404**.
+  - `'deny'` — never follow a symlink resolved **below** `rootDir`.
+- **`rootDir` as a symlink is preserved** in every mode: the boundary is pinned to `realpath(rootDir)` resolved **once at factory init**, so atomic-deploy / Capistrano / Nix setups keep working. Protected modes require `rootDir` to exist at factory time (throw otherwise); `'follow'` keeps the historical no-existence-check behavior.
+- **Directory listing**: symlinks blocked by the policy render as `( Blocked Symlink )`, non-clickable, and do not expose the target's size.
+- **Cross-platform**: case-insensitive boundary comparison on macOS/Windows to avoid spurious 404s.
+- **Residual risk**: realpath-based check does not fully prevent TOCTOU (a symlink swapped between check and open). For hostile multi-tenant setups combine with OS-level isolation.
+- **Code** (`index.cjs`): `symlinks` validation + pinned `realRootDir` (`fs.realpathSync.native`) at factory init; `symlinkAllowed()` / `_isWithinRoot()` helpers; boundary checks on the served path, the resolved index file, and each listing entry.
+
+### 🐛 Bug Fix — malformed requests return 400 instead of 500 (V-2)
+- **Issue**: Client-controlled inputs surfaced as **500 Internal Server Error** instead of **400 Bad Request**:
+  - Malformed percent-encoding in the path (`/%`, `/%zz`, a truncated UTF-8 sequence) — `decodeURIComponent()` throws `URIError`.
+  - An invalid `Host` header (e.g. `Host: bad host with spaces`) — `new URL()` throws.
+- **Impact**: LOW — a 500 on client-controlled input is log noise and a probing surface; the correct response is 400. Inconsistent with the existing null-byte guard, which already returned 400.
+- **Fix**: The URL-parsing prologue (`new URL()` for the request URL and the `urlPrefix` reconstruction, plus `decodeURIComponent()`) is wrapped and returns **400 Bad Request** on failure. A shared `sendBadRequest()` helper is introduced and the existing null-byte guard refactored to use it. No logging of malformed requests (avoids log-spam / DoS from client input). Well-formed requests — including valid percent-encoding and valid Host headers — are unaffected.
+- **Code** (`index.cjs`): `sendBadRequest()` helper; try/catch around `new URL(fullUrl)`, the `urlPrefix` `new URL()`, and `decodeURIComponent()`.
+
+### 🔒 Hardening — boundary-aware rootDir check (V-3)
+- **Issue**: The rootDir containment check used a plain `fullPath.startsWith(normalizedRootDir)` without a trailing separator — the classic prefix pattern that (if the way `fullPath` is built ever changed) could match a sibling directory like `/srv/wwwsecret` for root `/srv/www`. Not exploitable today (`path.join` always inserts a separator and the leading `/` prevents `..` escape), but fragile.
+- **Fix**: Both containment checks (the main path check and the `hideExtension` `pathWithExt` check) now use the shared `_isWithinRoot()` helper introduced with the symlinks feature — boundary-aware (`rootDir` exactly or `rootDir` + `path.sep`), with case-insensitive comparison on macOS/Windows. The main check now returns **404** (was 403) so "outside root" is indistinguishable from "not found", matching the symlink-escape and hidden-entry outcomes.
+- **Behavior change**: `../` traversal now responds **404** instead of **403**. (Existing tests already accepted either.)
+- **Code** (`index.cjs`): `startsWith(normalizedRootDir)` → `_isWithinRoot(..., normalizedRootDir)` at both sites; 403 branch replaced with `sendNotFound()`.
+
+### 🔒 New (opt-in) — static security headers (V-4)
+- **Issue**: Security headers (incl. `X-Content-Type-Options: nosniff`) were set only on middleware-generated pages (directory listing, error pages), never on static files served from disk. When serving user-uploaded content, a browser MIME-sniffing a response can interpret it against the declared `Content-Type` — a content-sniffing XSS vector (already documented as `[M-4]`).
+- **Fix**: New opt-in `staticSecurityHeaders` option. `staticSecurityHeaders: { nosniff: true }` adds `X-Content-Type-Options: nosniff` to static file responses (200 / 206 / 304). **Default off** — no behavior change on upgrade, consistent with the "hardening is opt-in" design philosophy. Template-rendered output is intentionally unaffected (the operator sets headers in their `render`). Other headers (X-Frame-Options, Referrer-Policy, HSTS) remain the reverse proxy's responsibility (`[M-3]`/`[M-4]`).
+- **Code** (`index.cjs`): `staticSecurityHeaders` validation at factory init; `nosniff` set in `loadFile()` after the template early-return so it covers all static branches.
+
+### 📚 Documentation — canonical Security Hardening Guide
+- Added **`docs/SECURITY_HARDENING.md`** as the single source of truth for hardening: threat-model profiles (trusted content / internal tool / user-uploads & multi-tenant), per-topic recommendations (dot-files, symlinks, directory listing & size, `nosniff`, `Host`/DNS rebinding, methods, template, logging, deps), per-profile checklists, residual risks, OS-level hardening, and a copy-paste **maximally-hardened configuration**.
+- Consolidated to avoid drift: `README.md` and `docs/DOCUMENTATION.md` now link to the guide instead of duplicating the checklist and suggested configuration; `CLAUDE.md` points contributors to the guide as the canonical location for hardening docs.
+
+### 📚 Documentation — hardened DNS-rebinding guidance (V-5, docs-only)
+- The middleware still does not validate the `Host` header (deliberate design choice `[M-3]`: Virtual-Host policy belongs to the reverse proxy or an app-level allowlist, not a file server). No code change.
+- Strengthened `docs/DOCUMENTATION.md → DNS Rebinding` (Mitigation 2) with a robust example: `normalizeHost()` (case + trailing-dot FQDN), use of the **raw** `ctx.get('host')` instead of `ctx.host`, and an explicit footgun note on trusting a forgeable `X-Forwarded-Host` under `app.proxy`.
+- Aligned the `Host` allowlist examples in `README.md` (quick start + Suggested production security configuration) to the robust form.
+- **Fixed a docs/code inconsistency on the `dirListing.maxEntries` default (V-6, docs-only)**: the real default is `10000` (`index.cjs`), but the JSDoc block, `CLAUDE.md`, `README.md` and `DOCUMENTATION.md` stated `100000` in places — all aligned to `10000` (no code/behavior change). Also corrected the `CLAUDE.md` rationale: `maxEntries` bounds the work *after* `readdir()` (stat/sort/render), **not** the `readdir()` allocation itself — the unbounded initial `readdir()` on adversarial directories remains the `[F-1]` gap tracked for v3.1. A lower `maxEntries` is the more defensive choice against listing-driven CPU/IO amplification.
+
+### 🧪 Testing
+- Added `__tests__/symlinks-policy.test.js` (19 tests): factory validation (invalid value, missing `rootDir` in protected vs `follow` mode), all three modes for escaping file/dir symlinks, in-root symlinks, `rootDir`-is-a-symlink in `follow-within-root` and `deny`, escaping index file, and the non-clickable/size-hidden listing rendering.
+- Added `__tests__/malformed-request.test.js` (13 tests): malformed percent-encoding, invalid Host, null-byte regression, well-formed requests (valid encoding/Host/404), and behavior under `urlPrefix`.
+- Added `__tests__/boundary-check.test.js` (9 tests): traversal → 404, sibling-directory-sharing-the-root-prefix unreachable, root/normal requests unaffected, `hideExtension` boundary.
+- Added `__tests__/static-security-headers.test.js` (7 tests): default-off, nosniff on 200/206/304, generated pages unchanged, template output excluded, factory validation.
+- Full suite: **604 tests** pass across 25 suites (zero regressions).
+
+### 📦 Package Changes
+- **Version**: `3.0.1` → `3.1.0`
+- **Semver**: Minor bump — additive, opt-in `symlinks` feature (default unchanged) plus the V-2 bug fix; no breaking change.
+
 ## [3.0.1] - 2026-06-10
 
 ### 🐛 Bug Fix

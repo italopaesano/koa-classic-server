@@ -1,12 +1,16 @@
 {
   "name": "koa-classic-server",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "description": "High-performance Koa middleware for serving static files with Apache-like directory listing, HTTP caching, template engine support, and comprehensive security fixes",
   "main": "index.cjs",
   "exports": {
     "import": "./index.mjs",
     "require": "./index.cjs"
   },
+  "files": [
+    "index.cjs",
+    "index.mjs"
+  ],
   "scripts": {
     "start": "node index.cjs",
     "lint": "eslint index.cjs index.mjs",
@@ -46,15 +50,16 @@
   },
   "devDependencies": {
     "autocannon": "^8.0.0",
-    "ejs": "^4.0.0",
-    "eslint": "^9.39.4",
-    "inquirer": "^13.3.0",
+    "ejs": "^6.0.1",
+    "eslint": "^10.6.0",
+    "inquirer": "^14.0.2",
     "jest": "^30.2.0",
     "supertest": "^7.2.2"
   },
   "overrides": {
     "glob": "^13.0.6",
     "babel-plugin-istanbul": "^8.0.0",
-    "test-exclude": "^8.0.0"
+    "test-exclude": "^8.0.0",
+    "uuid": "^11.1.1"
   }
 }

@@ -245,6 +245,34 @@ method: ['GET', 'HEAD']
 method: ['GET', 'HEAD', 'POST']
 ```
 
+#### `symlinks` (String)
+
+Policy di risoluzione dei link simbolici (V3.1+). Protezione **opt-in** contro il symlink escape (un symlink dentro `rootDir` che punta a un target fuori da `rootDir`).
+
+```javascript
+// Default: segue i symlink ovunque, anche fuori da rootDir (comportamento storico)
+symlinks: 'follow'
+
+// Segue solo se il target risolto resta dentro rootDir; altrimenti 404
+symlinks: 'follow-within-root'
+
+// Non segue mai un symlink risolto sotto rootDir
+symlinks: 'deny'
+```
+
+Le modalità protette (`'follow-within-root'`, `'deny'`) costano un `realpath()` per path servito e richiedono che `rootDir` esista all'istanziazione. `rootDir` può essere esso stesso un symlink in ogni modalità. Dettagli completi nella sezione *Gestione dei Link Simbolici → Opzione `symlinks`*.
+
+#### `staticSecurityHeaders` (Object)
+
+Header di sicurezza **opt-in** sulle risposte dei file statici (V3.1+). Default: nessuno.
+
+```javascript
+// Aggiunge X-Content-Type-Options: nosniff alle risposte statiche (200/206/304)
+staticSecurityHeaders: { nosniff: true }
+```
+
+Impedisce il MIME sniffing (content-sniffing XSS su file caricati dagli utenti). Default `nosniff: false` (nessun cambio di comportamento). Non si applica all'output del template engine. Dettagli nella sezione *Security Headers → Eccezione opt-in `staticSecurityHeaders.nosniff`*.
+
 #### `dirListing.enabled` (Boolean)
 
 Controlla se mostrare il contenuto delle directory.
@@ -816,6 +844,7 @@ Nel directory listing, i symlink sono identificati visivamente:
 | Symlink a file | `( Symlink )` | Sì | MIME type del target |
 | Symlink a directory | `( Symlink )` | Sì | `DIR` |
 | Symlink rotto/circolare | `( Broken Symlink )` | No | `unknown` |
+| Symlink bloccato dalla policy | `( Blocked Symlink )` | No | MIME guess, size nascosta |
 | File/directory regolare | nessuno | Sì | tipo reale |
 
 #### Casi Limite
@@ -823,6 +852,28 @@ Nel directory listing, i symlink sono identificati visivamente:
 - **Broken symlink** (target inesistente): il GET diretto restituisce 404; nel listing il nome appare senza link
 - **Symlink circolare** (A → B → A): trattato come broken symlink, nessun loop infinito
 - **Symlink a directory**: navigabile come una directory regolare, i file al suo interno sono accessibili
+
+#### Opzione `symlinks` — protezione contro il symlink escape (V3.1+)
+
+Di default (`symlinks: 'follow'`) un symlink dentro `rootDir` viene seguito **anche se il target è fuori da `rootDir`** — coerente con la filosofia *"file server first"*. Se `rootDir` contiene directory scrivibili da terzi non fidati (upload, spool, hosting multi-tenant), un symlink piazzato ad arte può leggere qualsiasi file accessibile al processo. Per contenere questo rischio:
+
+| Valore | Comportamento | Overhead |
+|--------|---------------|----------|
+| `'follow'` *(default)* | Segue i symlink ovunque, anche fuori da `rootDir`. Comportamento storico. | nessuno |
+| `'follow-within-root'` | Segue solo finché il `realpath` risolto resta dentro `rootDir`; link che escono → **404**. | un `realpath()` per path servito |
+| `'deny'` | Non segue mai un symlink risolto **sotto** `rootDir`. | un `realpath()` per path servito |
+
+```javascript
+app.use(koaClassicServer(rootDir, { symlinks: 'follow-within-root' }));
+```
+
+- **`rootDir` può essere esso stesso un symlink** (deploy atomico / Capistrano / Nix) in ogni modalità: il confine è ancorato a `realpath(rootDir)` risolto una sola volta all'init.
+- Le modalità protette richiedono che `rootDir` **esista al momento dell'istanziazione** (risolvono subito il realpath) e lanciano un errore altrimenti.
+- Nel listing i symlink bloccati appaiono come `( Blocked Symlink )`, non cliccabili, senza esporre la size del target.
+- **Rischio residuo**:
+  - **TOCTOU**: il controllo è basato su `realpath`, quindi non previene del tutto uno scambio del symlink tra il controllo e l'apertura del file.
+  - **Hardlink**: un hardlink non ha un "target path" risolvibile — il suo `realpath` è dentro `rootDir` anche se punta all'inode di un file esterno. I check path-based (inclusi questi) **non** possono rilevarlo.
+  - Per scenari multi-tenant ostili combinare con isolamento a livello OS (chroot, mount per-tenant, `nosymfollow`, filesystem dedicato per gli upload).
 
 ### MIME Types
 
@@ -1242,273 +1293,13 @@ index: 'index.html'
 
 ### 1. Sicurezza
 
-#### Usa Path Assoluti
-```javascript
-// ✅ Corretto
-const path = require('path');
-app.use(koaClassicServer(path.join(__dirname, 'public')));
+La guida di hardening completa e canonica vive in un unico file (in inglese), per evitare duplicazione e drift:
 
-// ❌ Evita path relativi
-app.use(koaClassicServer('./public'));
-```
+📖 **[Security Hardening Guide → `docs/SECURITY_HARDENING.md`](./SECURITY_HARDENING.md)**
 
-#### Proteggi Directory Sensibili
-```javascript
-app.use(koaClassicServer(__dirname + '/www', {
-  urlsReserved: [
-    '/config',
-    '/.env',
-    '/.git',
-    '/node_modules',
-    '/private',
-    '/admin'
-  ]
-}));
-```
+Copre: threat model (contenuto fidato / tool interno / upload utente & multi-tenant), raccomandazioni per tema (dot-file, symlink, listing & dimensione directory, `nosniff`, `Host`/DNS rebinding, metodi, template, logging), checklist per profilo, rischi residui, e una **configurazione massimamente hardened pronta da copiare**.
 
-#### Limita Metodi HTTP
-```javascript
-// Solo lettura
-method: ['GET', 'HEAD']
-
-// Evita metodi di scrittura per file server
-// method: ['POST', 'PUT', 'DELETE']  ❌
-```
-
-#### Disabilita Directory Listing in Produzione
-```javascript
-app.use(koaClassicServer(rootDir, {
-  dirListing: { enabled: process.env.NODE_ENV !== 'production' },
-  index: 'index.html'
-}));
-```
-
-#### DNS Rebinding — valida l'header `Host` a monte
-
-`koa-classic-server` **non valida l'header `Host`** delle richieste in entrata. Questo è intenzionale: la validazione del Virtual Host appartiene allo strato di rete (reverse proxy o middleware Koa applicativo), non a un file server.
-
-In assenza di tale validazione, un host LAN/loopback (es. `127.0.0.1`, `192.168.x.x`) è vulnerabile a **DNS rebinding**: un attaccante remoto può far risolvere il proprio dominio all'IP della vittima ed eseguire richieste cross-origin verso il server locale come se provenissero da un'origine legittima del browser.
-
-**Quando è un problema concreto**
-- Server raggiunto da `localhost` / IP privati senza reverse proxy davanti.
-- Browser dell'utente che visita pagine non fidate mentre il server è attivo.
-
-**Quando NON è un problema**
-- Deploy dietro reverse proxy (nginx, Caddy, Apache, Traefik) configurato con allowlist di `server_name` / hostname.
-- Server raggiungibile solo da IP pubblico dietro CDN/WAF.
-- Binding esplicito a interfaccia non instradabile (`app.listen(port, '127.0.0.1')`) e nessun browser locale espone l'utente a pagine ostili.
-
-**Mitigazione 1 — reverse proxy (raccomandato in produzione)**
-
-Esempio nginx:
-```nginx
-server {
-    listen 80;
-    server_name app.example.com;      # ← allowlist
-    location / { proxy_pass http://127.0.0.1:3000; }
-}
-# Tutte le richieste con Host diverso da app.example.com vengono rifiutate qui.
-```
-
-**Mitigazione 2 — middleware Koa applicativo (utile in dev/LAN)**
-
-Antepone una guardia su `ctx.host` PRIMA di `koa-classic-server`:
-
-```javascript
-const ALLOWED_HOSTS = new Set([
-  'app.example.com',
-  'localhost:3000',
-  '127.0.0.1:3000',
-]);
-
-app.use(async (ctx, next) => {
-  // ctx.host include la porta (es. "localhost:3000")
-  if (!ALLOWED_HOSTS.has(ctx.host)) {
-    ctx.status = 421; // Misdirected Request
-    ctx.body = 'Host not allowed';
-    return;
-  }
-  await next();
-});
-
-app.use(koaClassicServer(rootDir));
-```
-
-> ⚠️ Se il proxy a monte termina TLS e inoltra all'app, configura `app.proxy = true` e usa `ctx.hostname` con `X-Forwarded-Host` solo se il proxy è fidato.
-
-#### Limiti dei Security Headers sui file statici
-
-`koa-classic-server` imposta automaticamente i seguenti header SOLO sulle **risposte generate** dal middleware (directory listing HTML, pagine di errore 400/403/404/405/500):
-
-| Header | Valore |
-|---|---|
-| `Content-Security-Policy` | `default-src 'none'; ...` (hash-based per il listing, fully restrictive per gli errori) |
-| `X-Content-Type-Options` | `nosniff` |
-| `X-Frame-Options` | `DENY` |
-| `Referrer-Policy` | `no-referrer` |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=()` |
-
-**Cosa NON riceve questi header**
-
-I **file statici** serviti dal disco (HTML, JS, CSS, immagini, font, video, qualsiasi altra estensione) sono restituiti **senza** alcun header di sicurezza aggiunto. Questo è **by-design**:
-
-- Le policy di sicurezza appropriate sono diverse caso per caso (CSP per app SPA, sandbox per documenti, COEP/COOP per pagine con SharedArrayBuffer, ecc.).
-- Imporre una CSP rigida di default romperebbe la maggior parte dei siti reali (script inline, CDN, Google Fonts, ecc.).
-- L'utente possiede la propria policy e deve dichiararla esplicitamente.
-
-> ⚠️ Non assumere che il middleware "metta in sicurezza" i tuoi file: gli header sopra elencati vengono inviati **solo** quando la risposta è generata dal middleware stesso.
-
-**Come aggiungere security headers ai file statici**
-
-Inserisci un middleware Koa **prima** di `koa-classic-server`. Il middleware si applica a ogni risposta uscente, statica o generata che sia, e i `ctx.set()` rimangono attivi anche dopo che il file server scrive il body:
-
-```javascript
-const Koa = require('koa');
-const koaClassicServer = require('koa-classic-server');
-
-const app = new Koa();
-
-// 1) Header globali su TUTTE le risposte (statiche + generate).
-app.use(async (ctx, next) => {
-  // Header sempre validi per un file server pubblico:
-  ctx.set('X-Content-Type-Options', 'nosniff');
-  ctx.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  ctx.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
-
-  // CSP per file HTML serviti dall'utente (mantieni il file server per gli altri MIME).
-  // Esempio strict-by-default per un sito statico moderno:
-  if (ctx.path.endsWith('.html') || ctx.path === '/' || ctx.path.endsWith('/')) {
-    ctx.set('Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
-      "script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
-    );
-  }
-
-  await next();
-});
-
-// 2) Quindi il file server.
-app.use(koaClassicServer(__dirname + '/public'));
-
-app.listen(3000);
-```
-
-**Note operative**
-
-- Il middleware sopra **non sovrascrive** gli header che `koa-classic-server` imposta sulle proprie pagine (listing/errori): Koa preserva il primo `set()`, ma se vuoi essere esplicito puoi applicare le tue policy solo a `ctx.status < 400` e a `Content-Type` HTML.
-- Una CSP rigida con `default-src 'self'` rompe pagine che usano script inline o CDN: parti **report-only** (`Content-Security-Policy-Report-Only`) per rilevare le violazioni prima di enforce-arla.
-- Per progetti SPA/PWA che richiedono `SharedArrayBuffer`, considera anche `Cross-Origin-Opener-Policy: same-origin` e `Cross-Origin-Embedder-Policy: require-corp`.
-
-#### Security Checklist & Suggested Configuration
-
-`koa-classic-server` parte dal principio **"file server first"** (vedi [`CLAUDE.md`](../CLAUDE.md)): i default servono i file senza restrizioni di policy nascoste. L'operatore irrobustisce il deploy tramite **configurazione esplicita**.
-
-##### Checklist per categoria
-
-**Static site / public asset serving**
-
-| ✓ | Cosa | Snippet |
-|---|---|---|
-| ☐ | Nascondi dot-files con potenziali segreti | `hidden: { dotFiles: { default: 'hidden', whitelist: ['.well-known'] } }` |
-| ☐ | Blocca dot-directories tipo `.git` | `hidden: { dotDirs: { default: 'hidden', whitelist: ['.well-known'] } }` |
-| ☐ | Disabilita listing in produzione | `dirListing: { enabled: false }` + `index` |
-| ☐ | Abilita HTTP caching | `browserCacheEnabled: true, browserCacheMaxAge: 86400` |
-| ☐ | Restringi i metodi | `method: ['GET', 'HEAD']` |
-| ☐ | Riserva path applicativi | `urlsReserved: ['/api', '/admin']` |
-| ☐ | Aggiungi security headers upstream sui file utente | middleware Koa upstream (vedi *Limiti dei Security Headers* sopra) |
-
-**User uploads / multi-tenant / directory scrivibili da terzi**
-
-| ✓ | Cosa | Snippet |
-|---|---|---|
-| ☐ | Cap entries più stretto contro dir gonfiate | `dirListing: { maxEntries: 1000 }` |
-| ☐ | Hide dot-files a ogni profondità | `hidden: { dotFiles: { default: 'hidden' }, dotDirs: { default: 'hidden' } }` |
-| ☐ | Blocklist path-aware per pattern noti | `hidden: { alwaysHide: ['*.key', '*.pem', /\.secret$/, 'config/secrets/**'] }` |
-| ☐ | Monitora la crescita dir esternamente (cron + alert) | — |
-
-> **Caveat v3.0:** `dirListing.maxEntries` bounda rendering/CPU ma NON la lettura iniziale `readdir()`. Per workload adversarial (utenti non fidati che possono creare milioni di file) la protezione RAM completa arriverà con il `readMode: 'bounded'` di v3.1 (vedi `[F-1]` in `docs/security_improvement_for_V3.md`).
-
-**Production hygiene (qualsiasi deploy)**
-
-| ✓ | Cosa | Snippet |
-|---|---|---|
-| ☐ | Allowlist Host upstream | nginx `server_name` o middleware Koa allowlist su `ctx.host` |
-| ☐ | Disabilita template engine se non SSR | ometti `template` |
-| ☐ | Tune `template.renderTimeout` | abbassa da 30 s per SLA stretti |
-| ☐ | Logger strutturato (Pino/Winston) | `logger: pino()` |
-| ☐ | Pin patch version + `npm audit` in CI | `package.json` + workflow CI |
-
-##### Suggested production security configuration
-
-Una sola configurazione di partenza che copre l'80% dei deploy. Tweak per workload specifici.
-
-```javascript
-const Koa  = require('koa');
-const pino = require('pino')({ level: 'info' });
-const path = require('path');
-const koaClassicServer = require('koa-classic-server');
-
-const app = new Koa();
-
-// 1) Host allowlist — mitiga DNS rebinding su esposizione LAN/loopback.
-const ALLOWED_HOSTS = new Set([
-  'app.example.com',
-  'localhost:3000',
-]);
-app.use(async (ctx, next) => {
-  if (!ALLOWED_HOSTS.has(ctx.host)) {
-    ctx.status = 421;
-    ctx.body = 'Misdirected Request';
-    return;
-  }
-  await next();
-});
-
-// 2) Security headers sui file utente (il middleware li imposta solo su
-//    listing/errori, NON sui file statici — by design).
-app.use(async (ctx, next) => {
-  ctx.set('X-Content-Type-Options',    'nosniff');
-  ctx.set('Referrer-Policy',           'strict-origin-when-cross-origin');
-  ctx.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
-  await next();
-});
-
-// 3) Il file server con default irrobustiti per produzione.
-app.use(koaClassicServer(path.join(__dirname, 'public'), {
-  method: ['GET', 'HEAD'],
-
-  index: ['index.html'],
-
-  dirListing: {
-    enabled:        process.env.NODE_ENV !== 'production',
-    maxEntries:     10000,                // più stretto del default 100000 anti-OOM
-    entriesPerPage: 100,
-  },
-
-  hidden: {
-    dotFiles: {
-      default:   'hidden',                // hardening esplicito vs default 'visible' filosofico
-      whitelist: ['.well-known'],         // ACME / Let's Encrypt
-    },
-    dotDirs: {
-      default:   'hidden',
-      whitelist: ['.well-known'],
-    },
-    alwaysHide: ['*.key', '*.pem', /^backup-/, /\.secret$/],
-  },
-
-  browserCacheEnabled: true,
-  browserCacheMaxAge:  86400,             // 24 h cache
-
-  logger: pino,                           // structured logging
-
-  urlsReserved: ['/api', '/admin'],       // route applicative gestite altrove
-}));
-
-app.listen(3000);
-```
-
-Per **user-uploads / multi-tenant**: oltre al blocco sopra, riduci `dirListing.maxEntries` a `1000` e monitora la dimensione della directory dall'esterno fino a quando v3.1 non aggiunge il `readMode: 'bounded'`.
+I riferimenti API delle singole opzioni di sicurezza restano nella sezione [Configurazione](#configurazione) di questo documento (es. `symlinks`, `staticSecurityHeaders`, `hidden`, `dirListing`).
 
 ---
 

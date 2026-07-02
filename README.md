@@ -17,7 +17,7 @@ The 3.0 series builds on 2.x with new observability hooks, bounded resource usag
 
 ✅ **Design philosophy made explicit** — *"if a file is in `rootDir`, `GET` returns it"* — codified in [`CLAUDE.md`](./CLAUDE.md), with a **Security Checklist** + **Suggested Production Security Configuration** in this README and `docs/DOCUMENTATION.md`
 ✅ **`dirListing` namespace** — listing options grouped under one structured object (`enabled`, `maxEntries`, `entriesPerPage`); the v2 `showDirContents` flag is kept as a deprecated alias with a one-time warning
-✅ **Soft cap on listing rendering** — `dirListing.maxEntries` defaults to `100000` as a *safety net* against accidentally-huge directories (broken log rotation, mistakenly mounted FS), NOT as a policy restriction; banner + `X-Dir-Truncated` header on the rare hit. Opt-in RAM-bounded streaming reads planned for v3.1.
+✅ **Soft cap on listing rendering** — `dirListing.maxEntries` defaults to `10000` as a *safety net* against accidentally-huge directories (broken log rotation, mistakenly mounted FS), NOT as a policy restriction; banner + `X-Dir-Truncated` header on the rare hit. Opt-in RAM-bounded streaming reads planned for v3.1.
 ✅ **Paginated listings** — `dirListing.entriesPerPage` adds 0-based `?page=N` navigation with First/Prev/Next/Last + `X-Dir-Pagination` header
 ✅ **Template render timeout + AbortSignal** — `template.renderTimeout` (default 30s) + a per-request `template.signal` so slow renders never wedge the server
 ✅ **Injectable logger** — pass any `{ error, warn, info, debug }`-shaped logger (Pino, Bunyan, Winston, console) for full observability
@@ -609,7 +609,7 @@ This means hardening is **opt-in via explicit configuration**. The checklist bel
 #### ✅ User uploads, multi-tenant, untrusted-write directories
 
 - [ ] **Lower the entry cap** for accidentally-large dirs:
-  `dirListing: { maxEntries: 1000 }` (default 100000 is a safety net, not a security feature)
+  `dirListing: { maxEntries: 1000 }` (default 10000 is a safety net, not a security feature)
 - [ ] **Hide dot-files at every depth**:
   `hidden: { dotFiles: { default: 'hidden' }, dotDirs: { default: 'hidden' } }`
 - [ ] **Add path-aware blocklists** for known secret patterns:
@@ -678,7 +678,7 @@ app.use(koaClassicServer(path.join(__dirname, 'public'), {
 
   dirListing: {
     enabled: process.env.NODE_ENV !== 'production',
-    maxEntries: 10000,                // tighten the soft cap below the 100k default
+    maxEntries: 10000,                // the default soft cap (lower it further for untrusted dirs)
     entriesPerPage: 100,
   },
 

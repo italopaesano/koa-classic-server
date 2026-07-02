@@ -544,7 +544,7 @@ module.exports = function koaClassicServer(
         dirListing: {                   // Directory listing configuration (V3+).
             enabled:        true,       // Render the directory listing HTML when no index file matches.
                                         //   Set to false to return 404 instead of a listing.
-            maxEntries:     100000,     // Soft cap on entries shown / sorted / stat'd per listing.
+            maxEntries:     10000,      // Soft cap on entries shown / sorted / stat'd per listing.
                                         //   Implementation: fs.promises.readdir() then slice(0, maxEntries).
                                         //   This is a SAFETY NET against catastrophic operational accidents
                                         //   (broken log rotation, mistakenly mounted huge FS) — not a policy

@@ -1579,7 +1579,7 @@ app.use(koaClassicServer(path.join(__dirname, 'public'), {
 
   dirListing: {
     enabled:        process.env.NODE_ENV !== 'production',
-    maxEntries:     10000,                // più stretto del default 100000 anti-OOM
+    maxEntries:     10000,                // il default (abbassalo per dir non fidate)
     entriesPerPage: 100,
   },
 

@@ -28,7 +28,7 @@ che la vulnerabilità viene affrontata (fix + test + documentazione).
 ### ⚪ Osservazioni minori (già note / documentate altrove)
 - [x] [V-4] File statici senza `X-Content-Type-Options: nosniff` *(già `[M-4]`)* — *opzione opt-in aggiunta in v3.1.0*
 - [x] [V-5] Nessuna validazione dell'header `Host` — DNS rebinding *(già `[M-3]`)* — *docs-only, rafforzata in v3.1.0*
-- [ ] [V-6] DoS da directory con milioni di file — `readdir` non bounded *(già `[F-1]`)*
+- [x] [V-6] DoS da directory con milioni di file — `readdir` non bounded *(già `[F-1]`)* — *docs-only, chiarita in v3.1.0*
 
 ---
 
@@ -232,11 +232,32 @@ rischio è il **DNS rebinding** quando il server è esposto **direttamente** (lo
 
 ### [V-6] DoS da directory con milioni di file
 
-**Stato:** ⬜ Da valutare
+**Stato:** ✅ Chiusa come docs-only in v3.1.0 (scelta di design `[F-1]`; corretta un'incoerenza nei doc)
 
-`show_dir` esegue `fs.promises.readdir()` senza bound sull'allocazione iniziale (lo slice
-avviene dopo). Già tracciato come `[F-1]` (proposta `dirListing.readMode`) per la v3.1.
-Nessuna azione immediata; qui solo per completezza.
+`show_dir` esegue `fs.promises.readdir()` senza bound sull'allocazione iniziale (lo slice a
+`maxEntries` avviene *dopo*). Già tracciato come `[F-1]` (proposta `dirListing.readMode: 'bounded'`)
+per la v3.1, con analisi approfondita nel doc di roadmap. Nessuna azione sul codice: è una scelta
+di design deliberata per il caso d'uso primario (asset controllati dall'operatore); il caso
+adversarial (utenti non fidati che creano milioni di file) va affrontato a livello applicativo/OS.
+
+**Impatto misurato di `maxEntries` (analisi svolta in questo audit)**
+- `maxEntries` **non** limita il `readdir()` (RAM iniziale identica per qualsiasi valore) — bounda
+  solo il lavoro *post-readdir*: `stat` per entry, sort, e dimensione HTML.
+- `stat` + sort girano su **tutte** le `maxEntries` entry **anche con paginazione** (si pagina solo
+  il rendering). Misurato: ~227 ms/listing @10k entry vs ~505 ms @25k (scala ~lineare).
+- Quindi un `maxEntries` più **basso** è più difensivo (meno amplificazione DoS per richiesta),
+  senza svantaggi sul fronte OOM-`readdir` (che non dipende da `maxEntries`).
+
+**Correzione (v3.1.0, solo documentazione)**
+- Risolta un'**incoerenza codice/doc**: il default reale è `10000` (`index.cjs`), ma JSDoc, `CLAUDE.md`,
+  `README.md` e `DOCUMENTATION.md` in alcuni punti dicevano `100000`. Allineati tutti a `10000`.
+- Corretta la motivazione in `CLAUDE.md`: `maxEntries` bounda il costo *dopo* `readdir()`, non
+  l'allocazione del `readdir()` stesso (che resta il gap `[F-1]`).
+
+**Definition of done**
+- [x] Incoerenza default `maxEntries` (100000 → 10000) sistemata in tutti i doc/commenti
+- [x] Motivazione del safety-net resa accurata (CLAUDE.md)
+- [x] Caveat `readdir` non-bounded già presente in README/DOCUMENTATION + roadmap `[F-1]`
 
 ---
 
@@ -249,4 +270,4 @@ Nessuna azione immediata; qui solo per completezza.
 | V-3 | Boundary check `startsWith` senza separatore  | Bassa    | ✅ Risolto (v3.1.0) |
 | V-4 | File statici senza `nosniff`                  | Minore   | ✅ Risolto (v3.1.0) |
 | V-5 | Nessuna validazione `Host` (DNS rebinding)    | Minore   | ✅ Docs-only (v3.1.0) |
-| V-6 | DoS da directory enormi                       | Minore   | Da valutare   |
+| V-6 | DoS da directory enormi                       | Minore   | ✅ Docs-only (v3.1.0) |

@@ -1359,12 +1359,16 @@ module.exports = function koaClassicServer(
         const normalizedPath = path.normalize(requestedPath);
         const fullPath = path.join(normalizedRootDir, normalizedPath);
 
-        // Security check: ensure resolved path is within rootDir.
+        // Security check: ensure resolved path is within rootDir. Uses the shared
+        // _isWithinRoot() helper, which is boundary-aware: it matches rootDir exactly
+        // or rootDir + path.sep, never a sibling (e.g. /srv/wwwsecret for root /srv/www) —
+        // hardened defense in depth against a future change to how fullPath is built.
         // Covers: ../ traversal, URL-encoded variants (%2e%2e%2f), and on Windows
         // backslash sequences (path.normalize converts \ to / before the check).
-        if (!fullPath.startsWith(normalizedRootDir)) {
-            ctx.status = 403;
-            ctx.body = 'Forbidden';
+        // Returns 404 (not 403) so "outside root" is indistinguishable from "not found",
+        // matching the symlink-escape and hidden-entry outcomes.
+        if (!_isWithinRoot(fullPath, normalizedRootDir)) {
+            sendNotFound(ctx);
             return;
         }
 
@@ -1440,8 +1444,8 @@ module.exports = function koaClassicServer(
             if (!extOfRequested && requestedPath !== '' && !requestedPath.endsWith('/') && !hadTrailingSlash) {
                 const pathWithExt = fullPath + hideExt;
 
-                // Security check: ensure resolved path is still within rootDir
-                if (pathWithExt.startsWith(normalizedRootDir)) {
+                // Security check: ensure resolved path is still within rootDir (boundary-aware)
+                if (_isWithinRoot(pathWithExt, normalizedRootDir)) {
                     try {
                         const statWithExt = await fs.promises.stat(pathWithExt);
                         if (statWithExt.isFile()) {

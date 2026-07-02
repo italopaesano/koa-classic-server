@@ -521,14 +521,14 @@ Notes:
 #### 1. Path Traversal
 
 ```text
-GET /../../etc/passwd            → 403 Forbidden
-GET /%2e%2e%2fpackage.json       → 403 Forbidden
+GET /../../etc/passwd            → 404 Not Found
+GET /%2e%2e%2fpackage.json       → 404 Not Found
 GET /file\0.txt                  → 400 Bad Request   (null-byte guard)
 GET /%                           → 400 Bad Request   (malformed percent-encoding)
 Host: bad host                   → 400 Bad Request   (invalid Host header)
 ```
 
-Defense in depth: malformed-request rejection (bad percent-encoding / invalid `Host` → 400) → null-byte rejection → `path.normalize()` → resolved-path boundary check against `rootDir`. Malformed inputs return **400**, never an unhandled 500.
+Defense in depth: malformed-request rejection (bad percent-encoding / invalid `Host` → 400) → null-byte rejection → `path.normalize()` → resolved-path boundary check against `rootDir`. The boundary check is boundary-aware (`rootDir` exactly or `rootDir` + separator — never a sibling like `/srv/wwwsecret` for root `/srv/www`) and returns **404** so "outside root" is indistinguishable from "not found", matching symlink-escape and hidden entries. Malformed inputs return **400**, never an unhandled 500.
 
 #### 2. XSS in Directory Listing
 

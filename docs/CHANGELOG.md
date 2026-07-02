@@ -29,10 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fix**: The URL-parsing prologue (`new URL()` for the request URL and the `urlPrefix` reconstruction, plus `decodeURIComponent()`) is wrapped and returns **400 Bad Request** on failure. A shared `sendBadRequest()` helper is introduced and the existing null-byte guard refactored to use it. No logging of malformed requests (avoids log-spam / DoS from client input). Well-formed requests — including valid percent-encoding and valid Host headers — are unaffected.
 - **Code** (`index.cjs`): `sendBadRequest()` helper; try/catch around `new URL(fullUrl)`, the `urlPrefix` `new URL()`, and `decodeURIComponent()`.
 
+### 🔒 Hardening — boundary-aware rootDir check (V-3)
+- **Issue**: The rootDir containment check used a plain `fullPath.startsWith(normalizedRootDir)` without a trailing separator — the classic prefix pattern that (if the way `fullPath` is built ever changed) could match a sibling directory like `/srv/wwwsecret` for root `/srv/www`. Not exploitable today (`path.join` always inserts a separator and the leading `/` prevents `..` escape), but fragile.
+- **Fix**: Both containment checks (the main path check and the `hideExtension` `pathWithExt` check) now use the shared `_isWithinRoot()` helper introduced with the symlinks feature — boundary-aware (`rootDir` exactly or `rootDir` + `path.sep`), with case-insensitive comparison on macOS/Windows. The main check now returns **404** (was 403) so "outside root" is indistinguishable from "not found", matching the symlink-escape and hidden-entry outcomes.
+- **Behavior change**: `../` traversal now responds **404** instead of **403**. (Existing tests already accepted either.)
+- **Code** (`index.cjs`): `startsWith(normalizedRootDir)` → `_isWithinRoot(..., normalizedRootDir)` at both sites; 403 branch replaced with `sendNotFound()`.
+
 ### 🧪 Testing
 - Added `__tests__/symlinks-policy.test.js` (19 tests): factory validation (invalid value, missing `rootDir` in protected vs `follow` mode), all three modes for escaping file/dir symlinks, in-root symlinks, `rootDir`-is-a-symlink in `follow-within-root` and `deny`, escaping index file, and the non-clickable/size-hidden listing rendering.
 - Added `__tests__/malformed-request.test.js` (13 tests): malformed percent-encoding, invalid Host, null-byte regression, well-formed requests (valid encoding/Host/404), and behavior under `urlPrefix`.
-- Full suite: **588 tests** pass across 23 suites (zero regressions).
+- Added `__tests__/boundary-check.test.js` (9 tests): traversal → 404, sibling-directory-sharing-the-root-prefix unreachable, root/normal requests unaffected, `hideExtension` boundary.
+- Full suite: **597 tests** pass across 24 suites (zero regressions).
 
 ### 📦 Package Changes
 - **Version**: `3.0.1` → `3.1.0`

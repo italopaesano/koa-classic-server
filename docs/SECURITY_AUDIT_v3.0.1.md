@@ -23,7 +23,7 @@ che la vulnerabilità viene affrontata (fix + test + documentazione).
 - [x] [V-2] URL con percent-encoding malformato → 500 invece di 400 — *risolto in v3.1.0*
 
 ### 🟡 Priorità bassa / hardening
-- [ ] [V-3] Boundary check con `startsWith` senza separatore di path
+- [x] [V-3] Boundary check con `startsWith` senza separatore di path — *risolto in v3.1.0*
 
 ### ⚪ Osservazioni minori (già note / documentate altrove)
 - [ ] [V-4] File statici senza `X-Content-Type-Options: nosniff` *(già `[M-4]`)*
@@ -132,7 +132,7 @@ null-byte già presente.
 
 **Decisioni di design (v3.1.0)**
 - Scope completo: preambolo di parsing URL (`new URL` + `decodeURIComponent`) protetto → 400.
-- Risposta plain text `'Bad Request'`, coerente con le guardie null-byte (400) e traversal (403) esistenti.
+- Risposta plain text `'Bad Request'`, coerente con le guardie null-byte (400) e traversal esistenti.
 - Nessun logging delle richieste malformate (evita log-spam / DoS da input client-controllato).
 - Accumulato nella release 3.1.0 dell'audit.
 
@@ -142,7 +142,7 @@ null-byte già presente.
 
 ### [V-3] Boundary check con `startsWith` senza separatore
 
-**Stato:** ⬜ Da affrontare
+**Stato:** ✅ Risolto in v3.1.0
 
 **Descrizione**
 
@@ -159,8 +159,13 @@ Confrontare con `normalizedRootDir + path.sep`, gestendo il caso `fullPath === n
 (`index.cjs:1329`).
 
 **Definition of done**
-- [ ] Boundary check irrobustito con separatore
-- [ ] Test di regressione per la richiesta della root e per sibling-dir
+- [x] Boundary check irrobustito con separatore — riuso di `_isWithinRoot()` (creato nella V-1) su entrambi i punti: check principale (`index.cjs`) e check di `hideExtension` (`pathWithExt`)
+- [x] Test di regressione per la richiesta della root e per sibling-dir — `__tests__/boundary-check.test.js` (9 test)
+
+**Decisioni di design (v3.1.0)**
+- Riuso di `_isWithinRoot()` invece di un helper dedicato: un solo meccanismo "path dentro root" (generalizzazione anziché caso speciale), con confine `=== root || startsWith(root + path.sep)` e gestione case-insensitive su macOS/Windows.
+- Status code del boundary check testuale portato da **403 → 404** per coerenza con symlink-escape e hidden (superficie "non raggiungibile" uniforme e opaca; i test accettavano già `[403, 404]`).
+- Non sfruttabile prima del fix (il caso sibling non era producibile via `path.join`): intervento di pura difesa in profondità.
 
 ---
 
@@ -202,7 +207,7 @@ Nessuna azione immediata; qui solo per completezza.
 |-----|-----------------------------------------------|----------|--------------|
 | V-1 | Symlink escape oltre `rootDir`                | Alta     | ✅ Risolto (v3.1.0) |
 | V-2 | Percent-encoding malformato → 500             | Media    | ✅ Risolto (v3.1.0) |
-| V-3 | Boundary check `startsWith` senza separatore  | Bassa    | Da affrontare |
+| V-3 | Boundary check `startsWith` senza separatore  | Bassa    | ✅ Risolto (v3.1.0) |
 | V-4 | File statici senza `nosniff`                  | Minore   | Da valutare   |
 | V-5 | Nessuna validazione `Host` (DNS rebinding)    | Minore   | Da valutare   |
 | V-6 | DoS da directory enormi                       | Minore   | Da valutare   |

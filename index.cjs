@@ -523,6 +523,16 @@ module.exports = function koaClassicServer(
     opts STRUCTURE
      opts = {
         method: ['GET'], // Supported methods, otherwise next() will be called
+        symlinks: 'follow', // Symlink policy (V3.1+). Opt-in protection against symlink escape:
+                            //   'follow'             (default) — follow symlinks anywhere, incl.
+                            //                        targets OUTSIDE rootDir. Zero overhead;
+                            //                        historical behavior (no rootDir existence check).
+                            //   'follow-within-root' — follow only while the resolved realpath stays
+                            //                        inside rootDir; escaping links return 404.
+                            //   'deny'               — never follow a symlink resolved below rootDir
+                            //                        (rootDir being a symlink itself is always allowed).
+                            //   Protected modes cost one fs.realpath() per served path and require
+                            //   rootDir to exist at factory time. See README "Security Checklist".
         dirListing: {                   // Directory listing configuration (V3+).
             enabled:        true,       // Render the directory listing HTML when no index file matches.
                                         //   Set to false to return 404 instead of a listing.
@@ -1066,6 +1076,84 @@ module.exports = function koaClassicServer(
         return { rawFile, compressedFile };
     }
 
+    // ── symlinks policy (V3.1+) — opt-in protection against symlink escape ──
+    // 'follow'             (default) : follow symlinks anywhere, including targets
+    //                                  outside rootDir. Zero overhead — current behavior.
+    // 'follow-within-root'          : follow symlinks only while the resolved realpath
+    //                                  stays inside rootDir; escaping links return 404.
+    // 'deny'                        : never follow a symlink resolved BELOW rootDir
+    //                                  (rootDir itself being a symlink is always allowed).
+    // Protected modes cost one fs.realpath() per served path. See the Security Checklist.
+    if (options.symlinks === undefined) {
+        options.symlinks = 'follow';
+    } else if (
+        options.symlinks !== 'follow' &&
+        options.symlinks !== 'follow-within-root' &&
+        options.symlinks !== 'deny'
+    ) {
+        throw new Error(
+            '[koa-classic-server] options.symlinks must be one of "follow", "follow-within-root", "deny". ' +
+            'Got: ' + String(options.symlinks)
+        );
+    }
+    const _symlinkMode = options.symlinks;
+
+    // realpath of rootDir, resolved once at init (pinned). This is what makes a
+    // rootDir that is ITSELF a symlink work in protected modes: the boundary check
+    // compares against the real target, not the (unresolved) symlink path.
+    // In 'follow' mode we skip this entirely (and keep the historical behavior of
+    // NOT requiring rootDir to exist at factory time).
+    let realRootDir = normalizedRootDir;
+    if (_symlinkMode !== 'follow') {
+        try {
+            realRootDir = fs.realpathSync.native(normalizedRootDir);
+        } catch (err) {
+            throw new Error(
+                `[koa-classic-server] rootDir must exist when symlinks mode is "${_symlinkMode}". ` +
+                'Original error: ' + err.message
+            );
+        }
+    }
+
+    // Case-insensitive path comparison on filesystems that are case-insensitive by
+    // default (APFS/HFS+ on macOS, NTFS on Windows) — otherwise a casing mismatch
+    // between realRootDir and a resolved path would produce spurious 404s.
+    const _caseInsensitiveFS = process.platform === 'darwin' || process.platform === 'win32';
+
+    function _isWithinRoot(resolved, root) {
+        if (_caseInsensitiveFS) {
+            resolved = resolved.toLowerCase();
+            root = root.toLowerCase();
+        }
+        if (resolved === root) return true;
+        const withSep = root.endsWith(path.sep) ? root : root + path.sep;
+        return resolved.startsWith(withSep);
+    }
+
+    // Returns true if serving `resolvedPath` is permitted under the current symlinks
+    // policy. In 'follow' mode this is a no-op (no syscall). In protected modes it
+    // resolves the realpath and checks it against realRootDir.
+    async function symlinkAllowed(resolvedPath) {
+        if (_symlinkMode === 'follow') return true;
+        let real;
+        try {
+            real = await fs.promises.realpath(resolvedPath);
+        } catch {
+            return false; // cannot resolve (broken/circular link, race) → treat as not found
+        }
+        if (_symlinkMode === 'deny') {
+            // Reject if ANY symlink was resolved below rootDir: the real path must equal
+            // the path obtained by swapping only the rootDir prefix (no inner resolution).
+            const rel = path.relative(normalizedRootDir, resolvedPath);
+            const expected = path.join(realRootDir, rel);
+            return _caseInsensitiveFS
+                ? real.toLowerCase() === expected.toLowerCase()
+                : real === expected;
+        }
+        // 'follow-within-root': the resolved target must stay inside rootDir.
+        return _isWithinRoot(real, realRootDir);
+    }
+
     const compressionConfig = normalizeCompressionConfig(options.compression);
     const serverCacheConfig = normalizeServerCacheConfig(options.serverCache);
 
@@ -1360,6 +1448,14 @@ module.exports = function koaClassicServer(
             }
         }
 
+        // Symlink boundary check (V-1): in protected modes reject any requested file
+        // or directory whose realpath escapes rootDir (or, in 'deny' mode, any symlink
+        // resolved below rootDir). No-op in the default 'follow' mode.
+        if (!(await symlinkAllowed(toOpen))) {
+            sendNotFound(ctx);
+            return;
+        }
+
         if (stat.isDirectory()) {
             // Handle directory
             if (options.dirListing.enabled) {
@@ -1370,6 +1466,12 @@ module.exports = function koaClassicServer(
                         const indexRelPath = path.relative(normalizedRootDir, path.join(toOpen, indexFile.name)).split(path.sep).join('/');
                         if (!isHiddenEntry(indexFile.name, indexRelPath, false)) {
                             const indexPath = path.join(toOpen, indexFile.name);
+                            // Symlink boundary check (V-1): an index file may itself be a
+                            // symlink escaping rootDir — validate before serving it.
+                            if (!(await symlinkAllowed(indexPath))) {
+                                sendNotFound(ctx);
+                                return;
+                            }
                             await loadFile(indexPath, indexFile.stat);
                             return;
                         }
@@ -1838,10 +1940,18 @@ module.exports = function koaClassicServer(
                             const itemRelPath = dirRelPath ? dirRelPath + '/' + s_name : s_name;
                             if (isHiddenEntry(s_name, itemRelPath, itemIsDir)) return null;
 
+                            // Symlink boundary (V-1): in protected modes, flag entries whose
+                            // target escapes rootDir (or, in 'deny' mode, any symlink). Blocked
+                            // entries are rendered non-clickable and do not expose the target size.
+                            let isBlockedSymlink = false;
+                            if (_symlinkMode !== 'follow' && !isBrokenSymlink && (type === 3 || type === 0)) {
+                                if (!(await symlinkAllowed(itemPath))) isBlockedSymlink = true;
+                            }
+
                             // Get file size — reuse cachedStat if already available (avoids double stat for symlinks)
                             let sizeStr = '-';
                             let sizeBytes = 0;
-                            if (!isBrokenSymlink) {
+                            if (!isBrokenSymlink && !isBlockedSymlink) {
                                 try {
                                     const itemStat = cachedStat || await fs.promises.stat(itemPath);
                                     if (effectiveType === 1) {
@@ -1862,6 +1972,7 @@ module.exports = function koaClassicServer(
                                 effectiveType,
                                 isSymlink: type === 3,
                                 isBrokenSymlink,
+                                isBlockedSymlink,
                                 mimeType,
                                 sizeStr,
                                 sizeBytes,
@@ -1923,14 +2034,16 @@ module.exports = function koaClassicServer(
                     // Symlink indicator label
                     const symlinkLabel = item.isBrokenSymlink
                         ? ' ( Broken Symlink )'
-                        : item.isSymlink
-                            ? ' ( Symlink )'
-                            : '';
+                        : item.isBlockedSymlink
+                            ? ' ( Blocked Symlink )'
+                            : item.isSymlink
+                                ? ' ( Symlink )'
+                                : '';
 
                     if (item.isReserved) {
                         parts.push(`${rowStart} ${escapeHtml(item.name)}${symlinkLabel}</td> <td> DIR BUT RESERVED</td><td>${item.sizeStr}</td></tr>`);
-                    } else if (item.isBrokenSymlink) {
-                        // Broken symlink: name visible but not clickable
+                    } else if (item.isBrokenSymlink || item.isBlockedSymlink) {
+                        // Broken or policy-blocked symlink: name visible but not clickable
                         parts.push(`${rowStart} ${escapeHtml(item.name)}${symlinkLabel}</td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
                     } else {
                         parts.push(`${rowStart} <a href="${escapeHtml(item.itemUri)}">${escapeHtml(item.name)}</a>${symlinkLabel} </td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);

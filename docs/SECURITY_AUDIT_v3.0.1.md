@@ -17,7 +17,7 @@ che la vulnerabilità viene affrontata (fix + test + documentazione).
 ## Indice
 
 ### 🔴 Priorità alta
-- [ ] [V-1] Symlink escape oltre `rootDir` (path traversal via link simbolico)
+- [x] [V-1] Symlink escape oltre `rootDir` (path traversal via link simbolico) — *risolto in v3.1.0*
 
 ### 🟠 Priorità media
 - [ ] [V-2] URL con percent-encoding malformato → 500 invece di 400
@@ -36,7 +36,7 @@ che la vulnerabilità viene affrontata (fix + test + documentazione).
 
 ### [V-1] Symlink escape oltre `rootDir`
 
-**Stato:** ⬜ Da affrontare
+**Stato:** ✅ Risolto in v3.1.0 (opzione opt-in `symlinks`, default `follow` invariato)
 
 **Descrizione**
 
@@ -78,10 +78,19 @@ In alternativa minima (se non si vuole toccare l'API): documentare esplicitament
 nella Security Checklist di `README.md` e `docs/DOCUMENTATION.md`.
 
 **Definition of done**
-- [ ] Opzione implementata e validata a factory-time
-- [ ] Test per file-symlink e dir-symlink che escono da root (deny + within-root + follow)
-- [ ] Voce aggiunta alla Security Checklist
-- [ ] Changelog aggiornato
+- [x] Opzione implementata e validata a factory-time (`symlinks: 'follow' | 'follow-within-root' | 'deny'`)
+- [x] Test per file-symlink e dir-symlink che escono da root (deny + within-root + follow) — `__tests__/symlinks-policy.test.js` (19 test)
+- [x] Caso `rootDir` che è esso stesso un symlink coperto (pin di `realpath(rootDir)` all'init)
+- [x] Listing: symlink bloccati non-cliccabili, size del target non esposta
+- [x] Voce aggiunta alla Security Checklist (`README.md`)
+- [x] Changelog aggiornato (`docs/CHANGELOG.md` → 3.1.0)
+
+**Decisioni di design (v3.1.0)**
+- Default `follow` (retrocompatibile, nessun breaking change) — coerente con la design philosophy *"hardening opt-in, non nei default"*.
+- `realRootDir` pinnato all'init (`fs.realpathSync.native`); protezione a costo zero in modalità `follow`.
+- Overhead misurato delle modalità protette: ~8% (file top-level) / ~17% (path annidati) di throughput, ~2.4 µs/op per `realpath`. Accettato come costo della sicurezza opt-in.
+- Escape → 404; confronto case-insensitive su macOS/Windows.
+- Rischio residuo TOCTOU documentato (serve isolamento OS per multi-tenant ostile).
 
 ---
 
@@ -183,7 +192,7 @@ Nessuna azione immediata; qui solo per completezza.
 
 | ID  | Descrizione                                   | Priorità | Stato        |
 |-----|-----------------------------------------------|----------|--------------|
-| V-1 | Symlink escape oltre `rootDir`                | Alta     | Da affrontare |
+| V-1 | Symlink escape oltre `rootDir`                | Alta     | ✅ Risolto (v3.1.0) |
 | V-2 | Percent-encoding malformato → 500             | Media    | Da affrontare |
 | V-3 | Boundary check `startsWith` senza separatore  | Bassa    | Da affrontare |
 | V-4 | File statici senza `nosniff`                  | Minore   | Da valutare   |

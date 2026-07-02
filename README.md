@@ -488,8 +488,29 @@ The middleware follows symbolic links transparently via `fs.promises.stat()` —
 | Symlink to file | `( Symlink )` | yes | target MIME |
 | Symlink to directory | `( Symlink )` | yes | `DIR` |
 | Broken symlink | `( Broken Symlink )` | no | original MIME guess |
+| Policy-blocked symlink | `( Blocked Symlink )` | no | MIME guess, size hidden |
 
 Regular files incur zero additional `stat()` overhead.
+
+#### `symlinks` policy (V3.1+) — protect against symlink escape
+
+By default (`symlinks: 'follow'`) a symlink inside `rootDir` is followed **even when its target lives outside `rootDir`** — consistent with the *"file server first"* philosophy (`rootDir` is the source of truth). If `rootDir` contains directories writable by untrusted parties (uploads, spool, multi-tenant hosting), a planted symlink could then read any file the process can access. Opt into containment:
+
+| Value | Behavior | Overhead |
+|---|---|---|
+| `'follow'` *(default)* | Follow symlinks anywhere, including outside `rootDir`. Historical behavior. | none |
+| `'follow-within-root'` | Follow only while the resolved realpath stays inside `rootDir`; escaping links → **404**. | one `realpath()` per served path |
+| `'deny'` | Never follow a symlink resolved **below** `rootDir`. | one `realpath()` per served path |
+
+```js
+app.use(koaClassicServer(rootDir, { symlinks: 'follow-within-root' }));
+```
+
+Notes:
+- **`rootDir` may itself be a symlink** (atomic-deploy / Capistrano / Nix) in every mode: the boundary is pinned to `realpath(rootDir)` resolved once at factory init.
+- Protected modes require `rootDir` to **exist at factory time** (they resolve its realpath up front) and throw otherwise.
+- In the directory listing, blocked symlinks appear as `( Blocked Symlink )`, non-clickable, and do not expose the target's size.
+- Residual risk: the check is realpath-based, so a symlink swapped between the check and the file open (TOCTOU) is not fully prevented. For hostile multi-tenant setups combine with OS-level isolation (chroot, per-tenant mounts, `nosymfollow`).
 
 ---
 
@@ -587,6 +608,8 @@ This means hardening is **opt-in via explicit configuration**. The checklist bel
   `hidden: { dotFiles: { default: 'hidden' }, dotDirs: { default: 'hidden' } }`
 - [ ] **Add path-aware blocklists** for known secret patterns:
   `hidden: { alwaysHide: ['*.key', '*.pem', /\.secret$/, 'config/secrets/**'] }`
+- [ ] **Contain symlinks** so a planted link cannot escape `rootDir`:
+  `symlinks: 'follow-within-root'` (or `'deny'` to forbid all in-tree symlinks). Default `'follow'` serves symlink targets outside `rootDir`. See *Symlink Support → `symlinks` policy*.
 - [ ] **Monitor directory growth externally** (cron + alert) — the v3.0 cap bounds rendering CPU but not the initial `readdir()` allocation. See `[F-1]` in `docs/security_improvement_for_V3.md` for the v3.1 streaming-read opt-in tracking this gap.
 
 #### ✅ Production hygiene (any deployment)

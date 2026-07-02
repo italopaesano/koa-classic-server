@@ -245,6 +245,23 @@ method: ['GET', 'HEAD']
 method: ['GET', 'HEAD', 'POST']
 ```
 
+#### `symlinks` (String)
+
+Policy di risoluzione dei link simbolici (V3.1+). Protezione **opt-in** contro il symlink escape (un symlink dentro `rootDir` che punta a un target fuori da `rootDir`).
+
+```javascript
+// Default: segue i symlink ovunque, anche fuori da rootDir (comportamento storico)
+symlinks: 'follow'
+
+// Segue solo se il target risolto resta dentro rootDir; altrimenti 404
+symlinks: 'follow-within-root'
+
+// Non segue mai un symlink risolto sotto rootDir
+symlinks: 'deny'
+```
+
+Le modalità protette (`'follow-within-root'`, `'deny'`) costano un `realpath()` per path servito e richiedono che `rootDir` esista all'istanziazione. `rootDir` può essere esso stesso un symlink in ogni modalità. Dettagli completi nella sezione *Gestione dei Link Simbolici → Opzione `symlinks`*.
+
 #### `dirListing.enabled` (Boolean)
 
 Controlla se mostrare il contenuto delle directory.
@@ -816,6 +833,7 @@ Nel directory listing, i symlink sono identificati visivamente:
 | Symlink a file | `( Symlink )` | Sì | MIME type del target |
 | Symlink a directory | `( Symlink )` | Sì | `DIR` |
 | Symlink rotto/circolare | `( Broken Symlink )` | No | `unknown` |
+| Symlink bloccato dalla policy | `( Blocked Symlink )` | No | MIME guess, size nascosta |
 | File/directory regolare | nessuno | Sì | tipo reale |
 
 #### Casi Limite
@@ -823,6 +841,25 @@ Nel directory listing, i symlink sono identificati visivamente:
 - **Broken symlink** (target inesistente): il GET diretto restituisce 404; nel listing il nome appare senza link
 - **Symlink circolare** (A → B → A): trattato come broken symlink, nessun loop infinito
 - **Symlink a directory**: navigabile come una directory regolare, i file al suo interno sono accessibili
+
+#### Opzione `symlinks` — protezione contro il symlink escape (V3.1+)
+
+Di default (`symlinks: 'follow'`) un symlink dentro `rootDir` viene seguito **anche se il target è fuori da `rootDir`** — coerente con la filosofia *"file server first"*. Se `rootDir` contiene directory scrivibili da terzi non fidati (upload, spool, hosting multi-tenant), un symlink piazzato ad arte può leggere qualsiasi file accessibile al processo. Per contenere questo rischio:
+
+| Valore | Comportamento | Overhead |
+|--------|---------------|----------|
+| `'follow'` *(default)* | Segue i symlink ovunque, anche fuori da `rootDir`. Comportamento storico. | nessuno |
+| `'follow-within-root'` | Segue solo finché il `realpath` risolto resta dentro `rootDir`; link che escono → **404**. | un `realpath()` per path servito |
+| `'deny'` | Non segue mai un symlink risolto **sotto** `rootDir`. | un `realpath()` per path servito |
+
+```javascript
+app.use(koaClassicServer(rootDir, { symlinks: 'follow-within-root' }));
+```
+
+- **`rootDir` può essere esso stesso un symlink** (deploy atomico / Capistrano / Nix) in ogni modalità: il confine è ancorato a `realpath(rootDir)` risolto una sola volta all'init.
+- Le modalità protette richiedono che `rootDir` **esista al momento dell'istanziazione** (risolvono subito il realpath) e lanciano un errore altrimenti.
+- Nel listing i symlink bloccati appaiono come `( Blocked Symlink )`, non cliccabili, senza esporre la size del target.
+- **Rischio residuo**: il controllo è basato su `realpath`, quindi non previene del tutto un TOCTOU (symlink scambiato tra il controllo e l'apertura del file). Per scenari multi-tenant ostili combinare con isolamento a livello OS (chroot, mount per-tenant, `nosymfollow`).
 
 ### MIME Types
 

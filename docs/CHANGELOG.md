@@ -5,6 +5,30 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-07-02
+
+### 🔒 Security — new `symlinks` policy (opt-in protection against symlink escape)
+
+#### `symlinks` option — contain symbolic links inside `rootDir`
+- **Issue (V-1)**: A symlink placed inside `rootDir` whose target lives **outside** `rootDir` was followed and served with no boundary check. The path-traversal defense validates the *requested path string* only; because `fs.promises.stat()` follows symlinks, the resolved target was never re-checked against `rootDir`. On deployments where `rootDir` contains directories writable by untrusted parties (uploads, spool, multi-tenant hosting), a planted symlink could read any file the process can access (`/etc/passwd`, keys, `.env` outside root). This contradicted the documented `[PS-1]` property *"the resolved path must start with rootDir"*, which did not hold for symlinks.
+- **Fix**: A new opt-in `symlinks` option:
+  - `'follow'` **(default)** — historical behavior, follow symlinks anywhere including outside `rootDir`. **Zero overhead**, no behavior change on upgrade.
+  - `'follow-within-root'` — follow only while the resolved `realpath` stays inside `rootDir`; escaping links return **404**.
+  - `'deny'` — never follow a symlink resolved **below** `rootDir`.
+- **`rootDir` as a symlink is preserved** in every mode: the boundary is pinned to `realpath(rootDir)` resolved **once at factory init**, so atomic-deploy / Capistrano / Nix setups keep working. Protected modes require `rootDir` to exist at factory time (throw otherwise); `'follow'` keeps the historical no-existence-check behavior.
+- **Directory listing**: symlinks blocked by the policy render as `( Blocked Symlink )`, non-clickable, and do not expose the target's size.
+- **Cross-platform**: case-insensitive boundary comparison on macOS/Windows to avoid spurious 404s.
+- **Residual risk**: realpath-based check does not fully prevent TOCTOU (a symlink swapped between check and open). For hostile multi-tenant setups combine with OS-level isolation.
+- **Code** (`index.cjs`): `symlinks` validation + pinned `realRootDir` (`fs.realpathSync.native`) at factory init; `symlinkAllowed()` / `_isWithinRoot()` helpers; boundary checks on the served path, the resolved index file, and each listing entry.
+
+### 🧪 Testing
+- Added `__tests__/symlinks-policy.test.js` (19 tests): factory validation (invalid value, missing `rootDir` in protected vs `follow` mode), all three modes for escaping file/dir symlinks, in-root symlinks, `rootDir`-is-a-symlink in `follow-within-root` and `deny`, escaping index file, and the non-clickable/size-hidden listing rendering.
+- Full suite: **575 tests** pass across 22 suites (zero regressions).
+
+### 📦 Package Changes
+- **Version**: `3.0.1` → `3.1.0`
+- **Semver**: Minor bump — additive, opt-in feature; default behavior unchanged (no breaking change).
+
 ## [3.0.1] - 2026-06-10
 
 ### 🐛 Bug Fix

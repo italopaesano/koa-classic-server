@@ -561,11 +561,14 @@ module.exports = function koaClassicServer(
                                         //   ?page=N (0-based); out-of-range values are clamped silently.
                                         //   Must be a finite integer >= 0; 0 = disabled (no pagination).
         },
-        index: ["index.html"], // Index file name(s) - must be an ARRAY:
-                               //   - Array of strings: ["index.html", "index.htm", "default.html"]
-                               //   - Array of RegExp:  [/index\.html/i, /default\.(html|htm)/i]
-                               //   - Mixed array:      ["index.html", /index\.[eE][jJ][sS]/]
-                               // Priority is determined by array order (first match wins)
+        index: [], // Index file name(s) - must be an ARRAY.
+                   // Default: [] — no index file is looked up; directories always
+                   // show the listing (when dirListing.enabled). Configure explicitly
+                   // for the classic Apache-like behavior, e.g. ["index.html"].
+                   //   - Array of strings: ["index.html", "index.htm", "default.html"]
+                   //   - Array of RegExp:  [/index\.html/i, /default\.(html|htm)/i]
+                   //   - Mixed array:      ["index.html", /index\.[eE][jJ][sS]/]
+                   // Priority is determined by array order (first match wins)
         urlPrefix: "", // URL path prefix
         urlsReserved: [], // Reserved paths (first level only)
         template: {

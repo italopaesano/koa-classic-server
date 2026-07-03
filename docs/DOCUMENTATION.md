@@ -285,24 +285,31 @@ dirListing: { enabled: true }
 dirListing: { enabled: false }
 ```
 
-#### `index` (String)
+#### `index` (Array)
 
-Nome del file da caricare automaticamente quando si accede a una directory.
+Pattern dei file index da caricare automaticamente quando si accede a una directory. Accetta un array di stringhe e/o RegExp; la priorità segue l'ordine dell'array (il primo match vince).
+
+**Default: `[]`** — nessun file index viene cercato: le directory mostrano sempre il directory listing (se `dirListing.enabled: true`). Per il comportamento classico "Apache-like" l'opzione va configurata esplicitamente.
 
 ```javascript
 // Carica index.html se presente
-index: 'index.html'
+index: ['index.html']
 
-// Carica default.htm se presente
-index: 'default.htm'
+// Fallback multipli, in ordine di priorità
+index: ['index.html', 'index.htm', 'default.html']
 
-// Nessun index (mostra sempre directory listing)
-index: ''
+// Pattern misti stringa + RegExp
+index: ['index.html', /^index\.(ejs|html?)$/i]
+
+// Nessun index (default): mostra sempre il directory listing
+index: []
 ```
+
+> ⚠️ **v3.0.0**: la forma stringa `index: 'index.html'` (v2) non è più accettata e genera un errore a startup con hint di migrazione. Usare sempre un array. Regole di priorità dettagliate: [INDEX_OPTION_PRIORITY.md](./INDEX_OPTION_PRIORITY.md).
 
 **Comportamento:**
 1. Utente accede a `/cartella/`
-2. Se esiste `/cartella/index.html` → viene servito
+2. Se un pattern di `index` corrisponde a un file esistente in `/cartella/` → viene servito il primo match
 3. Altrimenti → mostra directory listing (se `dirListing: { enabled: true }`)
 
 #### `urlPrefix` (String)
@@ -710,9 +717,10 @@ template: {
 
 ### Gestione delle Directory
 
-#### Caso 1: dirListing.enabled = true, index presente
+#### Caso 1: dirListing.enabled = true, index configurato e presente
 
 ```
+Config:    index: ['index.html']
 Richiesta: GET /cartella/
 Filesystem:
   /cartella/index.html ✓ (esiste)
@@ -721,9 +729,10 @@ Filesystem:
 Risultato: Serve /cartella/index.html
 ```
 
-#### Caso 2: dirListing.enabled = true, index assente
+#### Caso 2: dirListing.enabled = true, index assente o non configurato
 
 ```
+Config:    index: ['index.html']   // oppure il default: []
 Richiesta: GET /cartella/
 Filesystem:
   /cartella/file1.txt
@@ -731,6 +740,8 @@ Filesystem:
 
 Risultato: Mostra directory listing HTML
 ```
+
+> Nota: con il default `index: []` nessun file index viene mai cercato, quindi questo è il comportamento per **tutte** le directory.
 
 #### Caso 3: dirListing.enabled = false
 
@@ -1268,24 +1279,6 @@ urlsReserved: ['/protected']
 **File:** `__tests__/index.test.js:1-11`
 
 **Impatto:** Possibili bug non rilevati in queste aree
-
----
-
-### 5. Single Index File
-
-**Problema:** Supporto per un solo nome file index, non array di fallback
-
-**Limitazione:** Design attuale
-
-```javascript
-// ❌ Non supportato
-index: ['index.html', 'index.htm', 'default.html']
-
-// ✅ Supportato
-index: 'index.html'
-```
-
-**Workaround:** Standardizza su un solo nome file index
 
 ---
 

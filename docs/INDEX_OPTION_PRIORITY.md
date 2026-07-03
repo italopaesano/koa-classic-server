@@ -1,25 +1,24 @@
 # Index Option - Comportamento di Priorità
 
-## ⚠️ Formato Raccomandato: Array
+## ⚠️ Formato Obbligatorio: Array
 
-**L'opzione `index` deve essere usata in formato array.**
+**L'opzione `index` deve essere un array.** Il default è `[]` (nessun file index: le directory mostrano sempre il listing).
 
 ```javascript
-// ✅ RACCOMANDATO (Array format)
+// ✅ VALIDO (Array format)
 index: ['index.html']
 index: ['index.html', 'index.htm', 'default.html']
 index: [/index\.html/i]
 
-// ⚠️ DEPRECATO (String format - verrà rimosso in futuro)
-index: 'index.html'  // Genera un warning, usa ['index.html'] invece
+// ❌ ERRORE (String format - rimosso in v3.0.0)
+index: 'index.html'  // Lancia un errore a startup, usa ['index.html'] invece
 ```
 
-**Nota importante:** Il formato stringa (`index: 'index.html'`) è **deprecato** e verrà rimosso in versioni future. Quando viene usato, viene mostrato un warning in console:
+**Nota importante:** dal v3.0.0 il formato stringa (`index: 'index.html'`) non è più accettato e genera un **errore a startup** con hint di migrazione:
 
 ```
-[koa-classic-server] DEPRECATION WARNING: Passing a string to the "index" option is deprecated...
-  Current usage: index: "index.html"
-  Recommended:   index: ["index.html"]
+[koa-classic-server] The "index" option no longer accepts a string in v3.0.0.
+  Replace with: index: ["index.html"]
 ```
 
 ---

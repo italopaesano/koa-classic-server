@@ -268,6 +268,12 @@ Il directory listing processa le entry in batch da 64 elementi con `Promise.all(
 
 ## Future Work — v3.1
 
+> **Nota:** ulteriori problemi emersi dalla revisione completa del codice (2026-07-03) sono
+> tracciati in [`docs/revisione_codice_v3.1.md`](./revisione_codice_v3.1.md) — in particolare
+> la voce **#4** (compressione: buffering illimitato in RAM + flush della cache LFU), affine
+> per natura a [F-1]. Quella voce non è duplicata qui: il registro della revisione è la
+> fonte unica.
+
 ### [F-1] Opt-in streaming read per directory adversarial *(rimandato a v3.1)*
 
 **Contesto**

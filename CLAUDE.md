@@ -82,6 +82,7 @@ When proposing a new feature, ask: *"does this change the default observable beh
 - **`docs/DOCUMENTATION.md`** — full API reference (per-option docs, incl. `symlinks` / `staticSecurityHeaders`); links to the hardening guide for best practices.
 - **`docs/CHANGELOG.md`** — version history; breaking changes documented under *⚠️ Breaking Changes*.
 - **`docs/security_improvement_for_V3.md`** — audit roadmap for v3 security improvements (implemented + Future Work under `[F-1]`).
+- **`docs/revisione_codice_v3.1.md`** — open-findings register from the 2026-07 full code review (in Italian). Each finding has a checkbox in its index: tick it (`[x]`) when the item is resolved or consciously closed. Check this file before starting fix work — it holds the agreed problem list, code locations, and proposed fixes.
 - **`__tests__/`** — 543+ tests asserting behavior contracts. Run with `npm test`.
 
 ---

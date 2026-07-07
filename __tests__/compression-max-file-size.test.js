@@ -157,6 +157,39 @@ describe('compression.maxFileSize — invalid values fall back to the 10 MB defa
     });
 });
 
+// ─── HEAD must mirror GET on the streaming path (RFC 9110 §9.3.2) ────────────
+// Regression: the streaming branch never assigned a body/status for HEAD, so
+// Koa's default 404 leaked. Made reachable with default config by the
+// maxFileSize gate; also present with the compressed cache disabled.
+
+describe('HEAD on the streaming compression path mirrors GET', () => {
+    test('file above maxFileSize: HEAD → 200 with compression headers, no Content-Length', async () => {
+        const server = createApp({
+            method: ['GET', 'HEAD'],
+            compression: { maxFileSize: 2048 },
+        });
+        const get = await supertest(server).get('/mid.txt').set('Accept-Encoding', 'gzip');
+        const head = await supertest(server).head('/mid.txt').set('Accept-Encoding', 'gzip');
+        server.close();
+        expect(get.status).toBe(200);
+        expect(head.status).toBe(200); // was 404 before the fix
+        expect(head.headers['content-encoding']).toBe('gzip');
+        expect(head.headers['content-length']).toBeUndefined(); // compressed size unknown
+        expect(head.text).toBeFalsy(); // no body on HEAD
+    });
+
+    test('compressed cache disabled (pre-existing streaming path): HEAD → 200', async () => {
+        const server = createApp({
+            method: ['GET', 'HEAD'],
+            serverCache: { compressedFile: { enabled: false } },
+        });
+        const head = await supertest(server).head('/mid.txt').set('Accept-Encoding', 'gzip');
+        server.close();
+        expect(head.status).toBe(200);
+        expect(head.headers['content-encoding']).toBe('gzip');
+    });
+});
+
 // ─── LFUCache.set() early-return (no cache flush for oversized entries) ──────
 
 describe('LFUCache.set — oversized entry no longer flushes the cache', () => {
@@ -200,5 +233,21 @@ describe('LFUCache.set — oversized entry no longer flushes the cache', () => {
         expect(second.status).toBe(200);
         expect(second.text).toBe(TINY_CONTENT);
         expect(calls.filter(p => p === tinyPath).length).toBe(1);
+    });
+});
+
+describe('LFUCache.set — oversized entry emits a throttled warning', () => {
+    test('the operator is told the entry will never be cached', async () => {
+        const warns = [];
+        const server = createApp({
+            logger: { error: () => {}, warn: (...args) => warns.push(args.join(' ')) },
+            serverCache: { compressedFile: { maxSize: 300, warnInterval: 0 } },
+        });
+        const res = await supertest(server)
+            .get('/big-random.txt')
+            .set('Accept-Encoding', 'gzip');
+        server.close();
+        expect(res.status).toBe(200);
+        expect(warns.some(w => w.includes('will never be cached'))).toBe(true);
     });
 });

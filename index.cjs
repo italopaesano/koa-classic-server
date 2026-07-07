@@ -422,11 +422,15 @@ class LFUCache {
     set(key, entry) {
         // An entry larger than the whole cache can never fit: bail out BEFORE the
         // eviction loop, otherwise it would flush every other entry for nothing.
-        if (entry.buffer.length > this.maxSize) return;
+        // Warn (throttled) so the operator learns the cache is undersized for
+        // this file instead of it silently never being cached.
+        if (entry.buffer.length > this.maxSize) {
+            this._warnThrottled(`[koa-classic-server] serverCache.${this.cacheLabel}: entry of ${entry.buffer.length} bytes exceeds maxSize (${this.maxSize} bytes) and will never be cached. Consider increasing maxSize.`);
+            return;
+        }
         while (this.currentSize + entry.buffer.length > this.maxSize && this._keyMap.size > 0) {
             this._evictOne();
         }
-        if (this.currentSize + entry.buffer.length > this.maxSize) return; // entry too large for cache
 
         this._keyMap.set(key, { ...entry, freq: 1 });
         this._addToFreqBucket(key, 1);
@@ -502,12 +506,16 @@ class LFUCache {
         bucket.delete(evictKey);
         if (bucket.size === 0) this._freqMap.delete(this._minFreq);
 
-        if (this.warnInterval !== false) {
-            const now = Date.now();
-            if (now - this._lastWarnAt >= this.warnInterval) {
-                this.logger.warn(`[koa-classic-server] serverCache.${this.cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
-                this._lastWarnAt = now;
-            }
+        this._warnThrottled(`[koa-classic-server] serverCache.${this.cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
+    }
+
+    // Emits a warning at most once per warnInterval ms (0 = always, false = never).
+    _warnThrottled(message) {
+        if (this.warnInterval === false) return;
+        const now = Date.now();
+        if (now - this._lastWarnAt >= this.warnInterval) {
+            this.logger.warn(message);
+            this._lastWarnAt = now;
         }
     }
 }
@@ -593,6 +601,9 @@ module.exports = function koaClassicServer(
         urlsReserved: [], // Reserved paths (first level only)
         template: {
             render: undefined, // Template rendering function: async (ctx, next, filePath, rawBuffer, signal) => {}
+                               // rawBuffer (4th arg, may be null) is READ-ONLY: the same Buffer
+                               // instance is shared with the server cache and with concurrent
+                               // requests — mutating it corrupts other responses.
             ext: [], // File extensions to process with template.render
             renderTimeout: 30000, // Max ms allowed for template.render (number ≥ 0; 0 = disabled).
                                   // On timeout responds 504 Gateway Timeout. The render receives an
@@ -1247,9 +1258,12 @@ module.exports = function koaClassicServer(
 
     // Single-flight maps for cache population (thundering-herd protection):
     // N concurrent misses on the same key share ONE read (+ compression) instead
-    // of N duplicated jobs. Entries live only while a job is in flight.
-    const _inflightRawReads     = new Map(); // absoluteFilePath → Promise<Buffer>
-    const _inflightCompressions = new Map(); // `${absoluteFilePath}:${encoding}` → Promise<Buffer>
+    // of N duplicated jobs. Entries live only while a job is in flight. Keys
+    // include the stat'd mtime+size so requests that observed different versions
+    // of the file never share a job (each response stays coherent with its own
+    // ETag/Last-Modified).
+    const _inflightRawReads     = new Map(); // `${path}:${mtime}:${size}` → Promise<Buffer>
+    const _inflightCompressions = new Map(); // `${path}:${encoding}:${mtime}:${size}` → Promise<Buffer>
 
     // Returns the client's preferred encoding based on Accept-Encoding header,
     // filtered against the enabled encodings list. Returns null if no match.
@@ -1624,8 +1638,12 @@ module.exports = function koaClassicServer(
                     try {
                         // Single-flight: concurrent misses on the same path share one
                         // readFile + cache insert; only the leader (the closure below)
-                        // runs, waiters await the same Promise.
-                        rawBuffer = await singleFlight(_inflightRawReads, toOpen, async () => {
+                        // runs, waiters await the same Promise. The key includes the
+                        // stat'd mtime+size so a request that observed a DIFFERENT
+                        // version of the file starts its own job instead of adopting
+                        // bytes that don't match the validators it will emit.
+                        const inflightKey = `${toOpen}:${fileStat.mtime.getTime()}:${fileStat.size}`;
+                        rawBuffer = await singleFlight(_inflightRawReads, inflightKey, async () => {
                             const buf = await fs.promises.readFile(toOpen);
                             refreshOrInsert(_rawFileCache, toOpen, {
                                 buffer: buf,
@@ -1818,7 +1836,11 @@ module.exports = function koaClassicServer(
                             // share one read+compress+insert instead of N parallel brotli
                             // jobs for identical content. A rejection is shared too: all
                             // waiters land in this catch and use the uncompressed fallback.
-                            buf = await singleFlight(_inflightCompressions, cacheKey, async () => {
+                            // The key includes the stat'd mtime+size so a request that
+                            // observed a DIFFERENT version of the file starts its own job
+                            // (its ETag/Last-Modified must describe the bytes it serves).
+                            const inflightKey = `${cacheKey}:${fileStat.mtime.getTime()}:${fileStat.size}`;
+                            buf = await singleFlight(_inflightCompressions, inflightKey, async () => {
                                 // Use rawFile buffer if available — avoids redundant disk read
                                 const rawData = rawBuffer || await fs.promises.readFile(toOpen);
                                 const compressed = await compressBuffer(rawData, encoding);
@@ -1888,8 +1910,13 @@ module.exports = function koaClassicServer(
                             });
                             ctx.body = src.pipe(compress);
                         }
+                    } else {
+                        // HEAD: mirror the GET status and headers (RFC 9110 §9.3.2) — no
+                        // Content-Length, since the compressed size is unknown without
+                        // running the compression. The explicit status is required: with
+                        // no body ever assigned, Koa would otherwise respond its default 404.
+                        ctx.status = 200;
                     }
-                    // HEAD + streaming: no Content-Length available; Koa sends headers only via res.end()
                 }
 
             } else {

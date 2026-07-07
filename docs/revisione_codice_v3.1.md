@@ -240,6 +240,14 @@ correttamente presenza/assenza e `q=0`.
 *potenzialmente* comprimibile (MIME comprimibile + compressione abilitata), indipendentemente
 dall'esito della negoziazione, e prima del ramo 304.
 
+**Nota aggiunta 2026-07-07 (dalla code review della fase 1):** caso imparentato da
+coprire nello stesso fix — il fallback su errore di compressione (`index.cjs`, catch del
+ramo bufferizzato) serve il contenuto **identity** ma lascia impostato l'ETag con
+suffisso `-gz`/`-br` già emesso e rimuove `Vary`: il validatore non descrive la
+rappresentazione effettivamente servita e un proxy condiviso può cachearla sotto la
+chiave della variante compressa. Nel fix di questa voce, resettare l'ETag alla forma
+senza suffisso (o ri-emetterlo) nel ramo di fallback.
+
 **Priorità:** Media.
 
 ---

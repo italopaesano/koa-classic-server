@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Bug Fix — HEAD returned 404 on the streaming compression path
+- **Issue** (found by the internal code review of the two robustness fixes below): the streaming compression branch never assigns a body or a status for HEAD requests, so Koa's default **404** leaked — with stray `Content-Encoding`/`Vary` headers. The path was pre-existing (reachable with `serverCache.compressedFile.enabled: false`), but the new `compression.maxFileSize` gate made it reachable with the DEFAULT config: `HEAD` on a compressible file above the cap returned 404 while `GET` returned 200, violating RFC 9110 §9.3.2.
+- **Fix**: the streaming branch sets `ctx.status = 200` explicitly for HEAD (no `Content-Length`, since the compressed size is unknown without running the compression) — mirroring GET's status and headers.
+- **Other review outcomes applied**:
+  - `LFUCache.set()` now emits a **throttled warning** when an entry exceeds the whole cache's `maxSize` instead of silently never caching it (operators keep the sizing signal the old eviction loop provided); shared `_warnThrottled()` helper.
+  - Removed the now-dead post-eviction size guard in `LFUCache.set()`.
+  - Single-flight in-flight keys now include the stat'd **mtime+size**, so concurrent requests that observed different versions of a file never share a job (each response stays coherent with its own `ETag`/`Last-Modified`).
+  - The template render's `rawBuffer` parameter is now documented as **read-only** (JSDoc + template-engine guide): it is the same Buffer instance shared with the server cache and concurrent requests.
+  - CLAUDE.md safety-net table updated with the `compression.maxFileSize` row; register finding #7 extended with the encoding-suffixed-ETag-on-fallback case to cover in the same fix.
+- **Tests**: HEAD-mirrors-GET on both streaming paths + oversized-entry warning (3 new tests).
+
 ### 🛡️ Robustness — `compression.maxFileSize` cap + LFU eviction fix
 - **Issue** (`docs/revisione_codice_v3.1.md` #4): with the default config, a compressible file of ANY size was read whole into RAM and brotli-Q11-compressed on first request (multi-GB text file → RAM allocation equal to the file + heavy CPU). Aggravating: when the compressed buffer exceeded the cache's `maxSize`, `LFUCache.set()` flushed the ENTIRE cache in its eviction loop before discovering the entry could never fit — repeatable CPU/RAM DoS that also destroyed every other cached file.
 - **Fix**:

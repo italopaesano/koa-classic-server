@@ -22,7 +22,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 ### Robustezza / DoS
 - [ ] [4. Compressione: buffering illimitato in RAM + flush della cache LFU](#4-compressione-buffering-illimitato-in-ram--flush-della-cache-lfu)
-- [ ] [5. Nessuna deduplicazione delle richieste concorrenti (thundering herd)](#5-nessuna-deduplicazione-delle-richieste-concorrenti-thundering-herd)
+- [x] [5. Nessuna deduplicazione delle richieste concorrenti (thundering herd)](#5-nessuna-deduplicazione-delle-richieste-concorrenti-thundering-herd) — **RISOLTO** (single-flight su entrambe le cache)
 
 ### Conformità HTTP
 - [ ] [6. `getClientEncoding` ignora i q-value di Accept-Encoding](#6-getclientencoding-ignora-i-q-value-di-accept-encoding)
@@ -170,6 +170,14 @@ Non è tracciato in `docs/security_improvement_for_V3.md` (che rimanda a questa 
 ---
 
 ### 5. Nessuna deduplicazione delle richieste concorrenti (thundering herd)
+
+**Stato: ✅ RISOLTO** (2026-07-07 — helper `singleFlight()` a livello modulo + due mappe
+in-flight per factory (`_inflightRawReads`, `_inflightCompressions`, chiavi `path` e
+`path:encoding`). Il leader esegue lettura (+compressione) e inserimento in cache; i
+waiter attendono la stessa Promise. L'errore è condiviso: tutti i waiter cadono insieme
+nel fallback non compresso esistente, e l'entry in-flight viene rimossa alla
+risoluzione così la richiesta successiva ritenta da zero. Test:
+`__tests__/single-flight.test.js`, 5 test.)
 
 **Posizione:** `index.cjs:1743-1799` (popolamento `compressedFile` cache) e
 `index.cjs:1568-1592` (popolamento `rawFile` cache).

@@ -44,7 +44,7 @@ Le voci `#N` rimandano al registro `revisione_codice_v3.1.md` (la cui checkbox v
 spuntata in parallelo); le voci `B*`/`C*` sono definite in questo documento.
 
 ### Fase 1 — Robustezza del processo
-- [ ] **#5** Single-flight sulle cache (thundering herd)
+- [x] **#5** Single-flight sulle cache (thundering herd) — risolto 2026-07-07, `__tests__/single-flight.test.js`
 - [ ] **#4** Tetto `compression.maxFileSize` + early-return in `LFUCache.set()`
 - [ ] **B1** Leak di fd nello streaming compresso (`stream.pipeline`)
 - [ ] **#2** `If-Modified-Since` mai 304 con mtime sub-secondo

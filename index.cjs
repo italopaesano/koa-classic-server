@@ -509,6 +509,23 @@ class LFUCache {
     }
 }
 
+// Single-flight job map helper: joins the in-flight job for `key`, or starts
+// `work()` as the leader. Concurrent callers share the same Promise — including
+// a rejection, so on failure every waiter falls back together instead of
+// re-running the work. The entry is removed as soon as the job settles
+// (success or failure), so the next request after a failure retries from
+// scratch and the map only ever holds jobs actually in progress.
+function singleFlight(map, key, work) {
+    let job = map.get(key);
+    if (!job) {
+        job = work();
+        map.set(key, job);
+        const clean = () => map.delete(key);
+        job.then(clean, clean);
+    }
+    return job;
+}
+
 // Upserts a fresh entry into an LFUCache. When the previous entry was only
 // stale-by-age (mtime + size unchanged), updates in place so the existing
 // frequency counter survives — important for popular files refreshed by maxAge.
@@ -1210,6 +1227,12 @@ module.exports = function koaClassicServer(
         _logger
     );
 
+    // Single-flight maps for cache population (thundering-herd protection):
+    // N concurrent misses on the same key share ONE read (+ compression) instead
+    // of N duplicated jobs. Entries live only while a job is in flight.
+    const _inflightRawReads     = new Map(); // absoluteFilePath → Promise<Buffer>
+    const _inflightCompressions = new Map(); // `${absoluteFilePath}:${encoding}` → Promise<Buffer>
+
     // Returns the client's preferred encoding based on Accept-Encoding header,
     // filtered against the enabled encodings list. Returns null if no match.
     function getClientEncoding(acceptEncoding) {
@@ -1581,13 +1604,19 @@ module.exports = function koaClassicServer(
                     rawBuffer = cached.buffer;
                 } else {
                     try {
-                        rawBuffer = await fs.promises.readFile(toOpen);
-                        refreshOrInsert(_rawFileCache, toOpen, {
-                            buffer: rawBuffer,
-                            mtime: fileStat.mtime.getTime(),
-                            size: fileStat.size,
-                            insertedAt: Date.now(),
-                        }, cached, staleByAge);
+                        // Single-flight: concurrent misses on the same path share one
+                        // readFile + cache insert; only the leader (the closure below)
+                        // runs, waiters await the same Promise.
+                        rawBuffer = await singleFlight(_inflightRawReads, toOpen, async () => {
+                            const buf = await fs.promises.readFile(toOpen);
+                            refreshOrInsert(_rawFileCache, toOpen, {
+                                buffer: buf,
+                                mtime: fileStat.mtime.getTime(),
+                                size: fileStat.size,
+                                insertedAt: Date.now(),
+                            }, cached, staleByAge);
+                            return buf;
+                        });
                     } catch {
                         rawBuffer = null; // Fall through to disk reads later
                     }
@@ -1760,16 +1789,22 @@ module.exports = function koaClassicServer(
                         buf = cached.buffer; // Serve from cache
                     } else {
                         try {
-                            // Use rawFile buffer if available — avoids redundant disk read
-                            const rawData = rawBuffer || await fs.promises.readFile(toOpen);
-                            buf = await compressBuffer(rawData, encoding);
-
-                            refreshOrInsert(_compressedFileCache, cacheKey, {
-                                buffer: buf,
-                                mtime: fileStat.mtime.getTime(),
-                                size: fileStat.size,
-                                insertedAt: Date.now(),
-                            }, cached, staleByAge);
+                            // Single-flight: concurrent misses on the same path+encoding
+                            // share one read+compress+insert instead of N parallel brotli
+                            // jobs for identical content. A rejection is shared too: all
+                            // waiters land in this catch and use the uncompressed fallback.
+                            buf = await singleFlight(_inflightCompressions, cacheKey, async () => {
+                                // Use rawFile buffer if available — avoids redundant disk read
+                                const rawData = rawBuffer || await fs.promises.readFile(toOpen);
+                                const compressed = await compressBuffer(rawData, encoding);
+                                refreshOrInsert(_compressedFileCache, cacheKey, {
+                                    buffer: compressed,
+                                    mtime: fileStat.mtime.getTime(),
+                                    size: fileStat.size,
+                                    insertedAt: Date.now(),
+                                }, cached, staleByAge);
+                                return compressed;
+                            });
                         } catch (err) {
                             _logger.error('Compression error:', err);
                             // Fall back to uncompressed on any compression failure

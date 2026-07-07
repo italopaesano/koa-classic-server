@@ -5,6 +5,15 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🛡️ Robustness — single-flight cache population (thundering herd)
+- **Issue** (`docs/revisione_codice_v3.1.md` #5): N concurrent requests for a file not yet cached ran N `readFile()` + N brotli/gzip compressions in parallel for identical content; only the last `set()` "won". On a cold cache (deploy, restart) the CPU/RAM peak multiplied by the number of concurrent requests.
+- **Fix**: in-flight job maps (`key → Promise`) for both server caches. The first request (the leader) performs the read (+ compression) and the cache insert; concurrent requests await the same Promise. A rejection is shared as well — all waiters fall back together to the existing uncompressed-stream path — and the entry is removed on settlement, so the next request after a failure retries from scratch. Keys: `path` (rawFile), `path:encoding` (compressedFile — br and gzip stay independent jobs).
+- **No API change**; zero overhead on cache hits (the single-flight path is only reached on a cache miss).
+- **Code** (`index.cjs`): module-level `singleFlight()` helper; per-factory `_inflightRawReads` / `_inflightCompressions` maps; both cache-population sites wrapped.
+- **Tests**: `__tests__/single-flight.test.js` (5 tests: concurrent dedup on both caches, per-encoding key granularity, shared failure + retry after cleanup).
+
 ## [3.1.0] - 2026-07-02
 
 ### 🔒 Security — new `symlinks` policy (opt-in protection against symlink escape)

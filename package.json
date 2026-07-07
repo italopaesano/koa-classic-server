@@ -16,6 +16,8 @@
     "lint": "eslint index.cjs index.mjs",
     "pretest": "npm run lint",
     "test": "jest",
+    "pretest:ci": "npm run lint",
+    "test:ci": "jest --testPathIgnorePatterns=performance",
     "test:security": "jest __tests__/security.test.js",
     "test:performance": "jest __tests__/performance.test.js --runInBand",
     "benchmark": "node __tests__/benchmark.js",
@@ -40,7 +42,7 @@
     "url": "https://github.com/italopaesano/koa-classic-server"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "mime-types": "^3.0.2"

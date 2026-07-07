@@ -51,7 +51,7 @@ spuntata in parallelo); le voci `B*`/`C*` sono definite in questo documento.
 - [x] **#15** `Buffer.slice()` → `subarray()` — risolto 2026-07-07
 
 ### Fase 2 — Infrastruttura + reti di sicurezza
-- [x] **C1** Workflow CI su push/PR (matrice Node/OS) — risolto 2026-07-07: Node 20/22/24 × ubuntu+windows (windows informativo fino a promozione), job perf non bloccante, job Nix informativo; `engines` alzato a `>=20` (breaking, in CHANGELOG)
+- [x] **C1** Workflow CI su push/PR (matrice Node/OS) — risolto 2026-07-07: Node 18/20/22/24 × ubuntu+windows (windows informativo fino a promozione), job lint dedicato (eslint 10 richiede Node ≥20.19), job perf non bloccante, job Nix informativo; `engines` resta `>=18` (ora finalmente testato)
 - [ ] **B3** Catch di ultima istanza nel middleware
 - [ ] **B2** try/catch su `new URL()` nel ramo hideExtension
 

@@ -7,15 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### ⚠️ Breaking Changes
-- **`engines.node` raised from `>=18` to `>=20`.** Node 18 has been EOL since April 2025 and was never exercised by any CI. Installing on Node 18 now emits an engines warning (or fails with `engine-strict`); the code itself has no known 18-incompatibility, but 18 is no longer part of the supported/tested set.
-
 ### 🏗️ Infrastructure — CI on every push and pull request
-- New `.github/workflows/ci.yml`: lint + full test suite (627 tests, performance excluded) on **Node 20 / 22 / 24 × ubuntu + windows** for every push to `main` and every PR. Previously tests only ran at release-publish time, on a single Node/OS.
+- New `.github/workflows/ci.yml`: full test suite (627 tests, performance excluded) on **Node 18 / 20 / 22 / 24 × ubuntu + windows** for every push to `main` and every PR — everything `engines: >=18` declares, finally exercised. Previously tests only ran at release-publish time, on a single Node/OS.
+- **Lint** runs in a dedicated job (once, on Node 22): eslint 10 requires Node >=20.19, so it cannot run inside the Node 18 leg — and linting the same code 8 times would be wasted work anyway. `npm test` locally still lints via the existing `pretest` hook.
 - **Windows** runs as *informational* (`continue-on-error`) until proven green, then gets promoted to blocking.
 - **Performance tests** (timing assertions, flaky on shared runners) run in a separate non-blocking job on ubuntu/Node 22; still available locally via `npm run test:performance`.
 - **Nix job** (informational): runs the suite with a Nix-store-provided Node on ubuntu, approximating NixOS environments — consistent with the project's DT_UNKNOWN / `buildFHSEnv` support.
-- New npm script `test:ci` (`jest --testPathIgnorePatterns=performance`, lint via `pretest:ci`).
+- `workflow_dispatch` trigger for manual runs (also needed because pushes made by bot/app integrations do not fire push/pull_request workflow events).
+- New npm script `test:ci` (`jest --testPathIgnorePatterns=performance`).
 
 ### 🐛 Bug Fix — `If-Modified-Since` never produced 304 for sub-second mtimes
 - **Issue** (`docs/revisione_codice_v3.1.md` #2): `Last-Modified` is emitted with second precision (`toUTCString()` — HTTP dates have no milliseconds), but the `If-Modified-Since` comparison used the raw millisecond mtime. A client echoing the received header back (standard behavior: `curl -z`, wget, proxies, minimal HTTP clients) never matched a sub-second mtime (`22:13:20.500 <= 22:13:20.000` → false) and always got a full 200. Browsers were unaffected only because they also send `If-None-Match` (checked first).

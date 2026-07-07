@@ -1,9 +1,14 @@
-# Continuous integration: runs the full test suite (lint included via
-# pretest:ci) on every push to main and on every pull request.
+# Continuous integration: runs the full test suite on every push to main and
+# on every pull request.
 #
-# Matrix: Node 20 / 22 / 24 (what `engines` declares and the next LTS) on
-# ubuntu + windows. Windows is INFORMATIONAL for now (continue-on-error):
-# promote it to blocking by deleting that line once it has been seen green.
+# Matrix: Node 18 / 20 / 22 / 24 (everything `engines: >=18` declares, plus
+# the next LTS) on ubuntu + windows. Windows is INFORMATIONAL for now
+# (continue-on-error): promote it to blocking by deleting that line once it
+# has been seen green.
+#
+# Lint runs in its own job (once, on Node 22): eslint 10 requires Node
+# >=20.19, so it cannot run inside the Node 18 leg of the matrix — and
+# linting the same code 8 times would be wasted work anyway.
 #
 # performance.test.js is excluded from the matrix (its timing assertions —
 # avg < 50/100/500 ms — are flaky on shared runners) and runs in a separate
@@ -29,6 +34,27 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
   test:
     name: Test (Node ${{ matrix.node }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -38,7 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22, 24]
+        node: [18, 20, 22, 24]
         os: [ubuntu-latest, windows-latest]
 
     steps:
@@ -54,7 +80,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint + test (performance tests excluded)
+      - name: Test (performance tests excluded)
         run: npm run test:ci
 
   performance:
@@ -96,5 +122,5 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
-      - name: Lint + test with Nix-store Node
+      - name: Test with Nix-store Node
         run: nix-shell -p nodejs_22 --run "npm ci && npm run test:ci"

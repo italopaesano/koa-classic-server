@@ -47,8 +47,8 @@ spuntata in parallelo); le voci `B*`/`C*` sono definite in questo documento.
 - [x] **#5** Single-flight sulle cache (thundering herd) — risolto 2026-07-07, `__tests__/single-flight.test.js`
 - [x] **#4** Tetto `compression.maxFileSize` + early-return in `LFUCache.set()` — risolto 2026-07-07, `__tests__/compression-max-file-size.test.js`
 - [x] **B1** Leak di fd nello streaming compresso (`stream.pipeline`) — risolto 2026-07-07, registro §17, `__tests__/streaming-abort.test.js`
-- [ ] **#2** `If-Modified-Since` mai 304 con mtime sub-secondo
-- [ ] **#15** `Buffer.slice()` → `subarray()`
+- [x] **#2** `If-Modified-Since` mai 304 con mtime sub-secondo — risolto 2026-07-07, test in `caching-headers.test.js`
+- [x] **#15** `Buffer.slice()` → `subarray()` — risolto 2026-07-07
 
 ### Fase 2 — Infrastruttura + reti di sicurezza
 - [ ] **C1** Workflow CI su push/PR (matrice Node/OS)

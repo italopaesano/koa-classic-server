@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Bug Fix — `If-Modified-Since` never produced 304 for sub-second mtimes
+- **Issue** (`docs/revisione_codice_v3.1.md` #2): `Last-Modified` is emitted with second precision (`toUTCString()` — HTTP dates have no milliseconds), but the `If-Modified-Since` comparison used the raw millisecond mtime. A client echoing the received header back (standard behavior: `curl -z`, wget, proxies, minimal HTTP clients) never matched a sub-second mtime (`22:13:20.500 <= 22:13:20.000` → false) and always got a full 200. Browsers were unaffected only because they also send `If-None-Match` (checked first).
+- **Fix**: the mtime is truncated to whole seconds before the comparison, matching the precision of the emitted header.
+- **Tests**: `caching-headers.test.js` — new describe reusing the real `Last-Modified` of the previous response on a file whose mtime has a `.500` ms component (`fs.utimesSync`); verified to fail against the pre-fix code.
+
+### 🧹 Chore — `Buffer.slice()` → `Buffer.subarray()` (register #15)
+- The Range/206 in-memory path used the deprecated `Buffer.prototype.slice` (DEP0158); replaced with `subarray()` — identical zero-copy semantics.
+
 ### 🛡️ Robustness — fd leak in streaming compression on client disconnect
 - **Issue** (`docs/revisione_codice_v3.1.md` #17, from the 2026-07 robustness analysis B1): the streaming compression path built the response with `src.pipe(compress)`. On client disconnect Koa destroys the body (the zlib transform), but `pipe()` does not propagate destruction back to the source: the `fs.ReadStream` stayed paused with its file descriptor open forever (ReadStreams close their fd only on `end`/`error`, and raw fds have no GC finalizer). Every aborted download of a large file leaked one fd → eventual `EMFILE`. Reachable with the default config for compressible files above `compression.maxFileSize`.
 - **Fix**: `stream.pipeline(src, compress, cb)` — teardown propagates in both directions, so the ReadStream is destroyed (fd closed) as soon as the client goes away. Client disconnects (`ERR_STREAM_PREMATURE_CLOSE`) are ignored silently (normal event; avoids client-driven log spam); real read errors keep the previous behavior (log + 500 when headers not yet sent). Applied to both streaming variants (disk-backed and in-memory).

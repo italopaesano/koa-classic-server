@@ -1730,8 +1730,9 @@ module.exports = function koaClassicServer(
 
                         if (ctx.method !== 'HEAD') {
                             if (rawBuffer) {
-                                // Serve range slice from in-memory buffer — zero disk I/O
-                                ctx.body = rawBuffer.slice(start, end + 1);
+                                // Serve range slice from in-memory buffer — zero disk I/O.
+                                // subarray(): zero-copy view; Buffer.slice is deprecated (DEP0158).
+                                ctx.body = rawBuffer.subarray(start, end + 1);
                             } else {
                                 const src = fs.createReadStream(toOpen, { start, end });
                                 src.on('error', (err) => {
@@ -1788,11 +1789,16 @@ module.exports = function koaClassicServer(
                     return;
                 }
 
-                // Check If-Modified-Since (date validation)
+                // Check If-Modified-Since (date validation). The mtime is truncated
+                // to whole seconds before comparing: Last-Modified is emitted via
+                // toUTCString() (second precision — HTTP dates have no milliseconds),
+                // so a client echoing that header back would otherwise never match a
+                // sub-second mtime (e.g. 22:13:20.500 <= 22:13:20.000 → always 200).
                 const clientModifiedSince = ctx.get('If-Modified-Since');
                 if (clientModifiedSince) {
                     const clientDate = new Date(clientModifiedSince);
-                    if (fileStat.mtime.getTime() <= clientDate.getTime()) {
+                    const mtimeSeconds = Math.floor(fileStat.mtime.getTime() / 1000) * 1000;
+                    if (mtimeSeconds <= clientDate.getTime()) {
                         ctx.status = 304;
                         return;
                     }

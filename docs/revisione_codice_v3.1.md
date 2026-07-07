@@ -17,7 +17,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 ### Bug confermati (riprodotti con test)
 - [x] [1. Default di `index` documentato erroneamente](#1-default-di-index-documentato-erroneamente) — **RISOLTO** (documentazione allineata al default `[]`)
-- [ ] [2. `If-Modified-Since` non produce mai 304 con mtime sub-secondo](#2-if-modified-since-non-produce-mai-304-con-mtime-sub-secondo)
+- [x] [2. `If-Modified-Since` non produce mai 304 con mtime sub-secondo](#2-if-modified-since-non-produce-mai-304-con-mtime-sub-secondo) — **RISOLTO** (mtime troncato al secondo nel confronto)
 - [ ] [3. Manca il redirect canonico `/dir` → `/dir/`](#3-manca-il-redirect-canonico-dir--dir)
 
 ### Robustezza / DoS
@@ -39,7 +39,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ### Minori / cosmetici
 - [ ] [13. Link "Parent Directory" alla radice di `urlPrefix` esce dal prefix](#13-link-parent-directory-alla-radice-di-urlprefix-esce-dal-prefix)
 - [ ] [14. `hideExtension`: incoerenza decoded/raw nel check dell'estensione](#14-hideextension-incoerenza-decodedraw-nel-check-dellestensione)
-- [ ] [15. `Buffer.slice()` deprecato](#15-bufferslice-deprecato)
+- [x] [15. `Buffer.slice()` deprecato](#15-bufferslice-deprecato) — **RISOLTO** (`subarray()`)
 - [ ] [16. Riga "empty folder" assente se tutte le entry sono nascoste](#16-riga-empty-folder-assente-se-tutte-le-entry-sono-nascoste)
 
 ---
@@ -64,6 +64,12 @@ limitation obsoleta, aggiornata la nota in `INDEX_OPTION_PRIORITY.md`).
 ---
 
 ### 2. `If-Modified-Since` non produce mai 304 con mtime sub-secondo
+
+**Stato: ✅ RISOLTO** (2026-07-07 — mtime troncato al secondo prima del confronto, come
+da fix proposto. Test: `__tests__/caching-headers.test.js`, describe "If-Modified-Since
+with sub-second mtime" — riusa l'header `Last-Modified` reale della risposta precedente
+su un file con mtime a .500 ms via `fs.utimesSync`; verificato che il test fallisce sul
+codice pre-fix.)
 
 **Posizione:** `index.cjs:1727` (blocco `If-Modified-Since` dentro `loadFile`).
 
@@ -406,6 +412,9 @@ rimosso prima del confronto).
 ---
 
 ### 15. `Buffer.slice()` deprecato
+
+**Stato: ✅ RISOLTO** (2026-07-07 — sostituito con `rawBuffer.subarray(start, end + 1)`,
+stessa semantica zero-copy.)
 
 **Posizione:** `index.cjs:1666` (`rawBuffer.slice(start, end + 1)`).
 

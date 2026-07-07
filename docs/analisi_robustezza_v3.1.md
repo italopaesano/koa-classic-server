@@ -46,7 +46,7 @@ spuntata in parallelo); le voci `B*`/`C*` sono definite in questo documento.
 ### Fase 1 — Robustezza del processo
 - [x] **#5** Single-flight sulle cache (thundering herd) — risolto 2026-07-07, `__tests__/single-flight.test.js`
 - [x] **#4** Tetto `compression.maxFileSize` + early-return in `LFUCache.set()` — risolto 2026-07-07, `__tests__/compression-max-file-size.test.js`
-- [ ] **B1** Leak di fd nello streaming compresso (`stream.pipeline`)
+- [x] **B1** Leak di fd nello streaming compresso (`stream.pipeline`) — risolto 2026-07-07, registro §17, `__tests__/streaming-abort.test.js`
 - [ ] **#2** `If-Modified-Since` mai 304 con mtime sub-secondo
 - [ ] **#15** `Buffer.slice()` → `subarray()`
 

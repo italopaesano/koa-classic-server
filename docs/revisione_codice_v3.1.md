@@ -23,6 +23,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ### Robustezza / DoS
 - [x] [4. Compressione: buffering illimitato in RAM + flush della cache LFU](#4-compressione-buffering-illimitato-in-ram--flush-della-cache-lfu) — **RISOLTO** (`compression.maxFileSize` 10 MB + early-return in `LFUCache.set()`)
 - [x] [5. Nessuna deduplicazione delle richieste concorrenti (thundering herd)](#5-nessuna-deduplicazione-delle-richieste-concorrenti-thundering-herd) — **RISOLTO** (single-flight su entrambe le cache)
+- [x] [17. Leak di file descriptor nello streaming compresso su disconnessione del client](#17-leak-di-file-descriptor-nello-streaming-compresso-su-disconnessione-del-client) — **RISOLTO** (`stream.pipeline`; voce B1 dell'analisi 2026-07-07)
 
 ### Conformità HTTP
 - [ ] [6. `getClientEncoding` ignora i q-value di Accept-Encoding](#6-getclientencoding-ignora-i-q-value-di-accept-encoding)
@@ -200,6 +201,30 @@ lettura+compressione, le successive attendono la stessa Promise (pattern "single
 Rimuovere l'entry dalla mappa in `finally`.
 
 **Priorità:** Media (mitigato di fatto dal fix della voce 4; da implementare insieme).
+
+---
+
+### 17. Leak di file descriptor nello streaming compresso su disconnessione del client
+
+**Stato: ✅ RISOLTO** (2026-07-07 — `src.pipe(compress)` sostituito con
+`stream.pipeline(src, compress, cb)`, che propaga il teardown in entrambe le direzioni;
+`ERR_STREAM_PREMATURE_CLOSE` ignorato in silenzio (evento normale, niente log-spam
+pilotabile dal client); errori di lettura veri: log + 500 se gli header non sono partiti,
+come prima. Test: `__tests__/streaming-abort.test.js` — verificato che senza il fix il
+test di abort fallisce.)
+
+**Origine:** voce **B1** di `docs/analisi_robustezza_v3.1.md` (analisi 2026-07-07),
+aggiunta al registro come da prassi.
+
+**Posizione:** ramo streaming della compressione (`ctx.body = src.pipe(compress)`).
+
+**Problema:** con la cache compressa disabilitata — o, dopo la voce 4, con file oltre
+`compression.maxFileSize` anche in config di default — la risposta compressa era
+costruita con `pipe()`. Alla disconnessione del client Koa distrugge il body (il
+transform zlib), ma `pipe()` non propaga la distruzione alla sorgente: la
+`fs.ReadStream` restava in pausa con il file descriptor aperto per sempre (le ReadStream
+chiudono il fd solo su `end`/`error`, e per un fd grezzo non esiste finalizzatore GC).
+Ogni download interrotto di un file grande = un fd perso → `EMFILE`.
 
 ---
 

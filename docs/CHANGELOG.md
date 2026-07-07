@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🛡️ Robustness — fd leak in streaming compression on client disconnect
+- **Issue** (`docs/revisione_codice_v3.1.md` #17, from the 2026-07 robustness analysis B1): the streaming compression path built the response with `src.pipe(compress)`. On client disconnect Koa destroys the body (the zlib transform), but `pipe()` does not propagate destruction back to the source: the `fs.ReadStream` stayed paused with its file descriptor open forever (ReadStreams close their fd only on `end`/`error`, and raw fds have no GC finalizer). Every aborted download of a large file leaked one fd → eventual `EMFILE`. Reachable with the default config for compressible files above `compression.maxFileSize`.
+- **Fix**: `stream.pipeline(src, compress, cb)` — teardown propagates in both directions, so the ReadStream is destroyed (fd closed) as soon as the client goes away. Client disconnects (`ERR_STREAM_PREMATURE_CLOSE`) are ignored silently (normal event; avoids client-driven log spam); real read errors keep the previous behavior (log + 500 when headers not yet sent). Applied to both streaming variants (disk-backed and in-memory).
+- **Tests**: `__tests__/streaming-abort.test.js` (client abort mid-download → source stream destroyed; normal completion unaffected). Verified the abort test fails against the pre-fix code.
+
 ### 🐛 Bug Fix — HEAD returned 404 on the streaming compression path
 - **Issue** (found by the internal code review of the two robustness fixes below): the streaming compression branch never assigns a body or a status for HEAD requests, so Koa's default **404** leaked — with stray `Content-Encoding`/`Vary` headers. The path was pre-existing (reachable with `serverCache.compressedFile.enabled: false`), but the new `compression.maxFileSize` gate made it reachable with the DEFAULT config: `HEAD` on a compressible file above the cap returned 404 while `GET` returned 200, violating RFC 9110 §9.3.2.
 - **Fix**: the streaming branch sets `ctx.status = 200` explicitly for HEAD (no `Content-Length`, since the compressed size is unknown without running the compression) — mirroring GET's status and headers.

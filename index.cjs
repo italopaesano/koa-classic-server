@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const zlib = require("zlib");
 const util = require("util");
 const mime = require("mime-types");
-const { Readable } = require('stream');
+const { Readable, pipeline } = require('stream');
 
 const _brotliCompressAsync = util.promisify(zlib.brotliCompress);
 const _gzipAsync           = util.promisify(zlib.gzip);
@@ -1898,18 +1898,21 @@ module.exports = function koaClassicServer(
                         const compress = encoding === 'br'
                             ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
                             : zlib.createGzip({ level: 6 });
-                        if (rawBuffer) {
-                            // Compress from in-memory buffer — no disk I/O
-                            const src = Readable.from(rawBuffer);
-                            ctx.body = src.pipe(compress);
-                        } else {
-                            const src = fs.createReadStream(toOpen);
-                            src.on('error', (err) => {
-                                _logger.error('Stream error:', err);
-                                if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
-                            });
-                            ctx.body = src.pipe(compress);
-                        }
+                        const src = rawBuffer
+                            ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
+                            : fs.createReadStream(toOpen);
+                        // pipeline (NOT pipe): teardown propagates in BOTH directions.
+                        // When the client disconnects mid-transfer, Koa destroys the body
+                        // (`compress`) and pipeline destroys `src` too, closing its file
+                        // descriptor. A bare src.pipe(compress) leaves the ReadStream
+                        // paused with the fd open forever — fd leak under aborted
+                        // downloads. Client disconnects are a normal event and are not
+                        // logged (avoids client-driven log spam).
+                        ctx.body = pipeline(src, compress, (err) => {
+                            if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
+                            _logger.error('Stream error:', err);
+                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                        });
                     } else {
                         // HEAD: mirror the GET status and headers (RFC 9110 §9.3.2) — no
                         // Content-Length, since the compressed size is unknown without

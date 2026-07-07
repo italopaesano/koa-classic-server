@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🛡️ Robustness — `compression.maxFileSize` cap + LFU eviction fix
+- **Issue** (`docs/revisione_codice_v3.1.md` #4): with the default config, a compressible file of ANY size was read whole into RAM and brotli-Q11-compressed on first request (multi-GB text file → RAM allocation equal to the file + heavy CPU). Aggravating: when the compressed buffer exceeded the cache's `maxSize`, `LFUCache.set()` flushed the ENTIRE cache in its eviction loop before discovering the entry could never fit — repeatable CPU/RAM DoS that also destroyed every other cached file.
+- **Fix**:
+  - New option `compression.maxFileSize` (default **10 MB**, `false` = no cap): files above the cap are STILL compressed, but through the existing bounded-RAM streaming mode (brotli Q4 / gzip 6, no `Content-Length`, not cached) instead of the buffered+cached path. Safety net against process failure modes, not a serving restriction — every file remains downloadable.
+  - `LFUCache.set()` now returns early when the entry is larger than the whole cache, BEFORE the eviction loop — an entry that can never fit no longer evicts everyone else.
+- **Behavior change (default)**: compressible files larger than 10 MB switch from buffered brotli Q11 (unbounded RAM) to streamed compression. Operators can restore the old behavior with `compression: { maxFileSize: false }`.
+- **Docs**: option documented in the `index.cjs` defaults JSDoc block and in `SECURITY_HARDENING.md` §3.10.
+- **Tests**: `__tests__/compression-max-file-size.test.js` (10 tests: buffered vs streaming paths, `false` cap, invalid-value fallback, LFU flush regression).
+
 ### 🛡️ Robustness — single-flight cache population (thundering herd)
 - **Issue** (`docs/revisione_codice_v3.1.md` #5): N concurrent requests for a file not yet cached ran N `readFile()` + N brotli/gzip compressions in parallel for identical content; only the last `set()` "won". On a cold cache (deploy, restart) the CPU/RAM peak multiplied by the number of concurrent requests.
 - **Fix**: in-flight job maps (`key → Promise`) for both server caches. The first request (the leader) performs the read (+ compression) and the cache insert; concurrent requests await the same Promise. A rejection is shared as well — all waiters fall back together to the existing uncompressed-stream path — and the entry is removed on settlement, so the next request after a failure retries from scratch. Keys: `path` (rawFile), `path:encoding` (compressedFile — br and gzip stay independent jobs).

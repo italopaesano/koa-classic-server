@@ -420,6 +420,9 @@ class LFUCache {
     }
 
     set(key, entry) {
+        // An entry larger than the whole cache can never fit: bail out BEFORE the
+        // eviction loop, otherwise it would flush every other entry for nothing.
+        if (entry.buffer.length > this.maxSize) return;
         while (this.currentSize + entry.buffer.length > this.maxSize && this._keyMap.size > 0) {
             this._evictOne();
         }
@@ -648,6 +651,14 @@ module.exports = function koaClassicServer(
             enabled: true,                // master switch (false = disable all compression)
             encodings: ['br', 'gzip'],    // algorithms in priority order; [] = disable
             minFileSize: 1024,            // min file size in bytes to compress; false = no minimum
+            maxFileSize: 10485760,        // max file size (bytes) for the buffered high-quality
+                                          //   compression path (whole file in RAM → brotli Q11 →
+                                          //   result cached). Default: 10 MB; false = no cap.
+                                          //   Larger files are STILL compressed, but via the
+                                          //   bounded-RAM streaming mode (brotli Q4 / gzip 6, no
+                                          //   Content-Length, not cached). This is a SAFETY NET
+                                          //   against unbounded RAM/CPU on huge compressible files
+                                          //   (multi-GB logs/JSON/CSV), not a serving restriction.
             mimeTypes: [],                // compressible MIME types (replaces default list if provided)
         },
         // compression: false            // shorthand to disable all compression
@@ -1032,6 +1043,7 @@ module.exports = function koaClassicServer(
                 enabled: true,
                 encodings: ['br', 'gzip'],              // priority order: brotli first, gzip as fallback
                 minFileSize: 1024,                      // bytes; skip compression for files smaller than this
+                maxFileSize: 10485760,                  // bytes; above this the buffered+cached path is skipped (streaming instead)
                 mimeTypes: new Set(DEFAULT_COMPRESSIBLE_MIME_TYPES),
             };
         }
@@ -1054,11 +1066,17 @@ module.exports = function koaClassicServer(
         const minFileSize = compression.minFileSize === false ? false
             : (typeof compression.minFileSize === 'number' && compression.minFileSize >= 0 ? compression.minFileSize : 1024);
 
+        // Cap for the buffered (whole-file-in-RAM, max-quality, cached) compression
+        // path. false = no cap. Files above the cap still get compressed via the
+        // bounded-RAM streaming mode — safety net, not a serving restriction.
+        const maxFileSize = compression.maxFileSize === false ? false
+            : (typeof compression.maxFileSize === 'number' && compression.maxFileSize > 0 ? compression.maxFileSize : 10485760);
+
         const mimeTypes = Array.isArray(compression.mimeTypes) && compression.mimeTypes.length > 0
             ? compression.mimeTypes
             : DEFAULT_COMPRESSIBLE_MIME_TYPES;
 
-        return { enabled, encodings, minFileSize, mimeTypes: new Set(mimeTypes) };
+        return { enabled, encodings, minFileSize, maxFileSize, mimeTypes: new Set(mimeTypes) };
     }
 
     // Normalize and validate the serverCache option into a clean internal structure.
@@ -1772,7 +1790,14 @@ module.exports = function koaClassicServer(
                 ctx.set('Content-Encoding', encoding);
                 ctx.set('Vary', 'Accept-Encoding'); // Required so proxies cache per-encoding
 
-                if (serverCacheConfig.compressedFile.enabled) {
+                // Safety net (#4): the buffered path reads the WHOLE file into RAM and
+                // compresses at max quality — fine for web assets, catastrophic for a
+                // multi-GB log/CSV. Above compression.maxFileSize the bounded-RAM
+                // streaming mode below is used instead (still compressed, not cached).
+                const withinCompressCap = compressionConfig.maxFileSize === false
+                    || fileStat.size <= compressionConfig.maxFileSize;
+
+                if (serverCacheConfig.compressedFile.enabled && withinCompressCap) {
                     // compressedFile cache mode: compress once → buffer in RAM → Content-Length known
                     const cacheKey = `${toOpen}:${encoding}`;
                     const cached = _compressedFileCache.peek(cacheKey);

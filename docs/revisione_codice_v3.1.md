@@ -21,7 +21,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [ ] [3. Manca il redirect canonico `/dir` → `/dir/`](#3-manca-il-redirect-canonico-dir--dir)
 
 ### Robustezza / DoS
-- [ ] [4. Compressione: buffering illimitato in RAM + flush della cache LFU](#4-compressione-buffering-illimitato-in-ram--flush-della-cache-lfu)
+- [x] [4. Compressione: buffering illimitato in RAM + flush della cache LFU](#4-compressione-buffering-illimitato-in-ram--flush-della-cache-lfu) — **RISOLTO** (`compression.maxFileSize` 10 MB + early-return in `LFUCache.set()`)
 - [x] [5. Nessuna deduplicazione delle richieste concorrenti (thundering herd)](#5-nessuna-deduplicazione-delle-richieste-concorrenti-thundering-herd) — **RISOLTO** (single-flight su entrambe le cache)
 
 ### Conformità HTTP
@@ -134,6 +134,14 @@ restrizione, coerente con la design philosophy).
 ## Robustezza / DoS
 
 ### 4. Compressione: buffering illimitato in RAM + flush della cache LFU
+
+**Stato: ✅ RISOLTO** (2026-07-07 — nuova opzione `compression.maxFileSize`, default
+10 MB, `false` = nessun tetto: sopra soglia il file viene comunque compresso ma via la
+modalità streaming RAM-bounded esistente (niente buffer intero, niente cache). In
+`LFUCache.set()` aggiunto l'early-return per entry più grandi dell'intera cache, PRIMA
+del loop di eviction: un'entry che non entrerà mai non svuota più le entry altrui.
+Documentato nel blocco JSDoc dei default e in `SECURITY_HARDENING.md` §3.10. Test:
+`__tests__/compression-max-file-size.test.js`, 10 test.)
 
 **Posizione:** `index.cjs:1761` (`const rawData = rawBuffer || await fs.promises.readFile(toOpen)`)
 e `index.cjs:423-426` (`LFUCache.set`).

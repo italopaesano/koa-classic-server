@@ -51,7 +51,7 @@ spuntata in parallelo); le voci `B*`/`C*` sono definite in questo documento.
 - [x] **#15** `Buffer.slice()` → `subarray()` — risolto 2026-07-07
 
 ### Fase 2 — Infrastruttura + reti di sicurezza
-- [x] **C1** Workflow CI su push/PR (matrice Node/OS) — risolto 2026-07-08: Node 18/20/22/24 su Linux + Node 22/24 su Windows (**bloccanti**, verdi verificati) + Node 20/22/24 su macOS (**informativo** fino a promozione). Windows/Node 18-20 esclusi per flakiness di teardown (`rmSync` ricorsivo vs handle servito, risolta da Node 22+; non un bug del prodotto — coperto su Linux). macOS aggiunge copertura del ramo `darwin` case-insensitive e dei test symlink nativi. Job lint dedicato, job perf e Nix non bloccanti; `engines` resta `>=18`
+- [x] **C1** Workflow CI su push/PR (matrice Node/OS) — risolto 2026-07-08: Node 18/20/22/24 su Linux + Node 22/24 su Windows + Node 20/22/24 su macOS, **tutti bloccanti** (12 job verdi verificati sul run CI; Windows e macOS introdotti informativi per un run e poi promossi). Windows/Node 18-20 esclusi per flakiness di teardown (`rmSync` ricorsivo vs handle servito, risolta da Node 22+; non un bug del prodotto — coperto su Linux). macOS aggiunge copertura del ramo `darwin` case-insensitive e dei test symlink nativi. Job lint dedicato, job perf e Nix non bloccanti; `engines` resta `>=18`
 - [ ] **B3** Catch di ultima istanza nel middleware
 - [ ] **B2** try/catch su `new URL()` nel ramo hideExtension
 

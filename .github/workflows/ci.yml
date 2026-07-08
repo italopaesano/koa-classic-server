@@ -3,9 +3,8 @@
 #
 # Matrix: Node 18 / 20 / 22 / 24 (everything `engines: >=18` declares, plus
 # the next LTS) on ubuntu; Node 22 / 24 on windows; Node 20 / 22 / 24 on macOS.
-# ubuntu + windows legs are blocking. macOS is INFORMATIONAL for now
-# (continue-on-error) — promote it to blocking by removing that expression once
-# it has been seen green.
+# All legs are blocking (macOS was informational for one run, seen green, then
+# promoted).
 #
 # Why Node 18/20 are excluded on WINDOWS: the product code passes there (the
 # Windows Node 22/24 legs are green), but on Node 18/20 the test suite's
@@ -76,8 +75,6 @@ jobs:
     name: Test (Node ${{ matrix.node }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    # macOS is informational until proven green — do not let it block merges yet.
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:

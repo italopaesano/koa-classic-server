@@ -699,8 +699,31 @@ module.exports = function koaClassicServer(
 
     const normalizedRootDir = path.resolve(rootDir);
 
-    const options = opts || {};
-    options.template = opts.template || {};
+    // Options must be a plain object, or omitted entirely (the `opts = {}`
+    // default covers undefined). An explicit null — or any other non-object —
+    // is a configuration bug: surface it with a helpful error instead of a raw
+    // TypeError further down (or, worse, a silent fall-through to defaults).
+    if (opts === null || typeof opts !== 'object' || Array.isArray(opts)) {
+        throw new Error(
+            '[koa-classic-server] options must be a plain object (or omitted entirely). Got: ' +
+            (opts === null ? 'null' : Array.isArray(opts) ? 'an array' : typeof opts)
+        );
+    }
+
+    // Work on a copy: the factory normalizes options in place and must never
+    // mutate the caller's configuration object (reusing one config for two
+    // instances, or inspecting it after startup, would otherwise observe the
+    // rewritten values). Only the two nested objects the normalization writes
+    // into need their own copy — template (render/ext/renderTimeout) and
+    // hideExtension (ext/redirect); every other namespace is only read and
+    // normalized into new internal structures.
+    const options = { ...opts };
+    options.template = (opts.template && typeof opts.template === 'object' && !Array.isArray(opts.template))
+        ? { ...opts.template }
+        : {};
+    if (options.hideExtension && typeof options.hideExtension === 'object' && !Array.isArray(options.hideExtension)) {
+        options.hideExtension = { ...options.hideExtension };
+    }
 
     const _logger = normalizeLogger(options.logger);
 

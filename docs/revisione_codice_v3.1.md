@@ -34,7 +34,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [ ] [9. `If-None-Match`: niente liste con virgole né `*`](#9-if-none-match-niente-liste-con-virgole-né-)
 
 ### Validazione opzioni / API factory
-- [ ] [10. `opts: null` produce un TypeError grezzo; la factory muta l'oggetto del chiamante](#10-opts-null-produce-un-typeerror-grezzo-la-factory-muta-loggetto-del-chiamante)
+- [x] [10. `opts: null` produce un TypeError grezzo; la factory muta l'oggetto del chiamante](#10-opts-null-produce-un-typeerror-grezzo-la-factory-muta-loggetto-del-chiamante) — **RISOLTO** (throw con hint su non-oggetto; shallow copy + copie annidate)
 - [ ] [11. `urlPrefix` con slash finale e `urlsReserved` senza slash iniziale: nessuna validazione](#11-urlprefix-con-slash-finale-e-urlsreserved-senza-slash-iniziale-nessuna-validazione)
 - [ ] [12. `browserCacheMaxAge` negativo coerciuto silenziosamente](#12-browsercachemaxage-negativo-coerciuto-silenziosamente)
 
@@ -367,6 +367,20 @@ prefisso `W/` e il caso `*`.
 ## Validazione opzioni / API factory
 
 ### 10. `opts: null` produce un TypeError grezzo; la factory muta l'oggetto del chiamante
+
+**Stato: ✅ RISOLTO** (2026-07-08 — su decisione del manutentore, qualsiasi `opts` non
+oggetto — **incluso `null` esplicito** — lancia a factory time un errore
+`[koa-classic-server] options must be a plain object`; solo il parametro omesso
+(`undefined`) dà i default. La factory ora lavora su una shallow copy con copia
+annidata dei due soli oggetti mutati in place (`template` e `hideExtension` — il
+secondo non era citato nella proposta originale ma viene riscritto per la
+normalizzazione di `.ext`/`.redirect`): l'oggetto del chiamante resta intatto e la
+stessa config è riusabile su più istanze, incluso il caso `showDirContents` che prima
+faceva lanciare la seconda istanza con "both set". Un test esistente
+(`template-timeout.test.js`) asseriva il default 30000 *leggendolo dall'oggetto del
+chiamante* — cioè asseriva proprio l'effetto collaterale rimosso — ed è stato riscritto
+sul contratto nuovo. Test: `__tests__/options-immutability.test.js`, 8 test; verificato
+che 7/8 falliscono sul codice pre-fix.)
 
 **Posizione:** `index.cjs:659-660` e normalizzazioni successive.
 

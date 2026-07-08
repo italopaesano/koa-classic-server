@@ -2,7 +2,10 @@
 # on every pull request.
 #
 # Matrix: Node 18 / 20 / 22 / 24 (everything `engines: >=18` declares, plus
-# the next LTS) on ubuntu, and Node 22 / 24 on windows. All legs are blocking.
+# the next LTS) on ubuntu; Node 22 / 24 on windows; Node 20 / 22 / 24 on macOS.
+# ubuntu + windows legs are blocking. macOS is INFORMATIONAL for now
+# (continue-on-error) — promote it to blocking by removing that expression once
+# it has been seen green.
 #
 # Why Node 18/20 are excluded on WINDOWS: the product code passes there (the
 # Windows Node 22/24 legs are green), but on Node 18/20 the test suite's
@@ -12,6 +15,13 @@
 # test-teardown quirk of old Node on Windows, not a middleware bug. Node 18/20
 # stay fully covered on Linux; Windows is covered on the two current stable
 # lines. Revisit if Node 18/20 Windows teardown is ever made deterministic.
+#
+# Why macOS is worth adding: it exercises the `darwin` half of the
+# case-insensitive-FS boundary logic (index.cjs) — today only `win32` hits it —
+# and it runs the symlink-policy suites natively (Windows skips them for lack of
+# privileges). Node 18 is excluded on macOS too (covered on Linux); the macOS
+# rmSync teardown uses POSIX unlink semantics, so the Windows flakiness does not
+# apply.
 #
 # Lint runs in its own job (once, on Node 22): eslint 10 requires Node
 # >=20.19, so it cannot run inside the Node 18 leg of the matrix — and
@@ -66,16 +76,21 @@ jobs:
     name: Test (Node ${{ matrix.node }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    # macOS is informational until proven green — do not let it block merges yet.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:
         node: [18, 20, 22, 24]
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         exclude:
           # Test-teardown flakiness on old Node + Windows (see header comment);
           # product coverage on Windows is provided by the Node 22/24 legs.
           - { os: windows-latest, node: 18 }
           - { os: windows-latest, node: 20 }
+          # Node 18 on macOS: covered on Linux; keep the macOS matrix to the
+          # active/maintenance LTS lines plus current.
+          - { os: macos-latest, node: 18 }
 
     steps:
       - name: Checkout code

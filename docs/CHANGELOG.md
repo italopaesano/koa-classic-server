@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Bug Fix — `urlPrefix` / `urlsReserved` malformed values throw instead of failing silently
+- **Issue** (`docs/revisione_codice_v3.1.md` #11): both options had an implicit format the request-time matcher depended on, and a malformed value failed **silently** — `urlPrefix: '/static/'` (trailing slash) or `'static'` (missing leading slash) made the middleware serve nothing (it always fell through to `next()`); `urlsReserved: ['admin']` (missing leading slash) made the reservation never match (the path was served instead of passed on); a non-string entry crashed with a raw `TypeError` at request time; a multi-segment entry (`'/admin/panel'`) never matched (matching is first-level only).
+- **Fix**: factory-time validation with a helpful hint (consistent with the other option validations). `urlPrefix` must start with `/` and not end with `/` (or be `""`); each `urlsReserved` entry must be a single first-level path (`/` + one segment, no further `/`). Non-string/non-array values are rejected too.
+- **No working deployment breaks**: a mis-slashed value served/reserved nothing already, so this turns a silent misconfiguration into a diagnosable startup error.
+- **Tests**: `__tests__/url-prefix-reserved-validation.test.js` (14 tests; 10 verified to fail pre-fix).
+
 ### 🐛 Bug Fix — factory no longer mutates the caller's options; non-object options throw
 - **Issue** (`docs/revisione_codice_v3.1.md` #10): `options` was an alias of the caller's object — the factory rewrote `index`, `dirListing`, `template.renderTimeout`, `hideExtension.ext`, etc. in place. Reusing one config for two instances broke observably (with the v2 `showDirContents` alias the SECOND instance threw *"both set"*, because the first call had written `dirListing` into the caller's object); inspecting the config after startup showed values the operator never wrote. Also, `koaClassicServer(root, null)` crashed with a raw `TypeError` instead of a helpful message.
 - **Fix**: the factory works on a shallow copy, with nested copies of the only two objects normalization writes into (`template`, `hideExtension`). Any non-object `options` — **including explicit `null`** — now throws `[koa-classic-server] options must be a plain object (or omitted entirely)` at factory time; only an omitted parameter yields defaults.

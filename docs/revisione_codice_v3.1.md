@@ -35,7 +35,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 ### Validazione opzioni / API factory
 - [x] [10. `opts: null` produce un TypeError grezzo; la factory muta l'oggetto del chiamante](#10-opts-null-produce-un-typeerror-grezzo-la-factory-muta-loggetto-del-chiamante) — **RISOLTO** (throw con hint su non-oggetto; shallow copy + copie annidate)
-- [ ] [11. `urlPrefix` con slash finale e `urlsReserved` senza slash iniziale: nessuna validazione](#11-urlprefix-con-slash-finale-e-urlsreserved-senza-slash-iniziale-nessuna-validazione)
+- [x] [11. `urlPrefix` con slash finale e `urlsReserved` senza slash iniziale: nessuna validazione](#11-urlprefix-con-slash-finale-e-urlsreserved-senza-slash-iniziale-nessuna-validazione) — **RISOLTO** (throw con hint a factory time; chiusa tutta la classe)
 - [ ] [12. `browserCacheMaxAge` negativo coerciuto silenziosamente](#12-browsercachemaxage-negativo-coerciuto-silenziosamente)
 
 ### Minori / cosmetici
@@ -402,6 +402,23 @@ che 7/8 falliscono sul codice pre-fix.)
 ---
 
 ### 11. `urlPrefix` con slash finale e `urlsReserved` senza slash iniziale: nessuna validazione
+
+**Stato: ✅ RISOLTO** (2026-07-08 — su decisione del manutentore, validazione a factory
+time con throw + hint (coerente con #10 e con lo stile del progetto), chiudendo l'intera
+classe di fallimenti silenziosi:
+- `urlPrefix`: deve iniziare con `/` e non finire con `/` (o essere `""`); non-stringa →
+  throw. Copre anche lo slash iniziale mancante, stessa classe dello slash finale.
+- `urlsReserved`: dev'essere un array; ogni entry una singola path di primo livello
+  (`/` iniziale + un segmento, nessun `/` ulteriore). Copre — oltre allo slash iniziale
+  mancante del registro — le due varianti scoperte in fase di analisi: entry **non-stringa**
+  (crash latente su `value.substring` a request time) ed entry **multi-segmento**
+  (silenziosamente inefficace, l'opzione è "first level only").
+
+Nessun deployment funzionante viene rotto: uno slash sbagliato oggi non serve nulla / non
+riserva nulla, quindi il throw trasforma solo un "silenziosamente rotto" in "rotto e
+diagnosticabile all'avvio". JSDoc inline aggiornato. Test:
+`__tests__/url-prefix-reserved-validation.test.js`, 14 test; 10/14 falliscono sul codice
+pre-fix.)
 
 **Posizione:** `index.cjs:758-760` (`urlPrefix`), `index.cjs:1350-1358` (`urlsReserved`).
 

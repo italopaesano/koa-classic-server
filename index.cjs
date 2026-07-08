@@ -598,8 +598,13 @@ module.exports = function koaClassicServer(
                    //   - Array of RegExp:  [/index\.html/i, /default\.(html|htm)/i]
                    //   - Mixed array:      ["index.html", /index\.[eE][jJ][sS]/]
                    // Priority is determined by array order (first match wins)
-        urlPrefix: "", // URL path prefix
-        urlsReserved: [], // Reserved paths (first level only)
+        urlPrefix: "", // URL path prefix. Must start with "/" and NOT end with "/"
+                       //   (e.g. "/static"); "" disables the prefix. A malformed
+                       //   value throws at factory time.
+        urlsReserved: [], // Reserved first-level paths passed through to next().
+                          //   Each entry must be a single first-level path: a leading
+                          //   "/" plus one segment, no further "/" (e.g. "/admin").
+                          //   Malformed entries throw at factory time.
         template: {
             render: undefined, // Template rendering function: async (ctx, next, filePath, rawBuffer, signal) => {}
                                // rawBuffer (4th arg, may be null) is READ-ONLY: the same Buffer
@@ -821,9 +826,54 @@ module.exports = function koaClassicServer(
         options.index = [];
     }
 
-    options.urlPrefix = typeof options.urlPrefix === 'string' ? options.urlPrefix : "";
+    // ── urlPrefix / urlsReserved validation (V3.1) ──
+    // The request-time matcher depends on an implicit format for both options,
+    // and a malformed value used to fail SILENTLY: a urlPrefix with a stray
+    // leading/trailing slash made the middleware serve nothing (it always fell
+    // through to next()), and a urlsReserved entry without a leading slash made
+    // the reservation never match (the path was served instead of passed on).
+    // Validate at factory time with a helpful hint, like the other options.
+    if (options.urlPrefix === undefined) {
+        options.urlPrefix = "";
+    } else if (typeof options.urlPrefix !== 'string') {
+        throw new Error(
+            '[koa-classic-server] urlPrefix must be a string (e.g. "/static"), or "" for no prefix. Got: ' +
+            (options.urlPrefix === null ? 'null' : typeof options.urlPrefix)
+        );
+    } else if (options.urlPrefix !== "" && (!options.urlPrefix.startsWith('/') || options.urlPrefix.endsWith('/'))) {
+        throw new Error(
+            '[koa-classic-server] urlPrefix must start with "/" and must not end with "/" ' +
+            '(use "" to disable the prefix). Got: ' + JSON.stringify(options.urlPrefix) + '. Example: "/static"'
+        );
+    }
     const _urlPrefixParts = options.urlPrefix.split("/");
-    options.urlsReserved = Array.isArray(options.urlsReserved) ? options.urlsReserved : [];
+
+    if (options.urlsReserved === undefined) {
+        options.urlsReserved = [];
+    } else if (!Array.isArray(options.urlsReserved)) {
+        throw new Error(
+            '[koa-classic-server] urlsReserved must be an array of first-level paths, e.g. ["/admin", "/api"]. Got: ' +
+            (options.urlsReserved === null ? 'null' : typeof options.urlsReserved)
+        );
+    } else {
+        for (const value of options.urlsReserved) {
+            if (typeof value !== 'string' || value === '') {
+                throw new Error(
+                    '[koa-classic-server] each urlsReserved entry must be a non-empty string, e.g. "/admin". Got: ' +
+                    JSON.stringify(value)
+                );
+            }
+            // Matching is first-level only (compares one path segment), so each
+            // entry must be exactly "/" + one segment: leading slash, no more.
+            if (!value.startsWith('/') || value.indexOf('/', 1) !== -1) {
+                throw new Error(
+                    '[koa-classic-server] each urlsReserved entry must be a single first-level path: ' +
+                    'a leading "/" followed by one segment, with no further "/" (matching is first-level only). ' +
+                    'Got: ' + JSON.stringify(value) + '. Example: "/admin"'
+                );
+            }
+        }
+    }
     options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
 

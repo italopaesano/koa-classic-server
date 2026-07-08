@@ -199,6 +199,10 @@ operator-controlled (escaping, headers, `nosniff` are up to you).
 - `browserCacheEnabled: true` in production reduces bandwidth; combine with a CDN.
 - Compression is on by default. If you serve secrets *and* reflect user input in the same
   response over TLS, be aware of BREACH-class risks (rare for a static file server).
+- `compression.maxFileSize` (default 10 MB) caps the buffered high-quality compression path:
+  larger compressible files are compressed via bounded-RAM streaming instead of being read
+  whole into memory. Lower it on RAM-constrained hosts; `false` removes the cap (not
+  recommended if untrusted parties can place large text files under `rootDir`).
 
 ### 3.11 Logging
 

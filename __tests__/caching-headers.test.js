@@ -553,4 +553,60 @@ describe('HTTP Caching Headers', () => {
             server.close();
         });
     });
+
+    // Regression for review finding #2 (docs/revisione_codice_v3.1.md):
+    // Last-Modified is emitted with second precision (toUTCString), but the
+    // If-Modified-Since comparison used the raw millisecond mtime — a client
+    // echoing the received header back (curl -z, wget, proxies) NEVER got a
+    // 304 when the file's mtime had a sub-second component.
+    describe('If-Modified-Since with sub-second mtime', () => {
+        const SUB_FILE = path.join(TEST_DIR, 'sub-second.txt');
+        let server;
+        let request;
+
+        beforeAll(() => {
+            fs.writeFileSync(SUB_FILE, 'sub-second mtime content');
+            // Force an mtime with a .5s fractional component
+            const when = new Date('2023-11-14T22:13:20.500Z');
+            fs.utimesSync(SUB_FILE, when, when);
+            // Precondition: the filesystem must have kept the fraction,
+            // otherwise this test would not exercise the regression.
+            expect(fs.statSync(SUB_FILE).mtime.getMilliseconds()).toBe(500);
+
+            const app = new Koa();
+            app.use(koaClassicServer(TEST_DIR, { browserCacheEnabled: true }));
+            server = app.listen();
+            request = supertest(server);
+        });
+
+        afterAll(() => server.close());
+
+        test('echoing the received Last-Modified back returns 304', async () => {
+            const first = await request.get('/sub-second.txt');
+            expect(first.status).toBe(200);
+            const lastModified = first.headers['last-modified'];
+            expect(lastModified).toBe('Tue, 14 Nov 2023 22:13:20 GMT');
+
+            // The standard client behavior: echo the header exactly as received
+            const second = await request
+                .get('/sub-second.txt')
+                .set('If-Modified-Since', lastModified);
+            expect(second.status).toBe(304); // was 200 before the fix
+            expect(second.text).toBe('');
+        });
+
+        test('an If-Modified-Since older than the mtime still returns 200', async () => {
+            const res = await request
+                .get('/sub-second.txt')
+                .set('If-Modified-Since', 'Tue, 14 Nov 2023 22:13:19 GMT');
+            expect(res.status).toBe(200);
+        });
+
+        test('an invalid If-Modified-Since date returns 200', async () => {
+            const res = await request
+                .get('/sub-second.txt')
+                .set('If-Modified-Since', 'not-a-date');
+            expect(res.status).toBe(200);
+        });
+    });
 });

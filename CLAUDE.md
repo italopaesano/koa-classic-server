@@ -41,6 +41,7 @@ Some defaults are NOT restrictions on the served content — they are guards aga
 |---|---|
 | `template.renderTimeout: 30000` | Hung template render blocking the event loop indefinitely |
 | `serverCache.compressedFile.maxSize: 100 MB` | RAM growing unbounded in the compressed-response cache |
+| `compression.maxFileSize: 10 MB` | Unbounded RAM/CPU on the buffered compression path (whole file in RAM + brotli Q11 for a multi-GB text file). Above the cap, files are still compressed via the bounded-RAM streaming mode |
 | `dirListing.maxEntries: 10000` | Unbounded `stat()` / sort / render CPU and oversized HTML when listing an accidentally-huge directory (broken log rotation, mistakenly mounted FS). Bounds work *after* `readdir()`, not the `readdir()` allocation itself — the latter is the `[F-1]` gap tracked for v3.1 |
 
 These are deliberate exceptions because they protect the process from itself, not the served content. The distinction:

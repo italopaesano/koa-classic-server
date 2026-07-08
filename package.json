@@ -16,6 +16,7 @@
     "lint": "eslint index.cjs index.mjs",
     "pretest": "npm run lint",
     "test": "jest",
+    "test:ci": "jest --testPathIgnorePatterns=performance",
     "test:security": "jest __tests__/security.test.js",
     "test:performance": "jest __tests__/performance.test.js --runInBand",
     "benchmark": "node __tests__/benchmark.js",

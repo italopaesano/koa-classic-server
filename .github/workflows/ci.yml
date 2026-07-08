@@ -1,0 +1,148 @@
+# Continuous integration: runs the full test suite on every push to main and
+# on every pull request.
+#
+# Matrix: Node 18 / 20 / 22 / 24 (everything `engines: >=18` declares, plus
+# the next LTS) on ubuntu; Node 22 / 24 on windows; Node 20 / 22 / 24 on macOS.
+# All legs are blocking (macOS was informational for one run, seen green, then
+# promoted).
+#
+# Why Node 18/20 are excluded on WINDOWS: the product code passes there (the
+# Windows Node 22/24 legs are green), but on Node 18/20 the test suite's
+# afterEach/afterAll `fs.rmSync(dir, { recursive: true })` teardown flakes with
+# EPERM/ENOTEMPTY — a lingering file handle (keep-alive socket holding a served
+# ReadStream) that Node 22+ releases in time and Node 18/20 do not. That is a
+# test-teardown quirk of old Node on Windows, not a middleware bug. Node 18/20
+# stay fully covered on Linux; Windows is covered on the two current stable
+# lines. Revisit if Node 18/20 Windows teardown is ever made deterministic.
+#
+# Why macOS is worth adding: it exercises the `darwin` half of the
+# case-insensitive-FS boundary logic (index.cjs) — today only `win32` hits it —
+# and it runs the symlink-policy suites natively (Windows skips them for lack of
+# privileges). Node 18 is excluded on macOS too (covered on Linux); the macOS
+# rmSync teardown uses POSIX unlink semantics, so the Windows flakiness does not
+# apply.
+#
+# Lint runs in its own job (once, on Node 22): eslint 10 requires Node
+# >=20.19, so it cannot run inside the Node 18 leg of the matrix — and
+# linting the same code many times would be wasted work anyway.
+#
+# performance.test.js is excluded from the matrix (its timing assertions —
+# avg < 50/100/500 ms — are flaky on shared runners) and runs in a separate
+# non-blocking job instead. The `nix` job runs the suite with a Nix-store
+# provided Node on ubuntu — an approximation of NixOS environments (the
+# project explicitly supports DT_UNKNOWN filesystems / buildFHSEnv setups).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Manual trigger (Actions tab / API). Also needed because pushes made by
+  # bot/app integrations do not fire push/pull_request workflow events.
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+  test:
+    name: Test (Node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22, 24]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        exclude:
+          # Test-teardown flakiness on old Node + Windows (see header comment);
+          # product coverage on Windows is provided by the Node 22/24 legs.
+          - { os: windows-latest, node: 18 }
+          - { os: windows-latest, node: 20 }
+          # Node 18 on macOS: covered on Linux; keep the macOS matrix to the
+          # active/maintenance LTS lines plus current.
+          - { os: macos-latest, node: 18 }
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test (performance tests excluded)
+        run: npm run test:ci
+
+  performance:
+    name: Performance tests (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Timing assertions on shared runners can flake — never block merges on this job.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run performance tests
+        run: npm run test:performance
+
+  nix:
+    name: Nix-provided Node (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Exotic-environment probe (Nix store paths, NixOS-like setups) — informational.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Test with Nix-store Node
+        run: nix-shell -p nodejs_22 --run "npm ci && npm run test:ci"

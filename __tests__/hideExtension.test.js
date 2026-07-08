@@ -15,10 +15,28 @@ const supertest = require('supertest');
 const koaClassicServer = require('../index.cjs');
 const Koa = require('koa');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const ejs = require('ejs');
 
 const rootDir = path.join(__dirname, 'publicWwwTest', 'hideext-test');
+
+// Case-sensitivity probe (same pattern as symlinkSupported in symlink.test.js).
+// about.EJS and about.ejs can only coexist on a case-sensitive filesystem:
+// committing both breaks `git checkout` reliability on Windows/macOS, so the
+// pair is created at runtime and the test skipped where the premise is
+// impossible.
+function detectCaseSensitiveFs() {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-case-probe-'));
+    try {
+        fs.writeFileSync(path.join(d, 'A.tmp'), '');
+        return !fs.existsSync(path.join(d, 'a.tmp'));
+    } finally {
+        fs.rmSync(d, { recursive: true, force: true });
+    }
+}
+const fsIsCaseSensitive = detectCaseSensitiveFs();
+const testIfCaseSensitive = fsIsCaseSensitive ? test : test.skip;
 
 describe('hideExtension option tests', () => {
 
@@ -373,10 +391,18 @@ describe('hideExtension option tests', () => {
     // ==========================================
     describe('Case-sensitive extension matching', () => {
         let app, server, request;
+        let caseDir;
 
         beforeAll(() => {
+            // Runtime fixture pair: about.ejs + about.EJS in the same dir —
+            // impossible to commit (case-insensitive checkout collision).
+            caseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-case-ext-'));
+            fs.writeFileSync(path.join(caseDir, 'about.ejs'), '<h1>About Page</h1>');
+            if (fsIsCaseSensitive) {
+                fs.writeFileSync(path.join(caseDir, 'about.EJS'), '<h1>About UPPERCASE</h1>');
+            }
             app = new Koa();
-            app.use(koaClassicServer(rootDir, {
+            app.use(koaClassicServer(caseDir, {
                 dirListing: { enabled: true },
                 hideExtension: { ext: '.ejs' }
             }));
@@ -384,9 +410,12 @@ describe('hideExtension option tests', () => {
             request = supertest(server);
         });
 
-        afterAll(() => { server.close(); });
+        afterAll(() => {
+            server.close();
+            fs.rmSync(caseDir, { recursive: true, force: true });
+        });
 
-        test('/about.EJS is not handled by hideExtension (case-sensitive)', async () => {
+        testIfCaseSensitive('/about.EJS is not handled by hideExtension (case-sensitive)', async () => {
             const response = await request.get('/about.EJS');
             // The file about.EJS exists, should be served normally (not redirected)
             expect(response.status).toBe(200);

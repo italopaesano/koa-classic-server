@@ -36,6 +36,46 @@ L'analisi è divisa in tre parti:
 
 ---
 
+## Indice / Checklist di lavoro
+
+Spuntare ogni voce (`[x]`) quando la problematica è stata affrontata e chiusa
+(fix implementato + test + revisione), annotando accanto il commit di riferimento.
+Le voci `#N` rimandano al registro `revisione_codice_v3.1.md` (la cui checkbox va
+spuntata in parallelo); le voci `B*`/`C*` sono definite in questo documento.
+
+### Fase 1 — Robustezza del processo
+- [x] **#5** Single-flight sulle cache (thundering herd) — risolto 2026-07-07, `__tests__/single-flight.test.js`
+- [x] **#4** Tetto `compression.maxFileSize` + early-return in `LFUCache.set()` — risolto 2026-07-07, `__tests__/compression-max-file-size.test.js`
+- [x] **B1** Leak di fd nello streaming compresso (`stream.pipeline`) — risolto 2026-07-07, registro §17, `__tests__/streaming-abort.test.js`
+- [x] **#2** `If-Modified-Since` mai 304 con mtime sub-secondo — risolto 2026-07-07, test in `caching-headers.test.js`
+- [x] **#15** `Buffer.slice()` → `subarray()` — risolto 2026-07-07
+
+### Fase 2 — Infrastruttura + reti di sicurezza
+- [x] **C1** Workflow CI su push/PR (matrice Node/OS) — risolto 2026-07-08: Node 18/20/22/24 su Linux + Node 22/24 su Windows + Node 20/22/24 su macOS, **tutti bloccanti** (12 job verdi verificati sul run CI; Windows e macOS introdotti informativi per un run e poi promossi). Windows/Node 18-20 esclusi per flakiness di teardown (`rmSync` ricorsivo vs handle servito, risolta da Node 22+; non un bug del prodotto — coperto su Linux). macOS aggiunge copertura del ramo `darwin` case-insensitive e dei test symlink nativi. Job lint dedicato, job perf e Nix non bloccanti; `engines` resta `>=18`
+- [x] **B3** Catch di ultima istanza nel middleware — risolto 2026-07-08, registro §18, `__tests__/error-containment.test.js`
+- [x] **B2** try/catch su `new URL()` nel ramo hideExtension — risolto 2026-07-08, registro §19, `__tests__/error-containment.test.js`
+
+### Fase 3 — Footgun config + correttezza
+- [ ] **#10** Copia di `opts` + errore esplicito su `null`
+- [ ] **#11** Validazione `urlPrefix` / `urlsReserved`
+- [ ] **#3** Redirect canonico `/dir` → `/dir/`
+
+### Fase 4 — Conformità HTTP, minori, processo
+- [ ] **#6** q-value di `Accept-Encoding` (`q=0` da onorare)
+- [ ] **#7** `Vary: Accept-Encoding` incompleto (304 e risposte non compresse)
+- [ ] **#8** Precedenza Range vs validatori; 206 senza ETag/Last-Modified
+- [ ] **#9** `If-None-Match`: liste con virgole e `*`
+- [ ] **#12** `browserCacheMaxAge` negativo coerciuto silenziosamente
+- [ ] **#13** Link "Parent Directory" fuori da `urlPrefix`
+- [ ] **#14** `hideExtension`: incoerenza decoded/raw
+- [ ] **#16** Riga "empty folder" con entry tutte nascoste
+- [ ] **C2** Property-based / fuzz testing sui parser manuali
+- [ ] **C3** Soglia di coverage in CI
+- [ ] **C4** Typings `index.d.ts`
+- [ ] **C5** Allineamento documentazione (conteggio test in CLAUDE.md)
+
+---
+
 ## A. Voci del registro: ordine d'attacco consigliato
 
 Dal punto di vista "robustezza e resistenza" le 15 voci aperte non pesano tutte uguale.
@@ -252,7 +292,7 @@ allineare al prossimo giro di documentazione.
 
 | Fase | Interventi | Tipo |
 |---|---|---|
-| 1 | #4 `compression.maxFileSize` + early-return `LFUCache.set()`; #5 single-flight; **B1** `stream.pipeline`; #2 fix 304 sub-secondo; #15 `subarray` | Robustezza processo |
+| 1 | #5 single-flight; #4 `compression.maxFileSize` + early-return `LFUCache.set()`; **B1** `stream.pipeline`; #2 fix 304 sub-secondo; #15 `subarray` | Robustezza processo |
 | 2 | **C1** workflow CI (matrice Node/OS); **B3** catch di ultima istanza; **B2** try/catch hideExtension | Infrastruttura + reti di sicurezza |
 | 3 | #10 copia di `opts` + errore su null; #11 validazione `urlPrefix`/`urlsReserved`; #3 redirect canonico `/dir` → `/dir/` | Footgun config + correttezza |
 | 4 | #6, #7, #8, #9 (conformità HTTP); #12, #13, #14, #16 (minori); **C2** fuzzing; **C3** coverage; **C4** typings | Conformità + processo |

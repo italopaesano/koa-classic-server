@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const zlib = require("zlib");
 const util = require("util");
 const mime = require("mime-types");
-const { Readable } = require('stream');
+const { Readable, pipeline } = require('stream');
 
 const _brotliCompressAsync = util.promisify(zlib.brotliCompress);
 const _gzipAsync           = util.promisify(zlib.gzip);
@@ -151,6 +151,7 @@ function buildErrorHtml(title, heading, message) {
 const _NOT_FOUND_HTML       = buildErrorHtml('URL not found',         'Not Found',             'The requested URL was not found on this server.');
 const _GATEWAY_TIMEOUT_HTML = buildErrorHtml('Gateway Timeout',       'Gateway Timeout',       'The template took too long to render.');
 const _TEMPLATE_ERROR_HTML  = buildErrorHtml('Internal Server Error', 'Internal Server Error', 'Template rendering failed for the requested resource.');
+const _INTERNAL_ERROR_HTML  = buildErrorHtml('Internal Server Error', 'Internal Server Error', 'The server encountered an unexpected condition.');
 
 function sendNotFound(ctx) {
     setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
@@ -420,10 +421,17 @@ class LFUCache {
     }
 
     set(key, entry) {
+        // An entry larger than the whole cache can never fit: bail out BEFORE the
+        // eviction loop, otherwise it would flush every other entry for nothing.
+        // Warn (throttled) so the operator learns the cache is undersized for
+        // this file instead of it silently never being cached.
+        if (entry.buffer.length > this.maxSize) {
+            this._warnThrottled(`[koa-classic-server] serverCache.${this.cacheLabel}: entry of ${entry.buffer.length} bytes exceeds maxSize (${this.maxSize} bytes) and will never be cached. Consider increasing maxSize.`);
+            return;
+        }
         while (this.currentSize + entry.buffer.length > this.maxSize && this._keyMap.size > 0) {
             this._evictOne();
         }
-        if (this.currentSize + entry.buffer.length > this.maxSize) return; // entry too large for cache
 
         this._keyMap.set(key, { ...entry, freq: 1 });
         this._addToFreqBucket(key, 1);
@@ -499,14 +507,35 @@ class LFUCache {
         bucket.delete(evictKey);
         if (bucket.size === 0) this._freqMap.delete(this._minFreq);
 
-        if (this.warnInterval !== false) {
-            const now = Date.now();
-            if (now - this._lastWarnAt >= this.warnInterval) {
-                this.logger.warn(`[koa-classic-server] serverCache.${this.cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
-                this._lastWarnAt = now;
-            }
+        this._warnThrottled(`[koa-classic-server] serverCache.${this.cacheLabel}: maxSize reached, evicting LFU entries. Consider increasing maxSize.`);
+    }
+
+    // Emits a warning at most once per warnInterval ms (0 = always, false = never).
+    _warnThrottled(message) {
+        if (this.warnInterval === false) return;
+        const now = Date.now();
+        if (now - this._lastWarnAt >= this.warnInterval) {
+            this.logger.warn(message);
+            this._lastWarnAt = now;
         }
     }
+}
+
+// Single-flight job map helper: joins the in-flight job for `key`, or starts
+// `work()` as the leader. Concurrent callers share the same Promise — including
+// a rejection, so on failure every waiter falls back together instead of
+// re-running the work. The entry is removed as soon as the job settles
+// (success or failure), so the next request after a failure retries from
+// scratch and the map only ever holds jobs actually in progress.
+function singleFlight(map, key, work) {
+    let job = map.get(key);
+    if (!job) {
+        job = work();
+        map.set(key, job);
+        const clean = () => map.delete(key);
+        job.then(clean, clean);
+    }
+    return job;
 }
 
 // Upserts a fresh entry into an LFUCache. When the previous entry was only
@@ -573,6 +602,9 @@ module.exports = function koaClassicServer(
         urlsReserved: [], // Reserved paths (first level only)
         template: {
             render: undefined, // Template rendering function: async (ctx, next, filePath, rawBuffer, signal) => {}
+                               // rawBuffer (4th arg, may be null) is READ-ONLY: the same Buffer
+                               // instance is shared with the server cache and with concurrent
+                               // requests — mutating it corrupts other responses.
             ext: [], // File extensions to process with template.render
             renderTimeout: 30000, // Max ms allowed for template.render (number ≥ 0; 0 = disabled).
                                   // On timeout responds 504 Gateway Timeout. The render receives an
@@ -631,6 +663,14 @@ module.exports = function koaClassicServer(
             enabled: true,                // master switch (false = disable all compression)
             encodings: ['br', 'gzip'],    // algorithms in priority order; [] = disable
             minFileSize: 1024,            // min file size in bytes to compress; false = no minimum
+            maxFileSize: 10485760,        // max file size (bytes) for the buffered high-quality
+                                          //   compression path (whole file in RAM → brotli Q11 →
+                                          //   result cached). Default: 10 MB; false = no cap.
+                                          //   Larger files are STILL compressed, but via the
+                                          //   bounded-RAM streaming mode (brotli Q4 / gzip 6, no
+                                          //   Content-Length, not cached). This is a SAFETY NET
+                                          //   against unbounded RAM/CPU on huge compressible files
+                                          //   (multi-GB logs/JSON/CSV), not a serving restriction.
             mimeTypes: [],                // compressible MIME types (replaces default list if provided)
         },
         // compression: false            // shorthand to disable all compression
@@ -1015,6 +1055,7 @@ module.exports = function koaClassicServer(
                 enabled: true,
                 encodings: ['br', 'gzip'],              // priority order: brotli first, gzip as fallback
                 minFileSize: 1024,                      // bytes; skip compression for files smaller than this
+                maxFileSize: 10485760,                  // bytes; above this the buffered+cached path is skipped (streaming instead)
                 mimeTypes: new Set(DEFAULT_COMPRESSIBLE_MIME_TYPES),
             };
         }
@@ -1037,11 +1078,17 @@ module.exports = function koaClassicServer(
         const minFileSize = compression.minFileSize === false ? false
             : (typeof compression.minFileSize === 'number' && compression.minFileSize >= 0 ? compression.minFileSize : 1024);
 
+        // Cap for the buffered (whole-file-in-RAM, max-quality, cached) compression
+        // path. false = no cap. Files above the cap still get compressed via the
+        // bounded-RAM streaming mode — safety net, not a serving restriction.
+        const maxFileSize = compression.maxFileSize === false ? false
+            : (typeof compression.maxFileSize === 'number' && compression.maxFileSize > 0 ? compression.maxFileSize : 10485760);
+
         const mimeTypes = Array.isArray(compression.mimeTypes) && compression.mimeTypes.length > 0
             ? compression.mimeTypes
             : DEFAULT_COMPRESSIBLE_MIME_TYPES;
 
-        return { enabled, encodings, minFileSize, mimeTypes: new Set(mimeTypes) };
+        return { enabled, encodings, minFileSize, maxFileSize, mimeTypes: new Set(mimeTypes) };
     }
 
     // Normalize and validate the serverCache option into a clean internal structure.
@@ -1210,6 +1257,15 @@ module.exports = function koaClassicServer(
         _logger
     );
 
+    // Single-flight maps for cache population (thundering-herd protection):
+    // N concurrent misses on the same key share ONE read (+ compression) instead
+    // of N duplicated jobs. Entries live only while a job is in flight. Keys
+    // include the stat'd mtime+size so requests that observed different versions
+    // of the file never share a job (each response stays coherent with its own
+    // ETag/Last-Modified).
+    const _inflightRawReads     = new Map(); // `${path}:${mtime}:${size}` → Promise<Buffer>
+    const _inflightCompressions = new Map(); // `${path}:${encoding}:${mtime}:${size}` → Promise<Buffer>
+
     // Returns the client's preferred encoding based on Accept-Encoding header,
     // filtered against the enabled encodings list. Returns null if no match.
     function getClientEncoding(acceptEncoding) {
@@ -1360,194 +1416,231 @@ module.exports = function koaClassicServer(
             }
         }
 
-        // Path traversal protection: build and validate safe file path
-        let requestedPath = "";
-        if (pageHrefOutPrefix.pathname === "/") {
-            requestedPath = "";
-        } else {
-            // decodeURIComponent() throws URIError on malformed percent-encoding
-            // (e.g. "/%", "/%zz", a truncated UTF-8 sequence) — reject as 400
-            // rather than letting it surface as an unhandled 500.
-            try {
-                requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
-            } catch {
+        // From this point on the middleware OWNS the request: every early
+        // pass-through above has already returned, and no next() is called below
+        // (the template render's next goes through tryRenderTemplate's own catch).
+        // Last-resort net: an unexpected failure on any unguarded path must not
+        // leak to Koa's default handler (a plain-text 500 without the middleware's
+        // security headers, logged outside the operator's `logger`). Errors from
+        // downstream middleware are NOT masked — they never reach this try.
+        try {
+            // Path traversal protection: build and validate safe file path
+            let requestedPath = "";
+            if (pageHrefOutPrefix.pathname === "/") {
+                requestedPath = "";
+            } else {
+                // decodeURIComponent() throws URIError on malformed percent-encoding
+                // (e.g. "/%", "/%zz", a truncated UTF-8 sequence) — reject as 400
+                // rather than letting it surface as an unhandled 500.
+                try {
+                    requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
+                } catch {
+                    sendBadRequest(ctx);
+                    return;
+                }
+            }
+
+            // Null byte guard: path.normalize() throws ERR_INVALID_ARG_VALUE for paths
+            // containing \0. Reject early with 400 Bad Request before it reaches fs calls.
+            if (requestedPath.includes('\0')) {
                 sendBadRequest(ctx);
                 return;
             }
-        }
 
-        // Null byte guard: path.normalize() throws ERR_INVALID_ARG_VALUE for paths
-        // containing \0. Reject early with 400 Bad Request before it reaches fs calls.
-        if (requestedPath.includes('\0')) {
-            sendBadRequest(ctx);
-            return;
-        }
+            const normalizedPath = path.normalize(requestedPath);
+            const fullPath = path.join(normalizedRootDir, normalizedPath);
 
-        const normalizedPath = path.normalize(requestedPath);
-        const fullPath = path.join(normalizedRootDir, normalizedPath);
+            // Security check: ensure resolved path is within rootDir. Uses the shared
+            // _isWithinRoot() helper, which is boundary-aware: it matches rootDir exactly
+            // or rootDir + path.sep, never a sibling (e.g. /srv/wwwsecret for root /srv/www) —
+            // hardened defense in depth against a future change to how fullPath is built.
+            // Covers: ../ traversal, URL-encoded variants (%2e%2e%2f), and on Windows
+            // backslash sequences (path.normalize converts \ to / before the check).
+            // Returns 404 (not 403) so "outside root" is indistinguishable from "not found",
+            // matching the symlink-escape and hidden-entry outcomes.
+            if (!_isWithinRoot(fullPath, normalizedRootDir)) {
+                sendNotFound(ctx);
+                return;
+            }
 
-        // Security check: ensure resolved path is within rootDir. Uses the shared
-        // _isWithinRoot() helper, which is boundary-aware: it matches rootDir exactly
-        // or rootDir + path.sep, never a sibling (e.g. /srv/wwwsecret for root /srv/www) —
-        // hardened defense in depth against a future change to how fullPath is built.
-        // Covers: ../ traversal, URL-encoded variants (%2e%2e%2f), and on Windows
-        // backslash sequences (path.normalize converts \ to / before the check).
-        // Returns 404 (not 403) so "outside root" is indistinguishable from "not found",
-        // matching the symlink-escape and hidden-entry outcomes.
-        if (!_isWithinRoot(fullPath, normalizedRootDir)) {
-            sendNotFound(ctx);
-            return;
-        }
+            // Hidden check: block requests that traverse a hidden directory.
+            // Stops at length-1 because the leaf (the file or dir being served) is
+            // checked separately by the file/listing path with its real stat.isDirectory().
+            if (requestedPath !== '') {
+                const segments = normalizedPath.split(path.sep).filter(Boolean);
+                for (let i = 0; i < segments.length - 1; i++) {
+                    const segName = segments[i];
+                    const segRelPath = segments.slice(0, i + 1).join('/');
+                    if (isHiddenEntry(segName, segRelPath, true)) {
+                        sendNotFound(ctx);
+                        return;
+                    }
+                }
+            }
 
-        // Hidden check: block requests that traverse a hidden directory.
-        // Stops at length-1 because the leaf (the file or dir being served) is
-        // checked separately by the file/listing path with its real stat.isDirectory().
-        if (requestedPath !== '') {
-            const segments = normalizedPath.split(path.sep).filter(Boolean);
-            for (let i = 0; i < segments.length - 1; i++) {
-                const segName = segments[i];
-                const segRelPath = segments.slice(0, i + 1).join('/');
-                if (isHiddenEntry(segName, segRelPath, true)) {
+            let toOpen = fullPath;
+
+            // hideExtension logic: redirect URLs with extension and resolve clean URLs
+            if (options.hideExtension) {
+                const hideExt = options.hideExtension.ext;
+                const hideRedirect = options.hideExtension.redirect;
+
+                // Trailing slash check via string — avoids a full new URL() construction
+                const rawPath = urlToUse.split('?')[0];
+                const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
+
+                // Strip a trailing slash before the extension check so URLs like /foo.html/
+                // still match (the slash is URL formality, not part of the filename) — without
+                // this, /foo.html/ would skip the redirect and 404 trying to open it as a dir.
+                const pathForExtCheck = hadTrailingSlash ? rawPath.slice(0, -1) : requestedPath;
+                if (pathForExtCheck.endsWith(hideExt)) {
+                    // Build redirect target using ctx.originalUrl (always, regardless of
+                    // useOriginalUrl). With useOriginalUrl: false the URL-parsing prologue
+                    // validated ctx.url (the rewritten one), NOT originalUrl — a malformed
+                    // originalUrl (e.g. an absolute-form request target, legal in HTTP/1.1)
+                    // makes this constructor throw. Same treatment as the other malformed
+                    // client input: 400 Bad Request, not an unhandled error.
+                    let originalUrlObj;
+                    try {
+                        originalUrlObj = new URL(_origin + ctx.originalUrl);
+                    } catch {
+                        sendBadRequest(ctx);
+                        return;
+                    }
+                    let redirectPath = originalUrlObj.pathname;
+
+                    // Collapse leading slashes: a Location header starting with "//" (or "/\")
+                    // is a protocol-relative URL and would let "GET //evil.com/foo.ejs" redirect
+                    // off-origin. path.normalize() upstream already collapses these for the
+                    // filesystem check, so the source-of-truth URL has a single leading slash.
+                    if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
+                        redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
+                    }
+
+                    redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
+
+                    // Special case: /index.ejs → /, /sezione/index.ejs → /sezione/
+                    const baseName = path.basename(redirectPath);
+                    // Check if the remaining path points to an index file
+                    if (options.index && options.index.length > 0) {
+                        for (const pattern of options.index) {
+                            if (typeof pattern === 'string' && (baseName + hideExt) === pattern) {
+                                // Redirect to the directory (with trailing slash)
+                                redirectPath = redirectPath.slice(0, redirectPath.length - baseName.length);
+                                break;
+                            }
+                        }
+                    }
+
+                    // Preserve query string
+                    const redirectUrl = redirectPath + (originalUrlObj.search || '');
+
+                    ctx.status = hideRedirect;
+                    ctx.redirect(redirectUrl);
+                    return;
+                }
+
+                // Check if URL has no extension → try adding the configured extension
+                // Skip if original URL had trailing slash (trailing slash = directory intent)
+                const extOfRequested = path.extname(requestedPath);
+                if (!extOfRequested && requestedPath !== '' && !requestedPath.endsWith('/') && !hadTrailingSlash) {
+                    const pathWithExt = fullPath + hideExt;
+
+                    // Security check: ensure resolved path is still within rootDir (boundary-aware)
+                    if (_isWithinRoot(pathWithExt, normalizedRootDir)) {
+                        try {
+                            const statWithExt = await fs.promises.stat(pathWithExt);
+                            if (statWithExt.isFile()) {
+                                // File with extension exists, serve it
+                                toOpen = pathWithExt;
+                            }
+                        } catch {
+                            // File with extension doesn't exist, continue normal flow
+                        }
+                    }
+                }
+            }
+
+            // Check if path exists
+            let stat;
+            try {
+                stat = await fs.promises.stat(toOpen);
+            } catch {
+                // File/directory doesn't exist or can't be accessed
+                sendNotFound(ctx);
+                return;
+            }
+
+            // Hidden check: block access to the requested file or directory itself
+            if (requestedPath !== '') {
+                const entryName = path.basename(toOpen);
+                const entryRelPath = path.relative(normalizedRootDir, toOpen).split(path.sep).join('/');
+                if (isHiddenEntry(entryName, entryRelPath, stat.isDirectory())) {
                     sendNotFound(ctx);
                     return;
                 }
             }
-        }
 
-        let toOpen = fullPath;
-
-        // hideExtension logic: redirect URLs with extension and resolve clean URLs
-        if (options.hideExtension) {
-            const hideExt = options.hideExtension.ext;
-            const hideRedirect = options.hideExtension.redirect;
-
-            // Trailing slash check via string — avoids a full new URL() construction
-            const rawPath = urlToUse.split('?')[0];
-            const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
-
-            // Strip a trailing slash before the extension check so URLs like /foo.html/
-            // still match (the slash is URL formality, not part of the filename) — without
-            // this, /foo.html/ would skip the redirect and 404 trying to open it as a dir.
-            const pathForExtCheck = hadTrailingSlash ? rawPath.slice(0, -1) : requestedPath;
-            if (pathForExtCheck.endsWith(hideExt)) {
-                // Build redirect target using ctx.originalUrl (always, regardless of useOriginalUrl)
-                const originalUrlObj = new URL(_origin + ctx.originalUrl);
-                let redirectPath = originalUrlObj.pathname;
-
-                // Collapse leading slashes: a Location header starting with "//" (or "/\")
-                // is a protocol-relative URL and would let "GET //evil.com/foo.ejs" redirect
-                // off-origin. path.normalize() upstream already collapses these for the
-                // filesystem check, so the source-of-truth URL has a single leading slash.
-                if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
-                    redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
-                }
-
-                redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
-
-                // Special case: /index.ejs → /, /sezione/index.ejs → /sezione/
-                const baseName = path.basename(redirectPath);
-                // Check if the remaining path points to an index file
-                if (options.index && options.index.length > 0) {
-                    for (const pattern of options.index) {
-                        if (typeof pattern === 'string' && (baseName + hideExt) === pattern) {
-                            // Redirect to the directory (with trailing slash)
-                            redirectPath = redirectPath.slice(0, redirectPath.length - baseName.length);
-                            break;
-                        }
-                    }
-                }
-
-                // Preserve query string
-                const redirectUrl = redirectPath + (originalUrlObj.search || '');
-
-                ctx.status = hideRedirect;
-                ctx.redirect(redirectUrl);
-                return;
-            }
-
-            // Check if URL has no extension → try adding the configured extension
-            // Skip if original URL had trailing slash (trailing slash = directory intent)
-            const extOfRequested = path.extname(requestedPath);
-            if (!extOfRequested && requestedPath !== '' && !requestedPath.endsWith('/') && !hadTrailingSlash) {
-                const pathWithExt = fullPath + hideExt;
-
-                // Security check: ensure resolved path is still within rootDir (boundary-aware)
-                if (_isWithinRoot(pathWithExt, normalizedRootDir)) {
-                    try {
-                        const statWithExt = await fs.promises.stat(pathWithExt);
-                        if (statWithExt.isFile()) {
-                            // File with extension exists, serve it
-                            toOpen = pathWithExt;
-                        }
-                    } catch {
-                        // File with extension doesn't exist, continue normal flow
-                    }
-                }
-            }
-        }
-
-        // Check if path exists
-        let stat;
-        try {
-            stat = await fs.promises.stat(toOpen);
-        } catch {
-            // File/directory doesn't exist or can't be accessed
-            sendNotFound(ctx);
-            return;
-        }
-
-        // Hidden check: block access to the requested file or directory itself
-        if (requestedPath !== '') {
-            const entryName = path.basename(toOpen);
-            const entryRelPath = path.relative(normalizedRootDir, toOpen).split(path.sep).join('/');
-            if (isHiddenEntry(entryName, entryRelPath, stat.isDirectory())) {
+            // Symlink boundary check (V-1): in protected modes reject any requested file
+            // or directory whose realpath escapes rootDir (or, in 'deny' mode, any symlink
+            // resolved below rootDir). The `_symlinkMode !== 'follow'` guard short-circuits
+            // before any await so the default 'follow' mode stays truly zero-overhead.
+            if (_symlinkMode !== 'follow' && !(await symlinkAllowed(toOpen))) {
                 sendNotFound(ctx);
                 return;
             }
-        }
 
-        // Symlink boundary check (V-1): in protected modes reject any requested file
-        // or directory whose realpath escapes rootDir (or, in 'deny' mode, any symlink
-        // resolved below rootDir). The `_symlinkMode !== 'follow'` guard short-circuits
-        // before any await so the default 'follow' mode stays truly zero-overhead.
-        if (_symlinkMode !== 'follow' && !(await symlinkAllowed(toOpen))) {
-            sendNotFound(ctx);
-            return;
-        }
-
-        if (stat.isDirectory()) {
-            // Handle directory
-            if (options.dirListing.enabled) {
-                // Search for index file matching configured patterns
-                if (options.index && options.index.length > 0) {
-                    const indexFile = await findIndexFile(toOpen, options.index);
-                    if (indexFile) {
-                        const indexRelPath = path.relative(normalizedRootDir, path.join(toOpen, indexFile.name)).split(path.sep).join('/');
-                        if (!isHiddenEntry(indexFile.name, indexRelPath, false)) {
-                            const indexPath = path.join(toOpen, indexFile.name);
-                            // Symlink boundary check (V-1): an index file may itself be a
-                            // symlink escaping rootDir — validate before serving it.
-                            // Guarded so the default 'follow' mode skips the await entirely.
-                            if (_symlinkMode !== 'follow' && !(await symlinkAllowed(indexPath))) {
-                                sendNotFound(ctx);
+            if (stat.isDirectory()) {
+                // Handle directory
+                if (options.dirListing.enabled) {
+                    // Search for index file matching configured patterns
+                    if (options.index && options.index.length > 0) {
+                        const indexFile = await findIndexFile(toOpen, options.index);
+                        if (indexFile) {
+                            const indexRelPath = path.relative(normalizedRootDir, path.join(toOpen, indexFile.name)).split(path.sep).join('/');
+                            if (!isHiddenEntry(indexFile.name, indexRelPath, false)) {
+                                const indexPath = path.join(toOpen, indexFile.name);
+                                // Symlink boundary check (V-1): an index file may itself be a
+                                // symlink escaping rootDir — validate before serving it.
+                                // Guarded so the default 'follow' mode skips the await entirely.
+                                if (_symlinkMode !== 'follow' && !(await symlinkAllowed(indexPath))) {
+                                    sendNotFound(ctx);
+                                    return;
+                                }
+                                await loadFile(indexPath, indexFile.stat);
                                 return;
                             }
-                            await loadFile(indexPath, indexFile.stat);
-                            return;
                         }
                     }
-                }
 
-                // No index file found, show directory listing
-                ctx.body = await show_dir(toOpen, ctx);
+                    // No index file found, show directory listing
+                    ctx.body = await show_dir(toOpen, ctx);
+                } else {
+                    // Directory listing disabled
+                    sendNotFound(ctx);
+                }
+                return;
             } else {
-                // Directory listing disabled
-                sendNotFound(ctx);
+                await loadFile(toOpen, stat);
+                return;
             }
-            return;
-        } else {
-            await loadFile(toOpen, stat);
-            return;
+        } catch (err) {
+            _logger.error('[koa-classic-server] Unexpected error while serving the request:', err);
+            if (ctx.headerSent || ctx.res.writableEnded) {
+                ctx.res.destroy(); // response already in flight — nothing sane left to send
+                return;
+            }
+            // Scrub representation/caching headers a partially-built response may
+            // have left behind: a stale Content-Encoding would corrupt the error
+            // page, a public Cache-Control could get the 500 cached by proxies.
+            for (const h of ['Content-Encoding', 'Content-Disposition', 'Content-Range', 'Vary', 'ETag', 'Last-Modified', 'Accept-Ranges']) {
+                ctx.remove(h);
+            }
+            ctx.set('Cache-Control', 'no-store');
+            ctx.set('Content-Type', 'text/html; charset=utf-8');
+            setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
+            ctx.status = 500;
+            ctx.body = _INTERNAL_ERROR_HTML;
         }
 
         // Internal functions
@@ -1581,13 +1674,23 @@ module.exports = function koaClassicServer(
                     rawBuffer = cached.buffer;
                 } else {
                     try {
-                        rawBuffer = await fs.promises.readFile(toOpen);
-                        refreshOrInsert(_rawFileCache, toOpen, {
-                            buffer: rawBuffer,
-                            mtime: fileStat.mtime.getTime(),
-                            size: fileStat.size,
-                            insertedAt: Date.now(),
-                        }, cached, staleByAge);
+                        // Single-flight: concurrent misses on the same path share one
+                        // readFile + cache insert; only the leader (the closure below)
+                        // runs, waiters await the same Promise. The key includes the
+                        // stat'd mtime+size so a request that observed a DIFFERENT
+                        // version of the file starts its own job instead of adopting
+                        // bytes that don't match the validators it will emit.
+                        const inflightKey = `${toOpen}:${fileStat.mtime.getTime()}:${fileStat.size}`;
+                        rawBuffer = await singleFlight(_inflightRawReads, inflightKey, async () => {
+                            const buf = await fs.promises.readFile(toOpen);
+                            refreshOrInsert(_rawFileCache, toOpen, {
+                                buffer: buf,
+                                mtime: fileStat.mtime.getTime(),
+                                size: fileStat.size,
+                                insertedAt: Date.now(),
+                            }, cached, staleByAge);
+                            return buf;
+                        });
                     } catch {
                         rawBuffer = null; // Fall through to disk reads later
                     }
@@ -1665,8 +1768,9 @@ module.exports = function koaClassicServer(
 
                         if (ctx.method !== 'HEAD') {
                             if (rawBuffer) {
-                                // Serve range slice from in-memory buffer — zero disk I/O
-                                ctx.body = rawBuffer.slice(start, end + 1);
+                                // Serve range slice from in-memory buffer — zero disk I/O.
+                                // subarray(): zero-copy view; Buffer.slice is deprecated (DEP0158).
+                                ctx.body = rawBuffer.subarray(start, end + 1);
                             } else {
                                 const src = fs.createReadStream(toOpen, { start, end });
                                 src.on('error', (err) => {
@@ -1723,11 +1827,16 @@ module.exports = function koaClassicServer(
                     return;
                 }
 
-                // Check If-Modified-Since (date validation)
+                // Check If-Modified-Since (date validation). The mtime is truncated
+                // to whole seconds before comparing: Last-Modified is emitted via
+                // toUTCString() (second precision — HTTP dates have no milliseconds),
+                // so a client echoing that header back would otherwise never match a
+                // sub-second mtime (e.g. 22:13:20.500 <= 22:13:20.000 → always 200).
                 const clientModifiedSince = ctx.get('If-Modified-Since');
                 if (clientModifiedSince) {
                     const clientDate = new Date(clientModifiedSince);
-                    if (fileStat.mtime.getTime() <= clientDate.getTime()) {
+                    const mtimeSeconds = Math.floor(fileStat.mtime.getTime() / 1000) * 1000;
+                    if (mtimeSeconds <= clientDate.getTime()) {
                         ctx.status = 304;
                         return;
                     }
@@ -1743,7 +1852,14 @@ module.exports = function koaClassicServer(
                 ctx.set('Content-Encoding', encoding);
                 ctx.set('Vary', 'Accept-Encoding'); // Required so proxies cache per-encoding
 
-                if (serverCacheConfig.compressedFile.enabled) {
+                // Safety net (#4): the buffered path reads the WHOLE file into RAM and
+                // compresses at max quality — fine for web assets, catastrophic for a
+                // multi-GB log/CSV. Above compression.maxFileSize the bounded-RAM
+                // streaming mode below is used instead (still compressed, not cached).
+                const withinCompressCap = compressionConfig.maxFileSize === false
+                    || fileStat.size <= compressionConfig.maxFileSize;
+
+                if (serverCacheConfig.compressedFile.enabled && withinCompressCap) {
                     // compressedFile cache mode: compress once → buffer in RAM → Content-Length known
                     const cacheKey = `${toOpen}:${encoding}`;
                     const cached = _compressedFileCache.peek(cacheKey);
@@ -1760,16 +1876,26 @@ module.exports = function koaClassicServer(
                         buf = cached.buffer; // Serve from cache
                     } else {
                         try {
-                            // Use rawFile buffer if available — avoids redundant disk read
-                            const rawData = rawBuffer || await fs.promises.readFile(toOpen);
-                            buf = await compressBuffer(rawData, encoding);
-
-                            refreshOrInsert(_compressedFileCache, cacheKey, {
-                                buffer: buf,
-                                mtime: fileStat.mtime.getTime(),
-                                size: fileStat.size,
-                                insertedAt: Date.now(),
-                            }, cached, staleByAge);
+                            // Single-flight: concurrent misses on the same path+encoding
+                            // share one read+compress+insert instead of N parallel brotli
+                            // jobs for identical content. A rejection is shared too: all
+                            // waiters land in this catch and use the uncompressed fallback.
+                            // The key includes the stat'd mtime+size so a request that
+                            // observed a DIFFERENT version of the file starts its own job
+                            // (its ETag/Last-Modified must describe the bytes it serves).
+                            const inflightKey = `${cacheKey}:${fileStat.mtime.getTime()}:${fileStat.size}`;
+                            buf = await singleFlight(_inflightCompressions, inflightKey, async () => {
+                                // Use rawFile buffer if available — avoids redundant disk read
+                                const rawData = rawBuffer || await fs.promises.readFile(toOpen);
+                                const compressed = await compressBuffer(rawData, encoding);
+                                refreshOrInsert(_compressedFileCache, cacheKey, {
+                                    buffer: compressed,
+                                    mtime: fileStat.mtime.getTime(),
+                                    size: fileStat.size,
+                                    insertedAt: Date.now(),
+                                }, cached, staleByAge);
+                                return compressed;
+                            });
                         } catch (err) {
                             _logger.error('Compression error:', err);
                             // Fall back to uncompressed on any compression failure
@@ -1816,20 +1942,28 @@ module.exports = function koaClassicServer(
                         const compress = encoding === 'br'
                             ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
                             : zlib.createGzip({ level: 6 });
-                        if (rawBuffer) {
-                            // Compress from in-memory buffer — no disk I/O
-                            const src = Readable.from(rawBuffer);
-                            ctx.body = src.pipe(compress);
-                        } else {
-                            const src = fs.createReadStream(toOpen);
-                            src.on('error', (err) => {
-                                _logger.error('Stream error:', err);
-                                if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
-                            });
-                            ctx.body = src.pipe(compress);
-                        }
+                        const src = rawBuffer
+                            ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
+                            : fs.createReadStream(toOpen);
+                        // pipeline (NOT pipe): teardown propagates in BOTH directions.
+                        // When the client disconnects mid-transfer, Koa destroys the body
+                        // (`compress`) and pipeline destroys `src` too, closing its file
+                        // descriptor. A bare src.pipe(compress) leaves the ReadStream
+                        // paused with the fd open forever — fd leak under aborted
+                        // downloads. Client disconnects are a normal event and are not
+                        // logged (avoids client-driven log spam).
+                        ctx.body = pipeline(src, compress, (err) => {
+                            if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
+                            _logger.error('Stream error:', err);
+                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                        });
+                    } else {
+                        // HEAD: mirror the GET status and headers (RFC 9110 §9.3.2) — no
+                        // Content-Length, since the compressed size is unknown without
+                        // running the compression. The explicit status is required: with
+                        // no body ever assigned, Koa would otherwise respond its default 404.
+                        ctx.status = 200;
                     }
-                    // HEAD + streaming: no Content-Length available; Koa sends headers only via res.end()
                 }
 
             } else {

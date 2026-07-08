@@ -5,6 +5,63 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🛡️ Robustness — error containment (last-resort catch + hideExtension URL guard)
+- **Last-resort catch** (`docs/revisione_codice_v3.1.md` #18): an unexpected failure on any unguarded path used to leak to Koa's default handler — a plain-text 500 without the middleware's security headers, logged outside the operator's `logger` (invisible to pino/winston). The whole "owned request" section (after the method/prefix/urlsReserved pass-throughs, which return early) is now wrapped: unexpected errors are logged via `logger.error` and answered with a prebuilt 500 page carrying the generated-page security headers; if headers already went out, the socket is destroyed (same pattern as template errors). Downstream middleware errors are NOT masked — no `next()` call sits inside the net.
+- **hideExtension URL guard** (#19): the redirect branch rebuilds `new URL(origin + ctx.originalUrl)`; with `useOriginalUrl: false` the URL prologue validates the rewritten `ctx.url`, not `originalUrl`, so a malformed `originalUrl` (e.g. an absolute-form request target, legal in HTTP/1.1) made the constructor throw. Now it returns **400 Bad Request**, consistent with every other malformed-client-input guard.
+- **Tests**: `__tests__/error-containment.test.js` (5 tests: middleware 500 page + logger on unexpected throw, downstream errors untouched, normal serving unaffected, absolute-form target → 400, clean-URL redirect intact). Both regression tests verified to fail against the pre-fix code.
+
+### 🏗️ Infrastructure — CI on every push and pull request
+- New `.github/workflows/ci.yml`: full test suite (performance excluded) on **Node 18 / 20 / 22 / 24 on Linux, Node 22 / 24 on Windows, and Node 20 / 22 / 24 on macOS**, for every push to `main` and every PR. Previously tests only ran at release-publish time, on a single Node/OS. All legs are blocking (Windows and macOS were each rolled out informational for one green run, then promoted).
+- **macOS coverage** exercises the `darwin` half of the case-insensitive-FS boundary logic (only `win32` hit it before) and runs the symlink-policy suites natively (Windows skips them for lack of privileges). Node 18 is excluded on macOS (covered on Linux).
+- **Windows / Node 18 & 20 excluded by design**: the middleware itself passes on Windows (the Node 22/24 Windows legs are green), but on Node 18/20 the *test-suite teardown* (`fs.rmSync(dir, { recursive: true })` in afterEach/afterAll) flakes with EPERM/ENOTEMPTY — a lingering served-file handle that Node 22+ releases in time and 18/20 do not. It's an old-Node-on-Windows teardown quirk, not a product bug. Node 18/20 stay fully covered on Linux; Windows is covered on the two current stable Node lines.
+- **Lint** runs in a dedicated job (once, on Node 22): eslint 10 requires Node >=20.19, so it cannot run inside the Node 18 leg — and linting the same code many times would be wasted work anyway. `npm test` locally still lints via the existing `pretest` hook.
+- **Performance tests** (timing assertions, flaky on shared runners) run in a separate non-blocking job on ubuntu/Node 22; still available locally via `npm run test:performance`.
+- **Nix job** (informational): runs the suite with a Nix-store-provided Node on ubuntu, approximating NixOS environments — consistent with the project's DT_UNKNOWN / `buildFHSEnv` support.
+- `workflow_dispatch` trigger for manual runs (also needed because pushes made by bot/app integrations do not fire push/pull_request workflow events).
+- New npm script `test:ci` (`jest --testPathIgnorePatterns=performance`).
+
+### 🐛 Bug Fix — `If-Modified-Since` never produced 304 for sub-second mtimes
+- **Issue** (`docs/revisione_codice_v3.1.md` #2): `Last-Modified` is emitted with second precision (`toUTCString()` — HTTP dates have no milliseconds), but the `If-Modified-Since` comparison used the raw millisecond mtime. A client echoing the received header back (standard behavior: `curl -z`, wget, proxies, minimal HTTP clients) never matched a sub-second mtime (`22:13:20.500 <= 22:13:20.000` → false) and always got a full 200. Browsers were unaffected only because they also send `If-None-Match` (checked first).
+- **Fix**: the mtime is truncated to whole seconds before the comparison, matching the precision of the emitted header.
+- **Tests**: `caching-headers.test.js` — new describe reusing the real `Last-Modified` of the previous response on a file whose mtime has a `.500` ms component (`fs.utimesSync`); verified to fail against the pre-fix code.
+
+### 🧹 Chore — `Buffer.slice()` → `Buffer.subarray()` (register #15)
+- The Range/206 in-memory path used the deprecated `Buffer.prototype.slice` (DEP0158); replaced with `subarray()` — identical zero-copy semantics.
+
+### 🛡️ Robustness — fd leak in streaming compression on client disconnect
+- **Issue** (`docs/revisione_codice_v3.1.md` #17, from the 2026-07 robustness analysis B1): the streaming compression path built the response with `src.pipe(compress)`. On client disconnect Koa destroys the body (the zlib transform), but `pipe()` does not propagate destruction back to the source: the `fs.ReadStream` stayed paused with its file descriptor open forever (ReadStreams close their fd only on `end`/`error`, and raw fds have no GC finalizer). Every aborted download of a large file leaked one fd → eventual `EMFILE`. Reachable with the default config for compressible files above `compression.maxFileSize`.
+- **Fix**: `stream.pipeline(src, compress, cb)` — teardown propagates in both directions, so the ReadStream is destroyed (fd closed) as soon as the client goes away. Client disconnects (`ERR_STREAM_PREMATURE_CLOSE`) are ignored silently (normal event; avoids client-driven log spam); real read errors keep the previous behavior (log + 500 when headers not yet sent). Applied to both streaming variants (disk-backed and in-memory).
+- **Tests**: `__tests__/streaming-abort.test.js` (client abort mid-download → source stream destroyed; normal completion unaffected). Verified the abort test fails against the pre-fix code.
+
+### 🐛 Bug Fix — HEAD returned 404 on the streaming compression path
+- **Issue** (found by the internal code review of the two robustness fixes below): the streaming compression branch never assigns a body or a status for HEAD requests, so Koa's default **404** leaked — with stray `Content-Encoding`/`Vary` headers. The path was pre-existing (reachable with `serverCache.compressedFile.enabled: false`), but the new `compression.maxFileSize` gate made it reachable with the DEFAULT config: `HEAD` on a compressible file above the cap returned 404 while `GET` returned 200, violating RFC 9110 §9.3.2.
+- **Fix**: the streaming branch sets `ctx.status = 200` explicitly for HEAD (no `Content-Length`, since the compressed size is unknown without running the compression) — mirroring GET's status and headers.
+- **Other review outcomes applied**:
+  - `LFUCache.set()` now emits a **throttled warning** when an entry exceeds the whole cache's `maxSize` instead of silently never caching it (operators keep the sizing signal the old eviction loop provided); shared `_warnThrottled()` helper.
+  - Removed the now-dead post-eviction size guard in `LFUCache.set()`.
+  - Single-flight in-flight keys now include the stat'd **mtime+size**, so concurrent requests that observed different versions of a file never share a job (each response stays coherent with its own `ETag`/`Last-Modified`).
+  - The template render's `rawBuffer` parameter is now documented as **read-only** (JSDoc + template-engine guide): it is the same Buffer instance shared with the server cache and concurrent requests.
+  - CLAUDE.md safety-net table updated with the `compression.maxFileSize` row; register finding #7 extended with the encoding-suffixed-ETag-on-fallback case to cover in the same fix.
+- **Tests**: HEAD-mirrors-GET on both streaming paths + oversized-entry warning (3 new tests).
+
+### 🛡️ Robustness — `compression.maxFileSize` cap + LFU eviction fix
+- **Issue** (`docs/revisione_codice_v3.1.md` #4): with the default config, a compressible file of ANY size was read whole into RAM and brotli-Q11-compressed on first request (multi-GB text file → RAM allocation equal to the file + heavy CPU). Aggravating: when the compressed buffer exceeded the cache's `maxSize`, `LFUCache.set()` flushed the ENTIRE cache in its eviction loop before discovering the entry could never fit — repeatable CPU/RAM DoS that also destroyed every other cached file.
+- **Fix**:
+  - New option `compression.maxFileSize` (default **10 MB**, `false` = no cap): files above the cap are STILL compressed, but through the existing bounded-RAM streaming mode (brotli Q4 / gzip 6, no `Content-Length`, not cached) instead of the buffered+cached path. Safety net against process failure modes, not a serving restriction — every file remains downloadable.
+  - `LFUCache.set()` now returns early when the entry is larger than the whole cache, BEFORE the eviction loop — an entry that can never fit no longer evicts everyone else.
+- **Behavior change (default)**: compressible files larger than 10 MB switch from buffered brotli Q11 (unbounded RAM) to streamed compression. Operators can restore the old behavior with `compression: { maxFileSize: false }`.
+- **Docs**: option documented in the `index.cjs` defaults JSDoc block and in `SECURITY_HARDENING.md` §3.10.
+- **Tests**: `__tests__/compression-max-file-size.test.js` (10 tests: buffered vs streaming paths, `false` cap, invalid-value fallback, LFU flush regression).
+
+### 🛡️ Robustness — single-flight cache population (thundering herd)
+- **Issue** (`docs/revisione_codice_v3.1.md` #5): N concurrent requests for a file not yet cached ran N `readFile()` + N brotli/gzip compressions in parallel for identical content; only the last `set()` "won". On a cold cache (deploy, restart) the CPU/RAM peak multiplied by the number of concurrent requests.
+- **Fix**: in-flight job maps (`key → Promise`) for both server caches. The first request (the leader) performs the read (+ compression) and the cache insert; concurrent requests await the same Promise. A rejection is shared as well — all waiters fall back together to the existing uncompressed-stream path — and the entry is removed on settlement, so the next request after a failure retries from scratch. Keys: `path` (rawFile), `path:encoding` (compressedFile — br and gzip stay independent jobs).
+- **No API change**; zero overhead on cache hits (the single-flight path is only reached on a cache miss).
+- **Code** (`index.cjs`): module-level `singleFlight()` helper; per-factory `_inflightRawReads` / `_inflightCompressions` maps; both cache-population sites wrapped.
+- **Tests**: `__tests__/single-flight.test.js` (5 tests: concurrent dedup on both caches, per-encoding key granularity, shared failure + retry after cleanup).
+
 ## [3.1.0] - 2026-07-02
 
 ### 🔒 Security — new `symlinks` policy (opt-in protection against symlink escape)

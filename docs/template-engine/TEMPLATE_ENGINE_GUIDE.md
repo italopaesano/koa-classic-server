@@ -91,13 +91,19 @@ Funzione async che riceve il file da renderizzare e imposta il corpo della rispo
 
 **Signature:**
 ```javascript
-async function render(ctx, next, filePath) { }
+async function render(ctx, next, filePath, rawBuffer, signal) { }
 ```
 
 **Parametri:**
 - `ctx`: Contesto Koa completo con request, response, state, etc.
 - `next`: Middleware successivo (raramente utilizzato)
 - `filePath`: Path assoluto del file template da renderizzare
+- `rawBuffer`: Buffer del file già letto da disco, se disponibile (altrimenti `null` —
+  in quel caso leggi il file da `filePath`). ⚠️ **Read-only**: è la STESSA istanza
+  condivisa con la cache del server e con le richieste concorrenti; non mutarlo mai
+  in-place (corromperebbe le risposte delle altre richieste e la copia in cache).
+- `signal`: `AbortSignal` che scatta al timeout di render o alla disconnessione del
+  client — propagalo a fetch/db/fs per liberare le risorse a valle.
 
 **Responsabilità:**
 - Leggere/processare il file template

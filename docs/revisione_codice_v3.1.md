@@ -17,12 +17,15 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 ### Bug confermati (riprodotti con test)
 - [x] [1. Default di `index` documentato erroneamente](#1-default-di-index-documentato-erroneamente) — **RISOLTO** (documentazione allineata al default `[]`)
-- [ ] [2. `If-Modified-Since` non produce mai 304 con mtime sub-secondo](#2-if-modified-since-non-produce-mai-304-con-mtime-sub-secondo)
+- [x] [2. `If-Modified-Since` non produce mai 304 con mtime sub-secondo](#2-if-modified-since-non-produce-mai-304-con-mtime-sub-secondo) — **RISOLTO** (mtime troncato al secondo nel confronto)
 - [ ] [3. Manca il redirect canonico `/dir` → `/dir/`](#3-manca-il-redirect-canonico-dir--dir)
 
 ### Robustezza / DoS
-- [ ] [4. Compressione: buffering illimitato in RAM + flush della cache LFU](#4-compressione-buffering-illimitato-in-ram--flush-della-cache-lfu)
-- [ ] [5. Nessuna deduplicazione delle richieste concorrenti (thundering herd)](#5-nessuna-deduplicazione-delle-richieste-concorrenti-thundering-herd)
+- [x] [4. Compressione: buffering illimitato in RAM + flush della cache LFU](#4-compressione-buffering-illimitato-in-ram--flush-della-cache-lfu) — **RISOLTO** (`compression.maxFileSize` 10 MB + early-return in `LFUCache.set()`)
+- [x] [5. Nessuna deduplicazione delle richieste concorrenti (thundering herd)](#5-nessuna-deduplicazione-delle-richieste-concorrenti-thundering-herd) — **RISOLTO** (single-flight su entrambe le cache)
+- [x] [17. Leak di file descriptor nello streaming compresso su disconnessione del client](#17-leak-di-file-descriptor-nello-streaming-compresso-su-disconnessione-del-client) — **RISOLTO** (`stream.pipeline`; voce B1 dell'analisi 2026-07-07)
+- [x] [18. Nessun catch di ultima istanza nel middleware](#18-nessun-catch-di-ultima-istanza-nel-middleware) — **RISOLTO** (try/catch sulla sezione "owned request"; voce B3 dell'analisi)
+- [x] [19. `new URL()` non protetto nel ramo hideExtension](#19-new-url-non-protetto-nel-ramo-hideextension) — **RISOLTO** (400 come gli altri guard; voce B2 dell'analisi)
 
 ### Conformità HTTP
 - [ ] [6. `getClientEncoding` ignora i q-value di Accept-Encoding](#6-getclientencoding-ignora-i-q-value-di-accept-encoding)
@@ -38,7 +41,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ### Minori / cosmetici
 - [ ] [13. Link "Parent Directory" alla radice di `urlPrefix` esce dal prefix](#13-link-parent-directory-alla-radice-di-urlprefix-esce-dal-prefix)
 - [ ] [14. `hideExtension`: incoerenza decoded/raw nel check dell'estensione](#14-hideextension-incoerenza-decodedraw-nel-check-dellestensione)
-- [ ] [15. `Buffer.slice()` deprecato](#15-bufferslice-deprecato)
+- [x] [15. `Buffer.slice()` deprecato](#15-bufferslice-deprecato) — **RISOLTO** (`subarray()`)
 - [ ] [16. Riga "empty folder" assente se tutte le entry sono nascoste](#16-riga-empty-folder-assente-se-tutte-le-entry-sono-nascoste)
 
 ---
@@ -63,6 +66,12 @@ limitation obsoleta, aggiornata la nota in `INDEX_OPTION_PRIORITY.md`).
 ---
 
 ### 2. `If-Modified-Since` non produce mai 304 con mtime sub-secondo
+
+**Stato: ✅ RISOLTO** (2026-07-07 — mtime troncato al secondo prima del confronto, come
+da fix proposto. Test: `__tests__/caching-headers.test.js`, describe "If-Modified-Since
+with sub-second mtime" — riusa l'header `Last-Modified` reale della risposta precedente
+su un file con mtime a .500 ms via `fs.utimesSync`; verificato che il test fallisce sul
+codice pre-fix.)
 
 **Posizione:** `index.cjs:1727` (blocco `If-Modified-Since` dentro `loadFile`).
 
@@ -135,6 +144,14 @@ restrizione, coerente con la design philosophy).
 
 ### 4. Compressione: buffering illimitato in RAM + flush della cache LFU
 
+**Stato: ✅ RISOLTO** (2026-07-07 — nuova opzione `compression.maxFileSize`, default
+10 MB, `false` = nessun tetto: sopra soglia il file viene comunque compresso ma via la
+modalità streaming RAM-bounded esistente (niente buffer intero, niente cache). In
+`LFUCache.set()` aggiunto l'early-return per entry più grandi dell'intera cache, PRIMA
+del loop di eviction: un'entry che non entrerà mai non svuota più le entry altrui.
+Documentato nel blocco JSDoc dei default e in `SECURITY_HARDENING.md` §3.10. Test:
+`__tests__/compression-max-file-size.test.js`, 10 test.)
+
 **Posizione:** `index.cjs:1761` (`const rawData = rawBuffer || await fs.promises.readFile(toOpen)`)
 e `index.cjs:423-426` (`LFUCache.set`).
 
@@ -171,6 +188,14 @@ Non è tracciato in `docs/security_improvement_for_V3.md` (che rimanda a questa 
 
 ### 5. Nessuna deduplicazione delle richieste concorrenti (thundering herd)
 
+**Stato: ✅ RISOLTO** (2026-07-07 — helper `singleFlight()` a livello modulo + due mappe
+in-flight per factory (`_inflightRawReads`, `_inflightCompressions`, chiavi `path` e
+`path:encoding`). Il leader esegue lettura (+compressione) e inserimento in cache; i
+waiter attendono la stessa Promise. L'errore è condiviso: tutti i waiter cadono insieme
+nel fallback non compresso esistente, e l'entry in-flight viene rimossa alla
+risoluzione così la richiesta successiva ritenta da zero. Test:
+`__tests__/single-flight.test.js`, 5 test.)
+
 **Posizione:** `index.cjs:1743-1799` (popolamento `compressedFile` cache) e
 `index.cjs:1568-1592` (popolamento `rawFile` cache).
 
@@ -184,6 +209,69 @@ lettura+compressione, le successive attendono la stessa Promise (pattern "single
 Rimuovere l'entry dalla mappa in `finally`.
 
 **Priorità:** Media (mitigato di fatto dal fix della voce 4; da implementare insieme).
+
+---
+
+### 17. Leak di file descriptor nello streaming compresso su disconnessione del client
+
+**Stato: ✅ RISOLTO** (2026-07-07 — `src.pipe(compress)` sostituito con
+`stream.pipeline(src, compress, cb)`, che propaga il teardown in entrambe le direzioni;
+`ERR_STREAM_PREMATURE_CLOSE` ignorato in silenzio (evento normale, niente log-spam
+pilotabile dal client); errori di lettura veri: log + 500 se gli header non sono partiti,
+come prima. Test: `__tests__/streaming-abort.test.js` — verificato che senza il fix il
+test di abort fallisce.)
+
+**Origine:** voce **B1** di `docs/analisi_robustezza_v3.1.md` (analisi 2026-07-07),
+aggiunta al registro come da prassi.
+
+**Posizione:** ramo streaming della compressione (`ctx.body = src.pipe(compress)`).
+
+**Problema:** con la cache compressa disabilitata — o, dopo la voce 4, con file oltre
+`compression.maxFileSize` anche in config di default — la risposta compressa era
+costruita con `pipe()`. Alla disconnessione del client Koa distrugge il body (il
+transform zlib), ma `pipe()` non propaga la distruzione alla sorgente: la
+`fs.ReadStream` restava in pausa con il file descriptor aperto per sempre (le ReadStream
+chiudono il fd solo su `end`/`error`, e per un fd grezzo non esiste finalizzatore GC).
+Ogni download interrotto di un file grande = un fd perso → `EMFILE`.
+
+---
+
+### 18. Nessun catch di ultima istanza nel middleware
+
+**Stato: ✅ RISOLTO** (2026-07-08 — try/catch attorno all'intera sezione in cui il
+middleware "possiede" la richiesta: dal termine dei pass-through (method / prefix /
+urlsReserved, che escono prima) fino al dispatch file/directory. Su errore imprevisto:
+log via `_logger.error`, pagina 500 precompilata (`_INTERNAL_ERROR_HTML`) con i security
+header delle pagine generate; se gli header sono già partiti, `ctx.res.destroy()` come
+nel pattern di `sendTemplateError`. Gli errori dei middleware A VALLE non vengono
+mascherati: nessun `next()` è dentro il try (il `next` passato al render template è già
+contenuto dal catch dedicato di `tryRenderTemplate`). Test:
+`__tests__/error-containment.test.js`; verificato che i test falliscono sul codice
+pre-fix.)
+
+**Origine:** voce **B3** di `docs/analisi_robustezza_v3.1.md` (analisi 2026-07-07).
+
+**Problema:** ogni percorso noto era protetto, ma un rejection imprevisto risaliva al
+gestore di default di Koa: 500 text/plain **senza** i security header delle pagine
+generate e **senza** passare dal `_logger` configurato (finiva su `app.on('error')` /
+stderr, invisibile ai logger strutturati dell'operatore).
+
+---
+
+### 19. `new URL()` non protetto nel ramo hideExtension
+
+**Stato: ✅ RISOLTO** (2026-07-08 — try/catch → `sendBadRequest(ctx)` attorno a
+`new URL(_origin + ctx.originalUrl)`, coerente con gli altri guard per input client
+malformato. Test in `__tests__/error-containment.test.js` con request-target in forma
+assoluta e `useOriginalUrl: false`.)
+
+**Origine:** voce **B2** di `docs/analisi_robustezza_v3.1.md` (analisi 2026-07-07).
+
+**Problema:** il prologo del middleware valida l'URL con try/catch (→400), ma con
+`useOriginalUrl: false` valida `ctx.url` (riscritto a monte), mentre il ramo
+hideExtension ricostruiva `new URL(_origin + ctx.originalUrl)` senza guardia: un
+`originalUrl` malformato (es. request-target in forma assoluta `GET http://evil/x.ejs`,
+legale in HTTP/1.1) faceva lanciare il costruttore → errore non gestito invece del 400.
 
 ---
 
@@ -223,6 +311,14 @@ correttamente presenza/assenza e `q=0`.
 **Fix proposto:** impostare `Vary: Accept-Encoding` non appena la risorsa risulta
 *potenzialmente* comprimibile (MIME comprimibile + compressione abilitata), indipendentemente
 dall'esito della negoziazione, e prima del ramo 304.
+
+**Nota aggiunta 2026-07-07 (dalla code review della fase 1):** caso imparentato da
+coprire nello stesso fix — il fallback su errore di compressione (`index.cjs`, catch del
+ramo bufferizzato) serve il contenuto **identity** ma lascia impostato l'ETag con
+suffisso `-gz`/`-br` già emesso e rimuove `Vary`: il validatore non descrive la
+rappresentazione effettivamente servita e un proxy condiviso può cachearla sotto la
+chiave della variante compressa. Nel fix di questa voce, resettare l'ETag alla forma
+senza suffisso (o ri-emetterlo) nel ramo di fallback.
 
 **Priorità:** Media.
 
@@ -357,6 +453,9 @@ rimosso prima del confronto).
 ---
 
 ### 15. `Buffer.slice()` deprecato
+
+**Stato: ✅ RISOLTO** (2026-07-07 — sostituito con `rawBuffer.subarray(start, end + 1)`,
+stessa semantica zero-copy.)
 
 **Posizione:** `index.cjs:1666` (`rawBuffer.slice(start, end + 1)`).
 

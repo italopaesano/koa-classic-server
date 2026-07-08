@@ -56,7 +56,7 @@ spuntata in parallelo); le voci `B*`/`C*` sono definite in questo documento.
 - [x] **B2** try/catch su `new URL()` nel ramo hideExtension — risolto 2026-07-08, registro §19, `__tests__/error-containment.test.js`
 
 ### Fase 3 — Footgun config + correttezza
-- [ ] **#10** Copia di `opts` + errore esplicito su `null`
+- [x] **#10** Copia di `opts` + errore esplicito su `null` — risolto 2026-07-08, `__tests__/options-immutability.test.js`
 - [ ] **#11** Validazione `urlPrefix` / `urlsReserved`
 - [ ] **#3** Redirect canonico `/dir` → `/dir/`
 

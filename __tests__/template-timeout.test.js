@@ -79,10 +79,14 @@ describe('template.renderTimeout', () => {
             })).not.toThrow();
         });
 
-        test('defaults to 30000 when undefined', () => {
+        test('undefined renderTimeout is accepted; the caller object is not mutated', () => {
+            // This used to assert the 30000 default by reading it back from the
+            // CALLER's object — i.e. it asserted the mutation side effect that
+            // review finding #10 removed. The default now lives only in the
+            // middleware's internal copy; the caller's config stays untouched.
             const opts = { template: { ext: ['ejs'], render: () => {} } };
-            koaClassicServer(ROOT, opts);
-            expect(opts.template.renderTimeout).toBe(30000);
+            expect(() => koaClassicServer(ROOT, opts)).not.toThrow();
+            expect(opts.template.renderTimeout).toBeUndefined();
         });
     });
 

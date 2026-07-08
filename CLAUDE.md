@@ -6,7 +6,9 @@ Guidance for AI coding assistants working on **koa-classic-server**.
 
 ## Project orientation
 
-koa-classic-server is a Koa middleware that serves static files from disk over HTTP, with Apache2-like directory listings, optional template-engine integration, and server-side compressed cache. It is a *classic* file server — its primary job is to take an HTTP request and respond with the file at the requested path, or with a directory listing if a directory is requested without an index file.
+koa-classic-server is a Koa middleware that serves static files from disk over HTTP, with classic directory listings, optional template-engine integration, and server-side compressed cache. It is a *classic* file server — its primary job is to take an HTTP request and respond with the file at the requested path, or with a directory listing if a directory is requested without an index file.
+
+The declared positioning (since the earliest versions): behavior **similar, but not identical, to Apache 2**. Apache parity is NOT a goal — never justify a change purely with "Apache does it"; divergence from Apache is acceptable whenever it serves the project. A feature borrowed from Apache must stand on its own merits.
 
 The project is **not** a framework, not a router, not a CMS. It is intentionally focused.
 

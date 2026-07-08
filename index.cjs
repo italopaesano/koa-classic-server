@@ -593,7 +593,7 @@ module.exports = function koaClassicServer(
         index: [], // Index file name(s) - must be an ARRAY.
                    // Default: [] — no index file is looked up; directories always
                    // show the listing (when dirListing.enabled). Configure explicitly
-                   // for the classic Apache-like behavior, e.g. ["index.html"].
+                   // for the classic index-file behavior, e.g. ["index.html"].
                    //   - Array of strings: ["index.html", "index.htm", "default.html"]
                    //   - Array of RegExp:  [/index\.html/i, /default\.(html|htm)/i]
                    //   - Mixed array:      ["index.html", /index\.[eE][jJ][sS]/]

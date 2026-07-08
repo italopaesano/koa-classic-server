@@ -1,6 +1,6 @@
 # koa-classic-server
 
-🚀 **Production-ready Koa middleware** for serving static files with Apache2-like directory listing, sortable columns, pagination, hash-based CSP, template-engine timeouts, injectable logging, and enterprise-grade security.
+🚀 **Production-ready Koa middleware** for serving static files with classic directory listing — **similar, but not identical, to Apache 2** — sortable columns, pagination, hash-based CSP, template-engine timeouts, injectable logging, and enterprise-grade security.
 
 [![npm version](https://img.shields.io/npm/v/koa-classic-server.svg)](https://www.npmjs.com/package/koa-classic-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -23,7 +23,7 @@ The 3.0 series builds on 2.x with new observability hooks, bounded resource usag
 ✅ **Injectable logger** — pass any `{ error, warn, info, debug }`-shaped logger (Pino, Bunyan, Winston, console) for full observability
 ✅ **Hash-based CSP on listing page** — automatic SHA-256 of inline CSS, recomputed at module load
 ✅ **Security headers on generated pages** — `CSP`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy` on listing + error pages
-✅ **Sortable Directory Columns** — Click Name/Type/Size to sort (Apache2-like) with sort/order preserved across paginator links
+✅ **Sortable Directory Columns** — Click Name/Type/Size to sort, with sort/order preserved across paginator links
 ✅ **HTTP Caching** — ETag, Last-Modified, conditional 304 responses (opt-in via `browserCacheEnabled`)
 ✅ **Template Engine Support** — EJS, Pug, Handlebars, Nunjucks, and more — with full async/await, AbortSignal forwarding, and timeout enforcement
 ✅ **Clean URLs** — Hide file extensions via `hideExtension` (mod_rewrite-like)
@@ -36,11 +36,11 @@ The 3.0 series builds on 2.x with new observability hooks, bounded resource usag
 
 ## Features
 
-**koa-classic-server** is a high-performance middleware for serving static files with Apache2-like behavior, making file browsing intuitive, observable, and safe.
+**koa-classic-server** is a high-performance middleware for serving static files as a *classic* file server — aiming, as declared since its earliest versions, for behavior **similar but not identical to Apache 2**. Apache parity is not a goal: divergences are intentional wherever they make the middleware simpler, safer, or more coherent.
 
 ### Core Features
 
-- 🗂️ **Apache2-like Directory Listing** — Sortable columns (Name, Type, Size)
+- 🗂️ **Classic Directory Listing** — Sortable columns (Name, Type, Size)
 - 📄 **Static File Serving** — Automatic MIME type detection with streaming
 - 📊 **Sortable Columns** — Click headers to sort ascending/descending
 - 📏 **File Sizes** — Human-readable display (B, KB, MB, GB, TB)

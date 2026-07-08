@@ -20,7 +20,7 @@
 
 ### Panoramica
 
-**koa-classic-server** è un middleware per Koa.js che emula il comportamento di Apache 2 per la gestione di file statici. Il modulo permette di servire file e directory con funzionalità avanzate di directory listing, supporto per template engine, gestione di URL riservati e configurazione flessibile.
+**koa-classic-server** è un middleware per Koa.js che offre un comportamento da file server *classico*, **simile — ma volutamente non identico — ad Apache 2** (dichiarazione presente fin dalle prime versioni del modulo: la parità con Apache non è un obiettivo, e le divergenze sono ammesse quando servono al progetto). Il modulo permette di servire file e directory con funzionalità avanzate di directory listing, supporto per template engine, gestione di URL riservati e configurazione flessibile.
 
 ### Caratteristiche Principali
 
@@ -289,7 +289,7 @@ dirListing: { enabled: false }
 
 Pattern dei file index da caricare automaticamente quando si accede a una directory. Accetta un array di stringhe e/o RegExp; la priorità segue l'ordine dell'array (il primo match vince).
 
-**Default: `[]`** — nessun file index viene cercato: le directory mostrano sempre il directory listing (se `dirListing.enabled: true`). Per il comportamento classico "Apache-like" l'opzione va configurata esplicitamente.
+**Default: `[]`** — nessun file index viene cercato: le directory mostrano sempre il directory listing (se `dirListing.enabled: true`). Per il comportamento classico con file index l'opzione va configurata esplicitamente.
 
 ```javascript
 // Carica index.html se presente

@@ -124,8 +124,13 @@ pagina "rotta".
 **Riproduzione (verificata):** `GET /sub` → 200, nessun header `Location`, body = index.html.
 
 **Riferimento:** Apache (`mod_dir`, `DirectorySlash On` di default), nginx ed
-`express/serve-static` emettono tutti il 301 con slash aggiunto. È il comportamento
-"Apache-like" dichiarato dal progetto.
+`express/serve-static` emettono tutti il 301 con slash aggiunto.
+
+**Nota del manutentore (2026-07-08):** il progetto è dichiaratamente *simile ma non
+identico* ad Apache 2 — la parità con Apache NON è un requisito. Questo fix va
+giustificato (e lo è) sul merito proprio: senza redirect, i riferimenti **relativi**
+dentro la pagina index si risolvono contro la directory sbagliata e l'utente vede la
+pagina rotta. Il fatto che Apache/nginx facciano lo stesso è contesto, non motivazione.
 
 **Fix proposto:** quando il path risolto è una directory e il path richiesto non termina
 con `/`, rispondere `301` verso lo stesso path + `/`, preservando la query string.

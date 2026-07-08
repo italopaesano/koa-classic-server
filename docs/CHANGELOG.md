@@ -8,9 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### 🏗️ Infrastructure — CI on every push and pull request
-- New `.github/workflows/ci.yml`: full test suite (627 tests, performance excluded) on **Node 18 / 20 / 22 / 24 × ubuntu + windows** for every push to `main` and every PR — everything `engines: >=18` declares, finally exercised. Previously tests only ran at release-publish time, on a single Node/OS.
-- **Lint** runs in a dedicated job (once, on Node 22): eslint 10 requires Node >=20.19, so it cannot run inside the Node 18 leg — and linting the same code 8 times would be wasted work anyway. `npm test` locally still lints via the existing `pretest` hook.
-- **Windows** runs as *informational* (`continue-on-error`) until proven green, then gets promoted to blocking.
+- New `.github/workflows/ci.yml`: full test suite (performance excluded) on **Node 18 / 20 / 22 / 24 on Linux, and Node 22 / 24 on Windows**, for every push to `main` and every PR. Previously tests only ran at release-publish time, on a single Node/OS. All legs are blocking.
+- **Windows / Node 18 & 20 excluded by design**: the middleware itself passes on Windows (the Node 22/24 Windows legs are green), but on Node 18/20 the *test-suite teardown* (`fs.rmSync(dir, { recursive: true })` in afterEach/afterAll) flakes with EPERM/ENOTEMPTY — a lingering served-file handle that Node 22+ releases in time and 18/20 do not. It's an old-Node-on-Windows teardown quirk, not a product bug. Node 18/20 stay fully covered on Linux; Windows is covered on the two current stable Node lines.
+- **Lint** runs in a dedicated job (once, on Node 22): eslint 10 requires Node >=20.19, so it cannot run inside the Node 18 leg — and linting the same code many times would be wasted work anyway. `npm test` locally still lints via the existing `pretest` hook.
 - **Performance tests** (timing assertions, flaky on shared runners) run in a separate non-blocking job on ubuntu/Node 22; still available locally via `npm run test:performance`.
 - **Nix job** (informational): runs the suite with a Nix-store-provided Node on ubuntu, approximating NixOS environments — consistent with the project's DT_UNKNOWN / `buildFHSEnv` support.
 - `workflow_dispatch` trigger for manual runs (also needed because pushes made by bot/app integrations do not fire push/pull_request workflow events).

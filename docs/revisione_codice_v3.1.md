@@ -35,7 +35,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 ### Validazione opzioni / API factory
 - [x] [10. `opts: null` produce un TypeError grezzo; la factory muta l'oggetto del chiamante](#10-opts-null-produce-un-typeerror-grezzo-la-factory-muta-loggetto-del-chiamante) — **RISOLTO** (throw con hint su non-oggetto; shallow copy + copie annidate)
-- [ ] [11. `urlPrefix` con slash finale e `urlsReserved` senza slash iniziale: nessuna validazione](#11-urlprefix-con-slash-finale-e-urlsreserved-senza-slash-iniziale-nessuna-validazione)
+- [x] [11. `urlPrefix` con slash finale e `urlsReserved` senza slash iniziale: nessuna validazione](#11-urlprefix-con-slash-finale-e-urlsreserved-senza-slash-iniziale-nessuna-validazione) — **RISOLTO** (deprecation warning una-tantum, comportamento invariato; throw rimandato alla prossima major)
 - [ ] [12. `browserCacheMaxAge` negativo coerciuto silenziosamente](#12-browsercachemaxage-negativo-coerciuto-silenziosamente)
 
 ### Minori / cosmetici
@@ -402,6 +402,32 @@ che 7/8 falliscono sul codice pre-fix.)
 ---
 
 ### 11. `urlPrefix` con slash finale e `urlsReserved` senza slash iniziale: nessuna validazione
+
+**Stato: ✅ RISOLTO** (2026-07-08 — approccio **deprecation, non breaking**, dopo
+ripensamento del manutentore. Il throw su opzioni **v2-stabili** sarebbe un breaking
+change su un upgrade minore, e — punto decisivo — normalizzare il valore potrebbe
+cambiare in silenzio il comportamento di codice funzionante: un `urlPrefix: '/static/'`
+che oggi "funziona" solo perché cade a un handler a valle, se normalizzato farebbe
+servire kcs stesso, dirottando le richieste. Quindi: **warn una-tantum + comportamento
+runtime invariato**, e throw rimandato alla prossima major.
+
+- Helper `warnConfigDeprecation(logger, msg)` a livello modulo: dedup once-per-process per
+  messaggio (evoluzione del pattern `_showDirContentsDeprecationWarned` a più messaggi); il
+  messaggio finale è già scritto, in v4 basta trasformare l'helper in `throw`.
+- `urlPrefix` slash finale/iniziale → warn, **lasciato com'è** (matcher cade a `next()`
+  come oggi). Non-stringa → warn + coercion a `""` (comportamento già presente).
+- `urlsReserved` entry con slash mancante / multi-segmento / vuota → warn, **lasciata
+  com'è** (non matcha, come oggi). Non-array → warn + coercion a `[]` (già presente).
+- **Unica deviazione voluta** (opzione B concordata): entry **non-stringa** → warn +
+  **scartata**, perché a request time farebbe `value.substring is not a function` → 500 su
+  ogni richiesta (contenuto dal catch B3 ma comunque rotto); scartarla non può rompere
+  codice funzionante. La copia dell'array del chiamante non viene mutata.
+
+JSDoc inline aggiornato. Test: `__tests__/url-prefix-reserved-validation.test.js`,
+10 test (warn + comportamento invariato + no-mutazione + dedup verificato).
+
+**Nota di consistenza:** lo stesso approccio warn-in-3.x / throw-in-v4 va applicato a
+**#12** (`browserCacheMaxAge` negativo), dove il registro già lo prevedeva.)
 
 **Posizione:** `index.cjs:758-760` (`urlPrefix`), `index.cjs:1350-1358` (`urlsReserved`).
 

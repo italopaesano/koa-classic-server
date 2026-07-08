@@ -57,7 +57,7 @@ spuntata in parallelo); le voci `B*`/`C*` sono definite in questo documento.
 
 ### Fase 3 — Footgun config + correttezza
 - [x] **#10** Copia di `opts` + errore esplicito su `null` — risolto 2026-07-08, `__tests__/options-immutability.test.js`
-- [ ] **#11** Validazione `urlPrefix` / `urlsReserved`
+- [x] **#11** Validazione `urlPrefix` / `urlsReserved` — risolto 2026-07-08 (deprecation warn una-tantum + comportamento invariato, throw rimandato a v4; entry non-stringa scartata), `__tests__/url-prefix-reserved-validation.test.js`
 - [ ] **#3** Redirect canonico `/dir` → `/dir/`
 
 ### Fase 4 — Conformità HTTP, minori, processo

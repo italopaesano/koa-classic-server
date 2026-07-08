@@ -193,6 +193,23 @@ function warnPayload(logger, message) {
         : [message];
 }
 
+// Config-deprecation warnings, deduplicated once-per-process (per distinct
+// message) so creating many middleware instances doesn't repeat the same nag —
+// same intent as the _showDirContentsDeprecationWarned flag, generalized to
+// multiple messages. These options (urlPrefix, urlsReserved, ...) are v2-stable,
+// so a malformed value is TOLERATED with a warning for now rather than thrown:
+// throwing on a stable option would be a breaking change on a minor upgrade.
+// The next major will flip `warnConfigDeprecation` into a hard throw (the call
+// sites already carry the final message) — see docs/revisione_codice_v3.1.md #11.
+const _configDeprecationsWarned = new Set();
+function warnConfigDeprecation(logger, message) {
+    if (_configDeprecationsWarned.has(message)) return;
+    _configDeprecationsWarned.add(message);
+    logger.warn(...warnPayload(logger,
+        '[koa-classic-server] DEPRECATION: ' + message +
+        '\n  This is tolerated for now and WILL throw in the next major version.'));
+}
+
 // Sends an error response for a failed template render. If headers were already
 // flushed by the render itself, destroys the underlying socket instead (the
 // status/body can no longer be changed at that point).
@@ -598,8 +615,16 @@ module.exports = function koaClassicServer(
                    //   - Array of RegExp:  [/index\.html/i, /default\.(html|htm)/i]
                    //   - Mixed array:      ["index.html", /index\.[eE][jJ][sS]/]
                    // Priority is determined by array order (first match wins)
-        urlPrefix: "", // URL path prefix
-        urlsReserved: [], // Reserved paths (first level only)
+        urlPrefix: "", // URL path prefix. Should start with "/" and NOT end with "/"
+                       //   (e.g. "/static"); "" disables the prefix. A malformed value
+                       //   is tolerated with a deprecation warning for now (behavior
+                       //   unchanged) and WILL throw in the next major version.
+        urlsReserved: [], // Reserved first-level paths passed through to next().
+                          //   Each entry should be a single first-level path: a leading
+                          //   "/" plus one segment, no further "/" (e.g. "/admin").
+                          //   Malformed entries are tolerated with a deprecation warning
+                          //   for now and WILL throw in the next major version (a
+                          //   non-string entry is dropped to avoid a per-request 500).
         template: {
             render: undefined, // Template rendering function: async (ctx, next, filePath, rawBuffer, signal) => {}
                                // rawBuffer (4th arg, may be null) is READ-ONLY: the same Buffer
@@ -821,9 +846,68 @@ module.exports = function koaClassicServer(
         options.index = [];
     }
 
-    options.urlPrefix = typeof options.urlPrefix === 'string' ? options.urlPrefix : "";
+    // ── urlPrefix / urlsReserved validation (V3.1, deprecation-warn) ──
+    // The request-time matcher depends on an implicit format for both options,
+    // and a malformed value fails SILENTLY: a urlPrefix with a stray
+    // leading/trailing slash makes the middleware serve nothing (it always falls
+    // through to next()), and a urlsReserved entry without a leading slash makes
+    // the reservation never match (the path is served instead of passed on).
+    // Both are v2-stable options, so instead of throwing (a breaking change on a
+    // minor upgrade — a mis-slashed value that "worked" only by falling through
+    // to a downstream handler would suddenly change behavior), we WARN and leave
+    // the runtime behavior exactly as it is today. The next major turns these
+    // warnings into throws. The one exception is a non-string urlsReserved entry:
+    // it would 500 on every request (value.substring is not a function), which is
+    // not working behavior, so it is dropped defensively (still warned).
+    if (options.urlPrefix === undefined) {
+        options.urlPrefix = "";
+    } else if (typeof options.urlPrefix !== 'string') {
+        // Unchanged behavior: pre-existing code already coerced non-string → "".
+        warnConfigDeprecation(_logger,
+            'urlPrefix should be a string like "/static" (or "" for no prefix); got ' +
+            (options.urlPrefix === null ? 'null' : typeof options.urlPrefix) + ' — treating it as "".');
+        options.urlPrefix = "";
+    } else if (options.urlPrefix !== "" && (!options.urlPrefix.startsWith('/') || options.urlPrefix.endsWith('/'))) {
+        // Left as-is: the matcher behaves exactly as today (falls through to
+        // next() under this prefix). Warn only — no behavior change.
+        warnConfigDeprecation(_logger,
+            'urlPrefix should start with "/" and not end with "/" (use "" to disable); got ' +
+            JSON.stringify(options.urlPrefix) + ' — it will not route correctly until corrected.');
+    }
     const _urlPrefixParts = options.urlPrefix.split("/");
-    options.urlsReserved = Array.isArray(options.urlsReserved) ? options.urlsReserved : [];
+
+    if (options.urlsReserved === undefined) {
+        options.urlsReserved = [];
+    } else if (!Array.isArray(options.urlsReserved)) {
+        // Unchanged behavior: pre-existing code already coerced non-array → [].
+        warnConfigDeprecation(_logger,
+            'urlsReserved should be an array of first-level paths like ["/admin"]; got ' +
+            (options.urlsReserved === null ? 'null' : typeof options.urlsReserved) + ' — treating it as [].');
+        options.urlsReserved = [];
+    } else {
+        const cleaned = [];
+        for (const value of options.urlsReserved) {
+            if (typeof value !== 'string') {
+                // Dropped defensively: a non-string entry would throw at match
+                // time (value.substring is not a function) → a 500 on every
+                // request. Dropping it can't break working code.
+                warnConfigDeprecation(_logger,
+                    'urlsReserved entries must be strings like "/admin"; dropping a non-string (' +
+                    (value === null ? 'null' : typeof value) + ') entry.');
+                continue;
+            }
+            // Malformed but non-crashing (missing leading slash, extra segment,
+            // trailing slash, empty): kept as-is so the matcher behaves exactly
+            // as today (it simply won't match). Warn only.
+            if (value === '' || !value.startsWith('/') || value.indexOf('/', 1) !== -1) {
+                warnConfigDeprecation(_logger,
+                    'each urlsReserved entry should be a single first-level path — a leading "/" plus one ' +
+                    'segment, e.g. "/admin"; got ' + JSON.stringify(value) + ' — it will not match until corrected.');
+            }
+            cleaned.push(value);
+        }
+        options.urlsReserved = cleaned;
+    }
     options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
     options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
 

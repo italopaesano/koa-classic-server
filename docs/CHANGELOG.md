@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🛡️ Robustness — error containment (last-resort catch + hideExtension URL guard)
+- **Last-resort catch** (`docs/revisione_codice_v3.1.md` #18): an unexpected failure on any unguarded path used to leak to Koa's default handler — a plain-text 500 without the middleware's security headers, logged outside the operator's `logger` (invisible to pino/winston). The whole "owned request" section (after the method/prefix/urlsReserved pass-throughs, which return early) is now wrapped: unexpected errors are logged via `logger.error` and answered with a prebuilt 500 page carrying the generated-page security headers; if headers already went out, the socket is destroyed (same pattern as template errors). Downstream middleware errors are NOT masked — no `next()` call sits inside the net.
+- **hideExtension URL guard** (#19): the redirect branch rebuilds `new URL(origin + ctx.originalUrl)`; with `useOriginalUrl: false` the URL prologue validates the rewritten `ctx.url`, not `originalUrl`, so a malformed `originalUrl` (e.g. an absolute-form request target, legal in HTTP/1.1) made the constructor throw. Now it returns **400 Bad Request**, consistent with every other malformed-client-input guard.
+- **Tests**: `__tests__/error-containment.test.js` (5 tests: middleware 500 page + logger on unexpected throw, downstream errors untouched, normal serving unaffected, absolute-form target → 400, clean-URL redirect intact). Both regression tests verified to fail against the pre-fix code.
+
 ### 🏗️ Infrastructure — CI on every push and pull request
 - New `.github/workflows/ci.yml`: full test suite (performance excluded) on **Node 18 / 20 / 22 / 24 on Linux, Node 22 / 24 on Windows, and Node 20 / 22 / 24 on macOS**, for every push to `main` and every PR. Previously tests only ran at release-publish time, on a single Node/OS. All legs are blocking (Windows and macOS were each rolled out informational for one green run, then promoted).
 - **macOS coverage** exercises the `darwin` half of the case-insensitive-FS boundary logic (only `win32` hit it before) and runs the symlink-policy suites natively (Windows skips them for lack of privileges). Node 18 is excluded on macOS (covered on Linux).

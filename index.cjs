@@ -151,6 +151,7 @@ function buildErrorHtml(title, heading, message) {
 const _NOT_FOUND_HTML       = buildErrorHtml('URL not found',         'Not Found',             'The requested URL was not found on this server.');
 const _GATEWAY_TIMEOUT_HTML = buildErrorHtml('Gateway Timeout',       'Gateway Timeout',       'The template took too long to render.');
 const _TEMPLATE_ERROR_HTML  = buildErrorHtml('Internal Server Error', 'Internal Server Error', 'Template rendering failed for the requested resource.');
+const _INTERNAL_ERROR_HTML  = buildErrorHtml('Internal Server Error', 'Internal Server Error', 'The server encountered an unexpected condition.');
 
 function sendNotFound(ctx) {
     setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
@@ -1415,194 +1416,223 @@ module.exports = function koaClassicServer(
             }
         }
 
-        // Path traversal protection: build and validate safe file path
-        let requestedPath = "";
-        if (pageHrefOutPrefix.pathname === "/") {
-            requestedPath = "";
-        } else {
-            // decodeURIComponent() throws URIError on malformed percent-encoding
-            // (e.g. "/%", "/%zz", a truncated UTF-8 sequence) — reject as 400
-            // rather than letting it surface as an unhandled 500.
-            try {
-                requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
-            } catch {
+        // From this point on the middleware OWNS the request: every early
+        // pass-through above has already returned, and no next() is called below
+        // (the template render's next goes through tryRenderTemplate's own catch).
+        // Last-resort net: an unexpected failure on any unguarded path must not
+        // leak to Koa's default handler (a plain-text 500 without the middleware's
+        // security headers, logged outside the operator's `logger`). Errors from
+        // downstream middleware are NOT masked — they never reach this try.
+        try {
+            // Path traversal protection: build and validate safe file path
+            let requestedPath = "";
+            if (pageHrefOutPrefix.pathname === "/") {
+                requestedPath = "";
+            } else {
+                // decodeURIComponent() throws URIError on malformed percent-encoding
+                // (e.g. "/%", "/%zz", a truncated UTF-8 sequence) — reject as 400
+                // rather than letting it surface as an unhandled 500.
+                try {
+                    requestedPath = decodeURIComponent(pageHrefOutPrefix.pathname);
+                } catch {
+                    sendBadRequest(ctx);
+                    return;
+                }
+            }
+
+            // Null byte guard: path.normalize() throws ERR_INVALID_ARG_VALUE for paths
+            // containing \0. Reject early with 400 Bad Request before it reaches fs calls.
+            if (requestedPath.includes('\0')) {
                 sendBadRequest(ctx);
                 return;
             }
-        }
 
-        // Null byte guard: path.normalize() throws ERR_INVALID_ARG_VALUE for paths
-        // containing \0. Reject early with 400 Bad Request before it reaches fs calls.
-        if (requestedPath.includes('\0')) {
-            sendBadRequest(ctx);
-            return;
-        }
+            const normalizedPath = path.normalize(requestedPath);
+            const fullPath = path.join(normalizedRootDir, normalizedPath);
 
-        const normalizedPath = path.normalize(requestedPath);
-        const fullPath = path.join(normalizedRootDir, normalizedPath);
+            // Security check: ensure resolved path is within rootDir. Uses the shared
+            // _isWithinRoot() helper, which is boundary-aware: it matches rootDir exactly
+            // or rootDir + path.sep, never a sibling (e.g. /srv/wwwsecret for root /srv/www) —
+            // hardened defense in depth against a future change to how fullPath is built.
+            // Covers: ../ traversal, URL-encoded variants (%2e%2e%2f), and on Windows
+            // backslash sequences (path.normalize converts \ to / before the check).
+            // Returns 404 (not 403) so "outside root" is indistinguishable from "not found",
+            // matching the symlink-escape and hidden-entry outcomes.
+            if (!_isWithinRoot(fullPath, normalizedRootDir)) {
+                sendNotFound(ctx);
+                return;
+            }
 
-        // Security check: ensure resolved path is within rootDir. Uses the shared
-        // _isWithinRoot() helper, which is boundary-aware: it matches rootDir exactly
-        // or rootDir + path.sep, never a sibling (e.g. /srv/wwwsecret for root /srv/www) —
-        // hardened defense in depth against a future change to how fullPath is built.
-        // Covers: ../ traversal, URL-encoded variants (%2e%2e%2f), and on Windows
-        // backslash sequences (path.normalize converts \ to / before the check).
-        // Returns 404 (not 403) so "outside root" is indistinguishable from "not found",
-        // matching the symlink-escape and hidden-entry outcomes.
-        if (!_isWithinRoot(fullPath, normalizedRootDir)) {
-            sendNotFound(ctx);
-            return;
-        }
+            // Hidden check: block requests that traverse a hidden directory.
+            // Stops at length-1 because the leaf (the file or dir being served) is
+            // checked separately by the file/listing path with its real stat.isDirectory().
+            if (requestedPath !== '') {
+                const segments = normalizedPath.split(path.sep).filter(Boolean);
+                for (let i = 0; i < segments.length - 1; i++) {
+                    const segName = segments[i];
+                    const segRelPath = segments.slice(0, i + 1).join('/');
+                    if (isHiddenEntry(segName, segRelPath, true)) {
+                        sendNotFound(ctx);
+                        return;
+                    }
+                }
+            }
 
-        // Hidden check: block requests that traverse a hidden directory.
-        // Stops at length-1 because the leaf (the file or dir being served) is
-        // checked separately by the file/listing path with its real stat.isDirectory().
-        if (requestedPath !== '') {
-            const segments = normalizedPath.split(path.sep).filter(Boolean);
-            for (let i = 0; i < segments.length - 1; i++) {
-                const segName = segments[i];
-                const segRelPath = segments.slice(0, i + 1).join('/');
-                if (isHiddenEntry(segName, segRelPath, true)) {
+            let toOpen = fullPath;
+
+            // hideExtension logic: redirect URLs with extension and resolve clean URLs
+            if (options.hideExtension) {
+                const hideExt = options.hideExtension.ext;
+                const hideRedirect = options.hideExtension.redirect;
+
+                // Trailing slash check via string — avoids a full new URL() construction
+                const rawPath = urlToUse.split('?')[0];
+                const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
+
+                // Strip a trailing slash before the extension check so URLs like /foo.html/
+                // still match (the slash is URL formality, not part of the filename) — without
+                // this, /foo.html/ would skip the redirect and 404 trying to open it as a dir.
+                const pathForExtCheck = hadTrailingSlash ? rawPath.slice(0, -1) : requestedPath;
+                if (pathForExtCheck.endsWith(hideExt)) {
+                    // Build redirect target using ctx.originalUrl (always, regardless of
+                    // useOriginalUrl). With useOriginalUrl: false the URL-parsing prologue
+                    // validated ctx.url (the rewritten one), NOT originalUrl — a malformed
+                    // originalUrl (e.g. an absolute-form request target, legal in HTTP/1.1)
+                    // makes this constructor throw. Same treatment as the other malformed
+                    // client input: 400 Bad Request, not an unhandled error.
+                    let originalUrlObj;
+                    try {
+                        originalUrlObj = new URL(_origin + ctx.originalUrl);
+                    } catch {
+                        sendBadRequest(ctx);
+                        return;
+                    }
+                    let redirectPath = originalUrlObj.pathname;
+
+                    // Collapse leading slashes: a Location header starting with "//" (or "/\")
+                    // is a protocol-relative URL and would let "GET //evil.com/foo.ejs" redirect
+                    // off-origin. path.normalize() upstream already collapses these for the
+                    // filesystem check, so the source-of-truth URL has a single leading slash.
+                    if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
+                        redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
+                    }
+
+                    redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
+
+                    // Special case: /index.ejs → /, /sezione/index.ejs → /sezione/
+                    const baseName = path.basename(redirectPath);
+                    // Check if the remaining path points to an index file
+                    if (options.index && options.index.length > 0) {
+                        for (const pattern of options.index) {
+                            if (typeof pattern === 'string' && (baseName + hideExt) === pattern) {
+                                // Redirect to the directory (with trailing slash)
+                                redirectPath = redirectPath.slice(0, redirectPath.length - baseName.length);
+                                break;
+                            }
+                        }
+                    }
+
+                    // Preserve query string
+                    const redirectUrl = redirectPath + (originalUrlObj.search || '');
+
+                    ctx.status = hideRedirect;
+                    ctx.redirect(redirectUrl);
+                    return;
+                }
+
+                // Check if URL has no extension → try adding the configured extension
+                // Skip if original URL had trailing slash (trailing slash = directory intent)
+                const extOfRequested = path.extname(requestedPath);
+                if (!extOfRequested && requestedPath !== '' && !requestedPath.endsWith('/') && !hadTrailingSlash) {
+                    const pathWithExt = fullPath + hideExt;
+
+                    // Security check: ensure resolved path is still within rootDir (boundary-aware)
+                    if (_isWithinRoot(pathWithExt, normalizedRootDir)) {
+                        try {
+                            const statWithExt = await fs.promises.stat(pathWithExt);
+                            if (statWithExt.isFile()) {
+                                // File with extension exists, serve it
+                                toOpen = pathWithExt;
+                            }
+                        } catch {
+                            // File with extension doesn't exist, continue normal flow
+                        }
+                    }
+                }
+            }
+
+            // Check if path exists
+            let stat;
+            try {
+                stat = await fs.promises.stat(toOpen);
+            } catch {
+                // File/directory doesn't exist or can't be accessed
+                sendNotFound(ctx);
+                return;
+            }
+
+            // Hidden check: block access to the requested file or directory itself
+            if (requestedPath !== '') {
+                const entryName = path.basename(toOpen);
+                const entryRelPath = path.relative(normalizedRootDir, toOpen).split(path.sep).join('/');
+                if (isHiddenEntry(entryName, entryRelPath, stat.isDirectory())) {
                     sendNotFound(ctx);
                     return;
                 }
             }
-        }
 
-        let toOpen = fullPath;
-
-        // hideExtension logic: redirect URLs with extension and resolve clean URLs
-        if (options.hideExtension) {
-            const hideExt = options.hideExtension.ext;
-            const hideRedirect = options.hideExtension.redirect;
-
-            // Trailing slash check via string — avoids a full new URL() construction
-            const rawPath = urlToUse.split('?')[0];
-            const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
-
-            // Strip a trailing slash before the extension check so URLs like /foo.html/
-            // still match (the slash is URL formality, not part of the filename) — without
-            // this, /foo.html/ would skip the redirect and 404 trying to open it as a dir.
-            const pathForExtCheck = hadTrailingSlash ? rawPath.slice(0, -1) : requestedPath;
-            if (pathForExtCheck.endsWith(hideExt)) {
-                // Build redirect target using ctx.originalUrl (always, regardless of useOriginalUrl)
-                const originalUrlObj = new URL(_origin + ctx.originalUrl);
-                let redirectPath = originalUrlObj.pathname;
-
-                // Collapse leading slashes: a Location header starting with "//" (or "/\")
-                // is a protocol-relative URL and would let "GET //evil.com/foo.ejs" redirect
-                // off-origin. path.normalize() upstream already collapses these for the
-                // filesystem check, so the source-of-truth URL has a single leading slash.
-                if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
-                    redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
-                }
-
-                redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
-
-                // Special case: /index.ejs → /, /sezione/index.ejs → /sezione/
-                const baseName = path.basename(redirectPath);
-                // Check if the remaining path points to an index file
-                if (options.index && options.index.length > 0) {
-                    for (const pattern of options.index) {
-                        if (typeof pattern === 'string' && (baseName + hideExt) === pattern) {
-                            // Redirect to the directory (with trailing slash)
-                            redirectPath = redirectPath.slice(0, redirectPath.length - baseName.length);
-                            break;
-                        }
-                    }
-                }
-
-                // Preserve query string
-                const redirectUrl = redirectPath + (originalUrlObj.search || '');
-
-                ctx.status = hideRedirect;
-                ctx.redirect(redirectUrl);
-                return;
-            }
-
-            // Check if URL has no extension → try adding the configured extension
-            // Skip if original URL had trailing slash (trailing slash = directory intent)
-            const extOfRequested = path.extname(requestedPath);
-            if (!extOfRequested && requestedPath !== '' && !requestedPath.endsWith('/') && !hadTrailingSlash) {
-                const pathWithExt = fullPath + hideExt;
-
-                // Security check: ensure resolved path is still within rootDir (boundary-aware)
-                if (_isWithinRoot(pathWithExt, normalizedRootDir)) {
-                    try {
-                        const statWithExt = await fs.promises.stat(pathWithExt);
-                        if (statWithExt.isFile()) {
-                            // File with extension exists, serve it
-                            toOpen = pathWithExt;
-                        }
-                    } catch {
-                        // File with extension doesn't exist, continue normal flow
-                    }
-                }
-            }
-        }
-
-        // Check if path exists
-        let stat;
-        try {
-            stat = await fs.promises.stat(toOpen);
-        } catch {
-            // File/directory doesn't exist or can't be accessed
-            sendNotFound(ctx);
-            return;
-        }
-
-        // Hidden check: block access to the requested file or directory itself
-        if (requestedPath !== '') {
-            const entryName = path.basename(toOpen);
-            const entryRelPath = path.relative(normalizedRootDir, toOpen).split(path.sep).join('/');
-            if (isHiddenEntry(entryName, entryRelPath, stat.isDirectory())) {
+            // Symlink boundary check (V-1): in protected modes reject any requested file
+            // or directory whose realpath escapes rootDir (or, in 'deny' mode, any symlink
+            // resolved below rootDir). The `_symlinkMode !== 'follow'` guard short-circuits
+            // before any await so the default 'follow' mode stays truly zero-overhead.
+            if (_symlinkMode !== 'follow' && !(await symlinkAllowed(toOpen))) {
                 sendNotFound(ctx);
                 return;
             }
-        }
 
-        // Symlink boundary check (V-1): in protected modes reject any requested file
-        // or directory whose realpath escapes rootDir (or, in 'deny' mode, any symlink
-        // resolved below rootDir). The `_symlinkMode !== 'follow'` guard short-circuits
-        // before any await so the default 'follow' mode stays truly zero-overhead.
-        if (_symlinkMode !== 'follow' && !(await symlinkAllowed(toOpen))) {
-            sendNotFound(ctx);
-            return;
-        }
-
-        if (stat.isDirectory()) {
-            // Handle directory
-            if (options.dirListing.enabled) {
-                // Search for index file matching configured patterns
-                if (options.index && options.index.length > 0) {
-                    const indexFile = await findIndexFile(toOpen, options.index);
-                    if (indexFile) {
-                        const indexRelPath = path.relative(normalizedRootDir, path.join(toOpen, indexFile.name)).split(path.sep).join('/');
-                        if (!isHiddenEntry(indexFile.name, indexRelPath, false)) {
-                            const indexPath = path.join(toOpen, indexFile.name);
-                            // Symlink boundary check (V-1): an index file may itself be a
-                            // symlink escaping rootDir — validate before serving it.
-                            // Guarded so the default 'follow' mode skips the await entirely.
-                            if (_symlinkMode !== 'follow' && !(await symlinkAllowed(indexPath))) {
-                                sendNotFound(ctx);
+            if (stat.isDirectory()) {
+                // Handle directory
+                if (options.dirListing.enabled) {
+                    // Search for index file matching configured patterns
+                    if (options.index && options.index.length > 0) {
+                        const indexFile = await findIndexFile(toOpen, options.index);
+                        if (indexFile) {
+                            const indexRelPath = path.relative(normalizedRootDir, path.join(toOpen, indexFile.name)).split(path.sep).join('/');
+                            if (!isHiddenEntry(indexFile.name, indexRelPath, false)) {
+                                const indexPath = path.join(toOpen, indexFile.name);
+                                // Symlink boundary check (V-1): an index file may itself be a
+                                // symlink escaping rootDir — validate before serving it.
+                                // Guarded so the default 'follow' mode skips the await entirely.
+                                if (_symlinkMode !== 'follow' && !(await symlinkAllowed(indexPath))) {
+                                    sendNotFound(ctx);
+                                    return;
+                                }
+                                await loadFile(indexPath, indexFile.stat);
                                 return;
                             }
-                            await loadFile(indexPath, indexFile.stat);
-                            return;
                         }
                     }
-                }
 
-                // No index file found, show directory listing
-                ctx.body = await show_dir(toOpen, ctx);
+                    // No index file found, show directory listing
+                    ctx.body = await show_dir(toOpen, ctx);
+                } else {
+                    // Directory listing disabled
+                    sendNotFound(ctx);
+                }
+                return;
             } else {
-                // Directory listing disabled
-                sendNotFound(ctx);
+                await loadFile(toOpen, stat);
+                return;
             }
-            return;
-        } else {
-            await loadFile(toOpen, stat);
-            return;
+        } catch (err) {
+            _logger.error('[koa-classic-server] Unexpected error while serving the request:', err);
+            if (ctx.headerSent || ctx.res.writableEnded) {
+                ctx.res.destroy(); // response already in flight — nothing sane left to send
+                return;
+            }
+            setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
+            ctx.status = 500;
+            ctx.body = _INTERNAL_ERROR_HTML;
         }
 
         // Internal functions

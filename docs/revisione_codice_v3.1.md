@@ -24,6 +24,8 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [x] [4. Compressione: buffering illimitato in RAM + flush della cache LFU](#4-compressione-buffering-illimitato-in-ram--flush-della-cache-lfu) — **RISOLTO** (`compression.maxFileSize` 10 MB + early-return in `LFUCache.set()`)
 - [x] [5. Nessuna deduplicazione delle richieste concorrenti (thundering herd)](#5-nessuna-deduplicazione-delle-richieste-concorrenti-thundering-herd) — **RISOLTO** (single-flight su entrambe le cache)
 - [x] [17. Leak di file descriptor nello streaming compresso su disconnessione del client](#17-leak-di-file-descriptor-nello-streaming-compresso-su-disconnessione-del-client) — **RISOLTO** (`stream.pipeline`; voce B1 dell'analisi 2026-07-07)
+- [x] [18. Nessun catch di ultima istanza nel middleware](#18-nessun-catch-di-ultima-istanza-nel-middleware) — **RISOLTO** (try/catch sulla sezione "owned request"; voce B3 dell'analisi)
+- [x] [19. `new URL()` non protetto nel ramo hideExtension](#19-new-url-non-protetto-nel-ramo-hideextension) — **RISOLTO** (400 come gli altri guard; voce B2 dell'analisi)
 
 ### Conformità HTTP
 - [ ] [6. `getClientEncoding` ignora i q-value di Accept-Encoding](#6-getclientencoding-ignora-i-q-value-di-accept-encoding)
@@ -231,6 +233,45 @@ transform zlib), ma `pipe()` non propaga la distruzione alla sorgente: la
 `fs.ReadStream` restava in pausa con il file descriptor aperto per sempre (le ReadStream
 chiudono il fd solo su `end`/`error`, e per un fd grezzo non esiste finalizzatore GC).
 Ogni download interrotto di un file grande = un fd perso → `EMFILE`.
+
+---
+
+### 18. Nessun catch di ultima istanza nel middleware
+
+**Stato: ✅ RISOLTO** (2026-07-08 — try/catch attorno all'intera sezione in cui il
+middleware "possiede" la richiesta: dal termine dei pass-through (method / prefix /
+urlsReserved, che escono prima) fino al dispatch file/directory. Su errore imprevisto:
+log via `_logger.error`, pagina 500 precompilata (`_INTERNAL_ERROR_HTML`) con i security
+header delle pagine generate; se gli header sono già partiti, `ctx.res.destroy()` come
+nel pattern di `sendTemplateError`. Gli errori dei middleware A VALLE non vengono
+mascherati: nessun `next()` è dentro il try (il `next` passato al render template è già
+contenuto dal catch dedicato di `tryRenderTemplate`). Test:
+`__tests__/error-containment.test.js`; verificato che i test falliscono sul codice
+pre-fix.)
+
+**Origine:** voce **B3** di `docs/analisi_robustezza_v3.1.md` (analisi 2026-07-07).
+
+**Problema:** ogni percorso noto era protetto, ma un rejection imprevisto risaliva al
+gestore di default di Koa: 500 text/plain **senza** i security header delle pagine
+generate e **senza** passare dal `_logger` configurato (finiva su `app.on('error')` /
+stderr, invisibile ai logger strutturati dell'operatore).
+
+---
+
+### 19. `new URL()` non protetto nel ramo hideExtension
+
+**Stato: ✅ RISOLTO** (2026-07-08 — try/catch → `sendBadRequest(ctx)` attorno a
+`new URL(_origin + ctx.originalUrl)`, coerente con gli altri guard per input client
+malformato. Test in `__tests__/error-containment.test.js` con request-target in forma
+assoluta e `useOriginalUrl: false`.)
+
+**Origine:** voce **B2** di `docs/analisi_robustezza_v3.1.md` (analisi 2026-07-07).
+
+**Problema:** il prologo del middleware valida l'URL con try/catch (→400), ma con
+`useOriginalUrl: false` valida `ctx.url` (riscritto a monte), mentre il ramo
+hideExtension ricostruiva `new URL(_origin + ctx.originalUrl)` senza guardia: un
+`originalUrl` malformato (es. request-target in forma assoluta `GET http://evil/x.ejs`,
+legale in HTTP/1.1) faceva lanciare il costruttore → errore non gestito invece del 400.
 
 ---
 

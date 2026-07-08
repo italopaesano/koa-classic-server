@@ -13,8 +13,25 @@
 const Koa = require('koa');
 const supertest = require('supertest');
 const koaClassicServer = require('../index.cjs');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
+
+// Case-sensitivity probe: some tests assert that an exact-case filename wins
+// over a different-case sibling (index.html vs INDEX.HTML). Those two names are
+// the same physical file on a case-insensitive filesystem (Windows, macOS), so
+// the premise can't hold there and the test is skipped.
+function detectCaseSensitiveFs() {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-idx-case-probe-'));
+    try {
+        fs.writeFileSync(path.join(d, 'A.tmp'), '');
+        return !fs.existsSync(path.join(d, 'a.tmp'));
+    } finally {
+        fs.rmSync(d, { recursive: true, force: true });
+    }
+}
+const fsIsCaseSensitive = detectCaseSensitiveFs();
+const testIfCaseSensitive = fsIsCaseSensitive ? test : test.skip;
 
 describe('Enhanced Index Option Tests', () => {
     let app;
@@ -287,7 +304,10 @@ describe('Enhanced Index Option Tests', () => {
     });
 
     describe('Mixed Array - Strings + RegExp', () => {
-        test('Priority: String before RegExp', async () => {
+        // Skipped on case-insensitive filesystems: index.html and INDEX.HTML are
+        // the same file there, so the exact-case string could never be shown to
+        // win over the different-case RegExp — the distinction doesn't exist.
+        testIfCaseSensitive('Priority: String before RegExp', async () => {
             fs.writeFileSync(path.join(tempDir, 'index.html'), '<h1>HTML Exact</h1>');
             fs.writeFileSync(path.join(tempDir, 'INDEX.HTML'), '<h1>HTML Uppercase</h1>');
 

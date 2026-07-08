@@ -2,16 +2,20 @@
  * urlPrefix / urlsReserved validation — finding #11 of
  * docs/revisione_codice_v3.1.md.
  *
- * Both options had an implicit format the request-time matcher depended on;
- * a malformed value failed SILENTLY (middleware served nothing, or a
- * reservation never matched, or a non-string entry crashed at request time).
- * They now throw a helpful [koa-classic-server] error at factory time.
+ * Both options have an implicit format the request-time matcher depends on;
+ * a malformed value fails SILENTLY (middleware serves nothing, or a reservation
+ * never matches, or a non-string entry 500s at request time). Because both are
+ * v2-stable options, a malformed value is NOT thrown — throwing on a stable
+ * option is a breaking change on a minor upgrade, and a mis-slashed value that
+ * "worked" only by falling through to a downstream handler would change
+ * behavior. Instead the factory emits a once-per-process DEPRECATION warning
+ * and leaves the runtime behavior exactly as it is today (the next major will
+ * turn these into throws). The single exception: a non-string urlsReserved
+ * entry is dropped, because it would 500 on every request.
  *
- * Covers:
- *   - urlPrefix: trailing slash, missing leading slash, non-string → throw;
- *     "/static", "" and omitted → accepted and still route correctly
- *   - urlsReserved: missing leading slash, multi-segment, non-string entry,
- *     non-array → throw; valid first-level paths → accepted and still reserve
+ * These tests assert BOTH the warning and the unchanged runtime behavior.
+ * The deprecation dedup is module-level (once per process), so each test gets a
+ * fresh module via jest.resetModules() to keep warn assertions order-independent.
  */
 
 const fs = require('fs');
@@ -19,9 +23,17 @@ const os = require('os');
 const path = require('path');
 const Koa = require('koa');
 const supertest = require('supertest');
-const koaClassicServer = require('../index.cjs');
 
-const silentLogger = { error: () => {}, warn: () => {} };
+let koaClassicServer;
+beforeEach(() => {
+    jest.resetModules();               // fresh module → fresh once-per-process dedup Set
+    koaClassicServer = require('../index.cjs');
+});
+
+function capturingLogger() {
+    const warns = [];
+    return { warns, error: () => {}, warn: (...a) => warns.push(a.join(' ')) };
+}
 
 let root;
 
@@ -36,93 +48,85 @@ afterAll(() => {
     fs.rmSync(root, { recursive: true, force: true });
 });
 
-// ─── urlPrefix: rejected forms ───────────────────────────────────────────────
+// ─── urlPrefix ───────────────────────────────────────────────────────────────
 
-describe('urlPrefix validation (#11)', () => {
-    test('trailing slash throws (used to silently serve nothing)', () => {
-        expect(() => koaClassicServer(root, { urlPrefix: '/static/' }))
-            .toThrow(/urlPrefix must start with "\/" and must not end with "\/"/);
+describe('urlPrefix deprecation-warn (#11)', () => {
+    test('never throws on a malformed value', () => {
+        for (const bad of ['/static/', 'static', '/', 42, null]) {
+            expect(() => koaClassicServer(root, { urlPrefix: bad, logger: capturingLogger() }))
+                .not.toThrow();
+        }
     });
 
-    test('missing leading slash throws', () => {
-        expect(() => koaClassicServer(root, { urlPrefix: 'static' }))
-            .toThrow(/urlPrefix must start with "\/"/);
-    });
-
-    test('bare "/" throws (use "" instead)', () => {
-        expect(() => koaClassicServer(root, { urlPrefix: '/' }))
-            .toThrow(/urlPrefix must start with "\/" and must not end with "\/"/);
-    });
-
-    test('non-string throws with a helpful message', () => {
-        expect(() => koaClassicServer(root, { urlPrefix: 42 }))
-            .toThrow(/urlPrefix must be a string/);
-    });
-
-    test('valid "/static" is accepted and routes files under the prefix', async () => {
+    test('trailing slash warns and leaves behavior unchanged (still falls through)', async () => {
+        const logger = capturingLogger();
         const app = new Koa();
-        app.use(koaClassicServer(root, { urlPrefix: '/static', dirListing: { enabled: false } }));
+        app.use(koaClassicServer(root, { urlPrefix: '/static/', logger, dirListing: { enabled: false } }));
+        app.use((ctx) => { ctx.status = 204; }); // proves the request fell through to next()
         const server = app.listen();
         const res = await supertest(server).get('/static/sub/file.txt').set('Accept-Encoding', 'identity');
         server.close();
-        expect(res.status).toBe(200);
-        expect(res.text).toBe('under prefix');
+
+        expect(res.status).toBe(204); // unchanged: served nothing, passed on
+        expect(logger.warns.some(w => /DEPRECATION.*urlPrefix should start with/.test(w))).toBe(true);
     });
 
-    test('"" (empty) and omitted are both accepted', async () => {
-        for (const opts of [{ urlPrefix: '' }, {}]) {
-            const app = new Koa();
-            app.use(koaClassicServer(root, { ...opts, dirListing: { enabled: false } }));
-            const server = app.listen();
-            const res = await supertest(server).get('/file.txt').set('Accept-Encoding', 'identity');
-            server.close();
-            expect(res.status).toBe(200);
-            expect(res.text).toBe('top level');
-        }
+    test('non-string warns and is coerced to "" (unchanged behavior)', async () => {
+        const logger = capturingLogger();
+        const app = new Koa();
+        app.use(koaClassicServer(root, { urlPrefix: true, logger, dirListing: { enabled: false } }));
+        const server = app.listen();
+        const res = await supertest(server).get('/file.txt').set('Accept-Encoding', 'identity');
+        server.close();
+
+        expect(res.status).toBe(200);          // "" prefix → serves from root as today
+        expect(res.text).toBe('top level');
+        expect(logger.warns.some(w => /DEPRECATION.*urlPrefix should be a string/.test(w))).toBe(true);
+    });
+
+    test('valid "/static" is accepted with no warning and routes correctly', async () => {
+        const logger = capturingLogger();
+        const app = new Koa();
+        app.use(koaClassicServer(root, { urlPrefix: '/static', logger, dirListing: { enabled: false } }));
+        const server = app.listen();
+        const res = await supertest(server).get('/static/sub/file.txt').set('Accept-Encoding', 'identity');
+        server.close();
+
+        expect(res.status).toBe(200);
+        expect(res.text).toBe('under prefix');
+        expect(logger.warns.length).toBe(0);
     });
 });
 
-// ─── urlsReserved: rejected forms ────────────────────────────────────────────
+// ─── urlsReserved ────────────────────────────────────────────────────────────
 
-describe('urlsReserved validation (#11)', () => {
-    test('missing leading slash throws (used to silently never match)', () => {
-        expect(() => koaClassicServer(root, { urlsReserved: ['admin'] }))
-            .toThrow(/urlsReserved entry must be a single first-level path/);
+describe('urlsReserved deprecation-warn (#11)', () => {
+    test('never throws on a malformed value', () => {
+        for (const bad of [['admin'], ['/admin/panel'], ['/admin/'], [42], [''], '/admin']) {
+            expect(() => koaClassicServer(root, { urlsReserved: bad, logger: capturingLogger() }))
+                .not.toThrow();
+        }
     });
 
-    test('multi-segment entry throws (matching is first-level only)', () => {
-        expect(() => koaClassicServer(root, { urlsReserved: ['/admin/panel'] }))
-            .toThrow(/first-level only/);
-    });
-
-    test('trailing slash on an entry throws', () => {
-        expect(() => koaClassicServer(root, { urlsReserved: ['/admin/'] }))
-            .toThrow(/urlsReserved entry must be a single first-level path/);
-    });
-
-    test('non-string entry throws (used to crash at request time)', () => {
-        expect(() => koaClassicServer(root, { urlsReserved: [42] }))
-            .toThrow(/urlsReserved entry must be a non-empty string/);
-    });
-
-    test('empty-string entry throws', () => {
-        expect(() => koaClassicServer(root, { urlsReserved: [''] }))
-            .toThrow(/urlsReserved entry must be a non-empty string/);
-    });
-
-    test('non-array throws', () => {
-        expect(() => koaClassicServer(root, { urlsReserved: '/admin' }))
-            .toThrow(/urlsReserved must be an array/);
-    });
-
-    test('valid entries are accepted and actually reserve the path', async () => {
+    test('missing leading slash warns and still does not match (unchanged)', async () => {
+        const logger = capturingLogger();
         const app = new Koa();
-        app.use(koaClassicServer(root, {
-            logger: silentLogger,
-            urlsReserved: ['/sub'],
-            dirListing: { enabled: false },
-        }));
-        // Downstream middleware proves the reserved path was passed through:
+        app.use(koaClassicServer(root, { urlsReserved: ['sub'], logger, dirListing: { enabled: false } }));
+        app.use((ctx) => { ctx.status = 418; }); // would fire only if the path were reserved
+        const server = app.listen();
+        const res = await supertest(server).get('/sub/file.txt').set('Accept-Encoding', 'identity');
+        server.close();
+
+        expect(res.status).toBe(200);          // unchanged: 'sub' never matched → served
+        expect(res.text).toBe('under prefix');
+        expect(logger.warns.some(w => /DEPRECATION.*single first-level path/.test(w))).toBe(true);
+    });
+
+    test('non-string entry warns and is DROPPED (no per-request 500)', async () => {
+        const logger = capturingLogger();
+        const app = new Koa();
+        // A valid entry alongside the bad one proves only the bad one is dropped.
+        app.use(koaClassicServer(root, { urlsReserved: ['/sub', 42], logger, dirListing: { enabled: false } }));
         app.use((ctx) => { ctx.status = 418; ctx.body = 'reserved'; });
         const server = app.listen();
 
@@ -130,13 +134,42 @@ describe('urlsReserved validation (#11)', () => {
         const normal = await supertest(server).get('/file.txt').set('Accept-Encoding', 'identity');
         server.close();
 
-        expect(reserved.status).toBe(418);        // passed through to next()
-        expect(normal.status).toBe(200);          // served normally
-        expect(normal.text).toBe('top level');
+        expect(reserved.status).toBe(418);     // '/sub' still reserved → passed through
+        expect(normal.status).toBe(200);       // no 500 anywhere from the dropped 42
+        expect(logger.warns.some(w => /DEPRECATION.*dropping a non-string/.test(w))).toBe(true);
     });
 
-    test('empty array and omitted are both accepted', () => {
-        expect(() => koaClassicServer(root, { urlsReserved: [] })).not.toThrow();
-        expect(() => koaClassicServer(root, {})).not.toThrow();
+    test('non-array warns and is coerced to [] (unchanged behavior)', async () => {
+        const logger = capturingLogger();
+        const app = new Koa();
+        app.use(koaClassicServer(root, { urlsReserved: 'notanarray', logger, dirListing: { enabled: false } }));
+        const server = app.listen();
+        const res = await supertest(server).get('/file.txt').set('Accept-Encoding', 'identity');
+        server.close();
+
+        expect(res.status).toBe(200);
+        expect(logger.warns.some(w => /DEPRECATION.*urlsReserved should be an array/.test(w))).toBe(true);
+    });
+
+    test('valid entries are accepted with no warning and still reserve', async () => {
+        const logger = capturingLogger();
+        const app = new Koa();
+        app.use(koaClassicServer(root, { urlsReserved: ['/sub'], logger, dirListing: { enabled: false } }));
+        app.use((ctx) => { ctx.status = 418; });
+        const server = app.listen();
+
+        const reserved = await supertest(server).get('/sub/file.txt').set('Accept-Encoding', 'identity');
+        const normal = await supertest(server).get('/file.txt').set('Accept-Encoding', 'identity');
+        server.close();
+
+        expect(reserved.status).toBe(418);
+        expect(normal.status).toBe(200);
+        expect(logger.warns.length).toBe(0);
+    });
+
+    test('the caller\'s reserved array is not mutated', () => {
+        const cfg = ['/sub', 42];
+        koaClassicServer(root, { urlsReserved: cfg, logger: capturingLogger() });
+        expect(cfg).toEqual(['/sub', 42]); // dropping happened on an internal copy
     });
 });

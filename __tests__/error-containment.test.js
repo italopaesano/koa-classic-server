@@ -73,6 +73,12 @@ describe('last-resort catch (B3 / #18)', () => {
         expect(res.text).toContain('unexpected condition');
         // ...and the error reached the operator's logger.
         expect(logger.errors.some(e => e.includes('Unexpected error while serving'))).toBe(true);
+        // Headers set by the partially-built response must be scrubbed: the
+        // throw happened AFTER Content-Type/Disposition/Accept-Ranges were set.
+        expect(res.headers['content-type']).toContain('text/html');
+        expect(res.headers['content-disposition']).toBeUndefined();
+        expect(res.headers['accept-ranges']).toBeUndefined();
+        expect(res.headers['cache-control']).toBe('no-store');
     });
 
     test('errors thrown by DOWNSTREAM middleware are not masked', async () => {

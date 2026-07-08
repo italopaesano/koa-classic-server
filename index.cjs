@@ -1630,6 +1630,14 @@ module.exports = function koaClassicServer(
                 ctx.res.destroy(); // response already in flight — nothing sane left to send
                 return;
             }
+            // Scrub representation/caching headers a partially-built response may
+            // have left behind: a stale Content-Encoding would corrupt the error
+            // page, a public Cache-Control could get the 500 cached by proxies.
+            for (const h of ['Content-Encoding', 'Content-Disposition', 'Content-Range', 'Vary', 'ETag', 'Last-Modified', 'Accept-Ranges']) {
+                ctx.remove(h);
+            }
+            ctx.set('Cache-Control', 'no-store');
+            ctx.set('Content-Type', 'text/html; charset=utf-8');
             setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
             ctx.status = 500;
             ctx.body = _INTERNAL_ERROR_HTML;

@@ -1388,12 +1388,31 @@ module.exports = function koaClassicServer(
     const _inflightRawReads     = new Map(); // `${path}:${mtime}:${size}` → Promise<Buffer>
     const _inflightCompressions = new Map(); // `${path}:${encoding}:${mtime}:${size}` → Promise<Buffer>
 
-    // Returns the client's preferred encoding based on Accept-Encoding header,
-    // filtered against the enabled encodings list. Returns null if no match.
+    // Returns the server-preferred enabled encoding the client is willing to accept.
+    // Server preference order (compressionConfig.encodings) still wins; the
+    // Accept-Encoding q-values are used only to EXCLUDE encodings the client refuses
+    // (q=0), per RFC 9110 §12.5.3. Token match is exact, not substring ("x-gzip" is
+    // NOT "gzip"). A "*" supplies the q-value for any encoding not explicitly listed.
     function getClientEncoding(acceptEncoding) {
         if (!acceptEncoding) return null;
+        const qValues = new Map(); // token → q-value
+        for (const part of acceptEncoding.split(',')) {
+            const [tokenRaw, ...params] = part.split(';');
+            const token = tokenRaw.trim().toLowerCase();
+            if (!token) continue;
+            let q = 1;
+            for (const p of params) {
+                const m = /^\s*q=(\d+(?:\.\d+)?)\s*$/i.exec(p);
+                if (m) q = parseFloat(m[1]);
+            }
+            qValues.set(token, q);
+        }
+        const star = qValues.get('*');
         for (const enc of compressionConfig.encodings) {
-            if (acceptEncoding.includes(enc)) return enc;
+            let q = qValues.get(enc);
+            if (q === undefined) q = star;   // not listed → fall back to "*" if present
+            if (q === undefined) continue;   // not listed and no "*" → not offered
+            if (q > 0) return enc;           // acceptable → pick it (server preference order)
         }
         return null;
     }
@@ -1971,11 +1990,13 @@ module.exports = function koaClassicServer(
 
             // Resolve compression: enabled + compressible MIME + meets minFileSize + client supports it
             let encoding = null; // 'br' | 'gzip' | null
+            let potentiallyCompressible = false; // response content-negotiates on Accept-Encoding
             if (compressionConfig.enabled && compressionConfig.encodings.length > 0) {
                 const isCompressibleMime = compressionConfig.mimeTypes.has(mimeType);
                 const meetsMinSize = compressionConfig.minFileSize === false
                     || fileStat.size >= compressionConfig.minFileSize;
                 if (isCompressibleMime && meetsMinSize) {
+                    potentiallyCompressible = true; // even if this client gets identity
                     encoding = getClientEncoding(ctx.get('Accept-Encoding'));
                 }
             }
@@ -1984,6 +2005,15 @@ module.exports = function koaClassicServer(
             // Proxies use Vary: Accept-Encoding to cache separate versions per encoding.
             const etagSuffix = encoding === 'br' ? '-br' : encoding === 'gzip' ? '-gz' : '';
             const fullEtag = `"${fileStat.mtime.getTime()}-${fileStat.size}${etagSuffix}"`;
+
+            // Vary: Accept-Encoding as soon as the resource is *potentially* compressible —
+            // regardless of whether THIS client gets a compressed variant, and regardless
+            // of browserCacheEnabled. RFC 9110 §15.4.5: the 304 below must carry the same
+            // Vary the 200 would; and a shared proxy must not serve the identity variant to
+            // a client that would have received the compressed one (#7).
+            if (potentiallyCompressible) {
+                ctx.set('Vary', 'Accept-Encoding');
+            }
 
             // ETag, Last-Modified, and 304 check — deferred until encoding is known
             if (options.browserCacheEnabled) {
@@ -2019,8 +2049,8 @@ module.exports = function koaClassicServer(
 
             if (encoding) {
                 // ── Compressed response ───────────────────────────────────────────────
+                // Vary: Accept-Encoding is already set above (potentiallyCompressible).
                 ctx.set('Content-Encoding', encoding);
-                ctx.set('Vary', 'Accept-Encoding'); // Required so proxies cache per-encoding
 
                 // Safety net (#4): the buffered path reads the WHOLE file into RAM and
                 // compresses at max quality — fine for web assets, catastrophic for a
@@ -2068,9 +2098,12 @@ module.exports = function koaClassicServer(
                             });
                         } catch (err) {
                             _logger.error('Compression error:', err);
-                            // Fall back to uncompressed on any compression failure
+                            // Fall back to uncompressed on any compression failure. Vary STAYS
+                            // (the resource is still compressible), but the ETag must be reset to
+                            // the un-suffixed form: this identity body must not be cached by a
+                            // shared proxy under the -br/-gz validator (#7).
                             ctx.remove('Content-Encoding');
-                            ctx.remove('Vary');
+                            if (options.browserCacheEnabled) ctx.set('ETag', baseEtag);
                             if (rawBuffer) {
                                 ctx.set('Content-Length', String(rawBuffer.length));
                                 if (ctx.method !== 'HEAD') {

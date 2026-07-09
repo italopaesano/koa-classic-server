@@ -57,7 +57,10 @@ describe('Compression — default: br preferred', () => {
             .set('Accept-Encoding', 'identity');
         expect(res.status).toBe(200);
         expect(res.headers['content-encoding']).toBeUndefined();
-        expect(res.headers['vary']).toBeUndefined();
+        // #7: a compressible resource served identity STILL carries Vary: Accept-Encoding
+        // — the response content-negotiates on Accept-Encoding, so a shared proxy must
+        // not serve this identity body to a client that would receive the compressed one.
+        expect(res.headers['vary']).toBe('Accept-Encoding');
         expect(res.text).toBe('A'.repeat(2000));
     });
 

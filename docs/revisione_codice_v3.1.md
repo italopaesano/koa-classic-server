@@ -28,8 +28,8 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [x] [19. `new URL()` non protetto nel ramo hideExtension](#19-new-url-non-protetto-nel-ramo-hideextension) — **RISOLTO** (400 come gli altri guard; voce B2 dell'analisi)
 
 ### Conformità HTTP
-- [ ] [6. `getClientEncoding` ignora i q-value di Accept-Encoding](#6-getclientencoding-ignora-i-q-value-di-accept-encoding)
-- [ ] [7. Header `Vary: Accept-Encoding` incompleto](#7-header-vary-accept-encoding-incompleto)
+- [x] [6. `getClientEncoding` ignora i q-value di Accept-Encoding](#6-getclientencoding-ignora-i-q-value-di-accept-encoding) — **RISOLTO** (parser minimale token+q: `q=0` escluso, match esatto sul token, wildcard `*`; ordine di preferenza server invariato)
+- [x] [7. Header `Vary: Accept-Encoding` incompleto](#7-header-vary-accept-encoding-incompleto) — **RISOLTO** (`Vary` settato appena la risorsa è potenzialmente comprimibile, prima del 304 e indipendente da `browserCacheEnabled`; fallback compressione: `Vary` mantenuto + ETag ripristinato senza suffisso)
 - [ ] [8. Precedenza Range vs validatori; 206 senza ETag/Last-Modified](#8-precedenza-range-vs-validatori-206-senza-etaglast-modified)
 - [ ] [9. `If-None-Match`: niente liste con virgole né `*`](#9-if-none-match-niente-liste-con-virgole-né-)
 
@@ -302,6 +302,14 @@ legale in HTTP/1.1) faceva lanciare il costruttore → errore non gestito invece
 
 ### 6. `getClientEncoding` ignora i q-value di Accept-Encoding
 
+**Stato: ✅ RISOLTO** (2026-07-09 — parser minimale come da fix proposto: split su `,`,
+estrazione di `;q=`, esclusione degli encoding con `q=0`; l'ordine di preferenza lato
+server (`compression.encodings`) continua a decidere il vincitore tra gli encoding
+accettabili — i q-value del client servono solo a **escludere**, non a riordinare. In più,
+match **esatto** sul token (`x-gzip` non matcha più `gzip`, bug della vecchia
+`includes()`) e gestione del wildcard `*` (fornisce il q-value per gli encoding non
+elencati; `*;q=0` rifiuta tutto). Test: `__tests__/encoding-negotiation.test.js`.)
+
 **Posizione:** `index.cjs:1212-1218`.
 
 **Problema:** il match è un semplice `acceptEncoding.includes(enc)`. Un client che invia
@@ -319,6 +327,17 @@ correttamente presenza/assenza e `q=0`.
 ---
 
 ### 7. Header `Vary: Accept-Encoding` incompleto
+
+**Stato: ✅ RISOLTO** (2026-07-09 — `Vary: Accept-Encoding` viene ora settato non appena
+la risorsa è *potenzialmente* comprimibile (MIME comprimibile + compressione abilitata +
+supera `minFileSize`), **prima** del ramo 304 e indipendentemente da `browserCacheEnabled`.
+Così il 304 di qualsiasi variante porta `Vary` (RFC 9110 §15.4.5) e le risposte identity di
+contenuti comprimibili lo espongono ai proxy condivisi. Il `ctx.set('Vary', ...)` ridondante
+nel ramo compresso è stato rimosso. Il caso imparentato del **fallback su errore di
+compressione** è coperto: ora **mantiene** `Vary` (la risorsa resta comprimibile) e
+**ripristina l'ETag** alla forma senza suffisso `-gz`/`-br` (`baseEtag`), così il body
+identity non viene cachato sotto la chiave della variante compressa. Test:
+`__tests__/encoding-negotiation.test.js` e `__tests__/compression-fallback-vary-etag.test.js`.)
 
 **Posizione:** `index.cjs:1712-1731` (ramo 304) e `index.cjs:1832+` (ramo non compresso).
 

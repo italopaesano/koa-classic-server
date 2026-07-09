@@ -292,7 +292,9 @@ dirListing: { enabled: false }
 - `GET /dir` su una **directory** → `301` redirect a `/dir/` (così i link **relativi** nella pagina index/listing si risolvono contro la directory, non contro il genitore);
 - `GET /file/` su un **file** → `404` (un file è raggiungibile solo al suo URL senza slash).
 
-La query string e l'eventuale percent-encoding del path sono preservati nel redirect, e il redirect include `urlPrefix`. La radice `/` non redirige mai. Il redirect scatta solo quando la directory renderizzerebbe qualcosa (listing abilitato), quindi con `dirListing.enabled: false` una directory fa direttamente `404` senza un redirect-verso-404.
+La query string e l'eventuale percent-encoding del path sono preservati nel redirect, e il redirect include `urlPrefix`. La radice `/` non redirige mai. Il redirect di **directory** scatta solo quando la directory renderizzerebbe qualcosa (listing abilitato), quindi con `dirListing.enabled: false` una directory fa direttamente `404` senza un redirect-verso-404. Il **404 sui file** (`/file/`) invece è pura canonicalizzazione dell'URL e vale a prescindere da `dirListing.enabled`. Il redirect nota: anche un file template richiesto con slash (`/page.ejs/`) fa `404` invece di renderizzare.
+
+> Con `useOriginalUrl: false` (middleware di URL rewriting) la canonicalizzazione si basa sull'URL originale del client; se il tuo rewriting mappa un URL con slash finale a un file, imposta `trailingSlash: false`.
 
 ```javascript
 // Comportamento canonico (default v4): /dir → 301 /dir/, /file/ → 404

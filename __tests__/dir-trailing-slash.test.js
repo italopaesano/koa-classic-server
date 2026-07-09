@@ -195,6 +195,30 @@ describe('open-redirect guard', () => {
             expect(res.location.startsWith('/\\')).toBe(false);
         }
     });
+
+    test('an absolute-form request target cannot become an off-origin Location', async () => {
+        // useOriginalUrl:false + a rewrite that normalizes ctx.url to a real
+        // directory, while ctx.originalUrl stays absolute-form (legal HTTP/1.1).
+        // The Location must never be built from that raw originalUrl.
+        const a = new Koa();
+        a.on('error', () => {});
+        a.use((ctx, next) => { ctx.url = '/dir'; return next(); });
+        a.use(koaClassicServer(root, { index: ['index.html'], useOriginalUrl: false }));
+        const s = a.listen();
+        const { port } = s.address();
+        const res = await new Promise((resolve, reject) => {
+            const req = http.request({ port, method: 'GET', path: 'http://attacker.example/dir' }, r => {
+                resolve({ status: r.statusCode, location: r.headers.location });
+                r.resume();
+            });
+            req.on('error', reject);
+            req.end();
+        });
+        s.close();
+        // Rejected as a bad request — never a 301 to http://attacker.example/...
+        expect(res.status).toBe(400);
+        expect(res.location).toBeUndefined();
+    });
 });
 
 // ─── useOriginalUrl: false (URL rewriting) ───────────────────────────────────

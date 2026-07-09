@@ -1727,19 +1727,30 @@ module.exports = function koaClassicServer(
                     // without a trailing slash serves an index/listing whose
                     // relative links would resolve against the parent. Redirect
                     // /dir → /dir/ (301) BEFORE serving so the browser's base is
-                    // the directory itself. Built from the raw originalUrl so the
-                    // urlPrefix and any percent-encoding are preserved verbatim;
-                    // a "//host" style path is collapsed to a single leading
-                    // slash to avoid an off-origin (protocol-relative) redirect.
+                    // the directory itself.
                     if (options.dirListing.trailingSlash && !_pathEndsWithSlash) {
-                        let redirectPath = _rawOriginalPath + '/';
+                        // Build the Location from the parsed originalUrl (same
+                        // defense as the hideExtension redirect): re-parsing forces
+                        // the target to be origin-relative — an absolute-form
+                        // request target (`GET http://evil/x`, legal in HTTP/1.1
+                        // and reachable under useOriginalUrl:false + rewriting)
+                        // would otherwise become an off-origin `Location` (open
+                        // redirect). .pathname keeps urlPrefix and percent-encoding.
+                        let originalUrlObj;
+                        try {
+                            originalUrlObj = new URL(_origin + ctx.originalUrl);
+                        } catch {
+                            sendBadRequest(ctx);
+                            return;
+                        }
+                        // Collapse a leading "//" / "/\" (protocol-relative) to a
+                        // single slash before appending the canonical trailing one.
+                        let redirectPath = originalUrlObj.pathname;
                         if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
                             redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
                         }
-                        const qIndex = ctx.originalUrl.indexOf('?');
-                        const search = qIndex === -1 ? '' : ctx.originalUrl.slice(qIndex);
                         ctx.status = 301;
-                        ctx.redirect(redirectPath + search);
+                        ctx.redirect(redirectPath + '/' + originalUrlObj.search);
                         return;
                     }
 

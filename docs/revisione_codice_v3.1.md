@@ -43,6 +43,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [ ] [14. `hideExtension`: incoerenza decoded/raw nel check dell'estensione](#14-hideextension-incoerenza-decodedraw-nel-check-dellestensione)
 - [x] [15. `Buffer.slice()` deprecato](#15-bufferslice-deprecato) — **RISOLTO** (`subarray()`)
 - [ ] [16. Riga "empty folder" assente se tutte le entry sono nascoste](#16-riga-empty-folder-assente-se-tutte-le-entry-sono-nascoste)
+- [ ] [20. `hideExtension`: `/foo.ejs/` (slash finale) redirige a `/foo.` (target rotto)](#20-hideextension-fooejs-slash-finale-redirige-a-foo-target-rotto)
 
 ---
 
@@ -542,6 +543,34 @@ semantica zero-copy ed è l'API raccomandata.
 filtro (oltre al caso `dir.length === 0`).
 
 **Priorità:** Bassa (cosmetico).
+
+---
+
+### 20. `hideExtension`: `/foo.ejs/` (slash finale) redirige a `/foo.` (target rotto)
+
+**Posizione:** ramo hideExtension del redirect (`index.cjs`, costruzione di `redirectPath`
+da `originalUrlObj.pathname` seguita da `slice(0, len - hideExt.length)`).
+
+**Origine:** emersa dalla code review di #3 (2026-07-09) tracciando l'interazione
+hideExtension ↔ trailing-slash. **Non** introdotta da #3 (pre-esistente); orthogonale.
+
+**Problema:** con `hideExtension.ext: '.ejs'`, una richiesta `GET /foo.ejs/` (slash finale)
+supera il check di estensione — che strippa lo slash solo per il *confronto*
+(`pathForExtCheck`) — ma poi costruisce il target del redirect da
+`originalUrlObj.pathname` che **conserva** lo slash (`/foo.ejs/`) e vi applica
+`slice(0, length - hideExt.length)`: `'/foo.ejs/'.slice(0, 11 - 4)` = `'/foo.'`. Risultato:
+`301 Location: /foo.` (URL morto) invece di `/foo`. **Riprodotto** (2026-07-09):
+`GET /foo.ejs/` → `301 /foo.`; `GET /foo.ejs` → `301 /foo` (corretto).
+
+Nota positiva emersa dalla stessa analisi: hideExtension e il redirect trailing-slash di #3
+**non** collidono — hideExtension ritorna per primo su `/foo.ejs/`, quindi il 404-file di
+#3 non lo doppia.
+
+**Fix proposto:** strippare lo slash finale da `redirectPath` prima dello `slice`
+dell'estensione (o usare `pathForExtCheck` come base), coprendo con un test
+`/foo.ejs/` → `301 /foo`.
+
+**Priorità:** Bassa (caso limite: slash finale su un URL con estensione nascosta).
 
 ---
 

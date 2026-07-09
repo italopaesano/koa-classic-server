@@ -18,7 +18,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ### Bug confermati (riprodotti con test)
 - [x] [1. Default di `index` documentato erroneamente](#1-default-di-index-documentato-erroneamente) — **RISOLTO** (documentazione allineata al default `[]`)
 - [x] [2. `If-Modified-Since` non produce mai 304 con mtime sub-secondo](#2-if-modified-since-non-produce-mai-304-con-mtime-sub-secondo) — **RISOLTO** (mtime troncato al secondo nel confronto)
-- [ ] [3. Manca il redirect canonico `/dir` → `/dir/`](#3-manca-il-redirect-canonico-dir--dir)
+- [x] [3. Manca il redirect canonico `/dir` → `/dir/`](#3-manca-il-redirect-canonico-dir--dir) — **RISOLTO** (opzione `dirListing.trailingSlash`, default on in v4.0.0; `/dir`→301, `/file/`→404)
 
 ### Robustezza / DoS
 - [x] [4. Compressione: buffering illimitato in RAM + flush della cache LFU](#4-compressione-buffering-illimitato-in-ram--flush-della-cache-lfu) — **RISOLTO** (`compression.maxFileSize` 10 MB + early-return in `LFUCache.set()`)
@@ -43,6 +43,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [ ] [14. `hideExtension`: incoerenza decoded/raw nel check dell'estensione](#14-hideextension-incoerenza-decodedraw-nel-check-dellestensione)
 - [x] [15. `Buffer.slice()` deprecato](#15-bufferslice-deprecato) — **RISOLTO** (`subarray()`)
 - [ ] [16. Riga "empty folder" assente se tutte le entry sono nascoste](#16-riga-empty-folder-assente-se-tutte-le-entry-sono-nascoste)
+- [ ] [20. `hideExtension`: `/foo.ejs/` (slash finale) redirige a `/foo.` (target rotto)](#20-hideextension-fooejs-slash-finale-redirige-a-foo-target-rotto)
 
 ---
 
@@ -109,6 +110,23 @@ mtime abbia una componente sub-secondo, es. via `fs.utimes`).
 ---
 
 ### 3. Manca il redirect canonico `/dir` → `/dir/`
+
+**Stato: ✅ RISOLTO** (2026-07-09 — nuova opzione `dirListing.trailingSlash`, **default
+`true`** in **v4.0.0** (il cambio di comportamento osservabile giustifica il major bump;
+decisione del manutentore: default-on con escape hatch, coerente con lo standard di fatto
+di Apache/nginx/express/Caddy, ma difeso sul merito — non per parità con Apache):
+- `GET /dir` (directory senza slash) → `301` verso `/dir/`;
+- `GET /file/` (file con slash finale) → `404` (**opzione C** concordata: un file è
+  raggiungibile solo al suo URL senza slash);
+- `trailingSlash: false` ripristina il comportamento v3.
+
+Lo slash è catturato da `originalUrl` **prima** dello strip nel parsing URL
+(`_pathEndsWithSlash`); il redirect è nel ramo directory (prima di index/listing), il 404
+nel ramo file. Query string e percent-encoding preservati, `urlPrefix` incluso, radice `/`
+mai redirette, guardia anti-open-redirect (`//host` → `/host`), redirect solo quando la
+directory renderizzerebbe (listing abilitato), `Location` da `originalUrl` con
+`useOriginalUrl:false`. Test: `__tests__/dir-trailing-slash.test.js`, 20 test; aggiornati
+`index.test.js` e `directory-sorting-links.test.js` (chiedevano directory senza slash).)
 
 **Posizione:** `index.cjs:1315` (lo slash finale viene rimosso durante il parsing URL) e
 `index.cjs:1515+` (ramo directory: serve l'index senza redirect).
@@ -525,6 +543,34 @@ semantica zero-copy ed è l'API raccomandata.
 filtro (oltre al caso `dir.length === 0`).
 
 **Priorità:** Bassa (cosmetico).
+
+---
+
+### 20. `hideExtension`: `/foo.ejs/` (slash finale) redirige a `/foo.` (target rotto)
+
+**Posizione:** ramo hideExtension del redirect (`index.cjs`, costruzione di `redirectPath`
+da `originalUrlObj.pathname` seguita da `slice(0, len - hideExt.length)`).
+
+**Origine:** emersa dalla code review di #3 (2026-07-09) tracciando l'interazione
+hideExtension ↔ trailing-slash. **Non** introdotta da #3 (pre-esistente); orthogonale.
+
+**Problema:** con `hideExtension.ext: '.ejs'`, una richiesta `GET /foo.ejs/` (slash finale)
+supera il check di estensione — che strippa lo slash solo per il *confronto*
+(`pathForExtCheck`) — ma poi costruisce il target del redirect da
+`originalUrlObj.pathname` che **conserva** lo slash (`/foo.ejs/`) e vi applica
+`slice(0, length - hideExt.length)`: `'/foo.ejs/'.slice(0, 11 - 4)` = `'/foo.'`. Risultato:
+`301 Location: /foo.` (URL morto) invece di `/foo`. **Riprodotto** (2026-07-09):
+`GET /foo.ejs/` → `301 /foo.`; `GET /foo.ejs` → `301 /foo` (corretto).
+
+Nota positiva emersa dalla stessa analisi: hideExtension e il redirect trailing-slash di #3
+**non** collidono — hideExtension ritorna per primo su `/foo.ejs/`, quindi il 404-file di
+#3 non lo doppia.
+
+**Fix proposto:** strippare lo slash finale da `redirectPath` prima dello `slice`
+dell'estensione (o usare `pathForExtCheck` come base), coprendo con un test
+`/foo.ejs/` → `301 /foo`.
+
+**Priorità:** Bassa (caso limite: slash finale su un URL con estensione nascosta).
 
 ---
 

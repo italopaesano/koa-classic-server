@@ -5,11 +5,25 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.0.0] - 2026-07-09
 
-### ⚠️ Deprecation — malformed `urlPrefix` / `urlsReserved` now warn (will throw in the next major)
+This major release bundles the v3.1 robustness work with one intentional
+behavior change that requires the version bump.
+
+### ⚠️ Breaking Changes
+- **Canonical trailing-slash enforcement is now ON by default** (`dirListing.trailingSlash: true`, finding #3). `GET /dir` on a directory now **301-redirects to `/dir/`** (so relative links in an index page resolve against the directory), and `GET /file/` on a file now returns **404** (a file is only reachable at its slash-less URL). Set `dirListing: { trailingSlash: false }` to restore the v3 behavior (serve directories and files regardless of the trailing slash). Clients that request `/dir` without following redirects, or that rely on `/file/` serving the file, must adapt.
+- **`compression.maxFileSize` (default 10 MB)** caps the buffered high-quality compression path: compressible files above the cap are now streamed (bounded RAM, no `Content-Length`) instead of buffered whole into memory. Set `compression: { maxFileSize: false }` to restore the old buffered path.
+- **Non-object `options` throws** at factory time (including explicit `null`), where it previously coerced or crashed with a raw `TypeError`.
+
+### 🚦 Canonical trailing-slash redirect / 404 (`dirListing.trailingSlash`, #3)
+- **Issue**: serving a directory's index at `/dir` (no slash) makes the browser resolve the page's relative links against the *parent* (`<a href="p2.html">` → `/p2.html`, a 404) instead of `/dir/p2.html`. Every mainstream static server (Apache, nginx, Caddy, express/serve-static) redirects `/dir` → `/dir/` to fix this.
+- **Behavior** (default `true`): `GET /dir` → `301 /dir/` (query string preserved, percent-encoding preserved, `urlPrefix` included); `GET /file/` → `404` (this includes template files — `GET /page.ejs/` now 404s instead of rendering). Root `/` never redirects. The **directory** redirect only fires when the directory would actually render (listing enabled), so a listing-disabled directory 404s directly without a redirect-to-404; the **file** 404 applies independently of `dirListing.enabled` (it is pure URL canonicalization). The redirect `Location` is parsed origin-relative (an absolute-form request target cannot become an off-origin `Location`), and a `//host`-style path is collapsed to a single leading slash — no open redirect. With `useOriginalUrl: false`, canonicalization is based on the client's original URL; if your rewriting maps a trailing-slash URL to a file, set `trailingSlash: false`.
+- **Code** (`index.cjs`): `_pathEndsWithSlash` captured from the raw `originalUrl` before the slash-stripping URL parse; redirect in the directory branch (before index/listing); 404 in the file branch. New `dirListing.trailingSlash` option (default `true`).
+- **Tests**: `__tests__/dir-trailing-slash.test.js` (20 tests). Two existing suites that requested directories without a trailing slash (`index.test.js`, `directory-sorting-links.test.js`) were updated to use the canonical slash URLs.
+
+### ⚠️ Deprecation — malformed `urlPrefix` / `urlsReserved` now warn (will throw in a future major)
 - **Issue** (`docs/revisione_codice_v3.1.md` #11): both options had an implicit format the request-time matcher depended on, and a malformed value failed **silently** — `urlPrefix: '/static/'` (trailing slash) or `'static'` (missing leading slash) made the middleware serve nothing (it always fell through to `next()`); `urlsReserved: ['admin']` (missing leading slash) made the reservation never match (the path was served instead of passed on); a non-string entry 500'd on every request; a multi-segment entry (`'/admin/panel'`) never matched (matching is first-level only).
-- **Fix**: because both are **v2-stable** options, a malformed value now emits a **once-per-process deprecation warning** and the runtime behavior is left **exactly as today** — throwing on a stable option would be a breaking change on a minor upgrade, and silently *normalizing* the value could change behavior for a config that "worked" only by falling through to a downstream handler. The next major will turn these warnings into hard errors (the messages are already written; a single helper flips warn → throw).
+- **Fix**: because both are **v2-stable** options, a malformed value now emits a **once-per-process deprecation warning** and the runtime behavior is left **exactly as today** — throwing on a stable option would be a breaking change, and silently *normalizing* the value could change behavior for a config that "worked" only by falling through to a downstream handler. A future major will turn these warnings into hard errors (the messages are already written; a single helper flips warn → throw). Deliberately *not* flipped in 4.0.0 to keep the deprecation window open.
 - **One deliberate exception**: a non-string `urlsReserved` entry is **dropped** (with a warning) instead of left in place, because it would otherwise `TypeError` on `value.substring` and 500 every request — not working behavior, so dropping it can't break anything.
 - **No behavior change, no breakage**: valid configs are unaffected; malformed ones behave as they did before, just with a heads-up. The caller's config object is not mutated.
 - **Tests**: `__tests__/url-prefix-reserved-validation.test.js` (10 tests: warning + unchanged behavior for each form, non-string-entry drop, no caller mutation, once-per-process dedup).

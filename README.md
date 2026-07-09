@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/koa-classic-server.svg)](https://www.npmjs.com/package/koa-classic-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-532%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-648%20passing-brightgreen.svg)]()
 [![Node](https://img.shields.io/badge/node-%3E%3D18-blue.svg)]()
 
 ---
@@ -28,7 +28,7 @@ The 3.0 series builds on 2.x with new observability hooks, bounded resource usag
 ✅ **Template Engine Support** — EJS, Pug, Handlebars, Nunjucks, and more — with full async/await, AbortSignal forwarding, and timeout enforcement
 ✅ **Clean URLs** — Hide file extensions via `hideExtension` (mod_rewrite-like)
 ✅ **Symlink Support** — Transparent resolution + clear indicators in the listing
-✅ **532 tests passing** — comprehensive coverage including security, listing pagination, logger injection, template timeouts, and edge cases
+✅ **648 tests passing** — comprehensive coverage including security, listing pagination, logger injection, template timeouts, and edge cases
 
 [See full changelog →](./docs/CHANGELOG.md)
 
@@ -41,6 +41,7 @@ The 3.0 series builds on 2.x with new observability hooks, bounded resource usag
 ### Core Features
 
 - 🗂️ **Classic Directory Listing** — Sortable columns (Name, Type, Size)
+- ↪️ **Canonical trailing slash** — `GET /dir` → `301 /dir/`, `GET /file/` → `404` (v4 default; relative links resolve correctly). Opt out with `dirListing: { trailingSlash: false }`
 - 📄 **Static File Serving** — Automatic MIME type detection with streaming
 - 📊 **Sortable Columns** — Click headers to sort ascending/descending
 - 📏 **File Sizes** — Human-readable display (B, KB, MB, GB, TB)
@@ -54,7 +55,7 @@ The 3.0 series builds on 2.x with new observability hooks, bounded resource usag
 - 🚀 **High Performance** — Async/await, non-blocking I/O, single-syscall directory reads
 - 🔗 **Symlink Support** — Transparent resolution with directory listing indicators
 - 🌐 **Clean URLs** — Hide file extensions for SEO-friendly URLs via `hideExtension`
-- 🧪 **Well-Tested** — 532 passing tests with comprehensive coverage
+- 🧪 **Well-Tested** — 648 passing tests with comprehensive coverage
 - 📦 **Dual Module Support** — CommonJS and ES Modules
 
 ---
@@ -628,7 +629,7 @@ npm run test:performance
 ```
 
 **Coverage:**
-- ✅ 532 tests passing across 20 suites
+- ✅ 648 tests passing across 20 suites
 - ✅ Security (path traversal, XSS, race conditions, CSP, hidden-files)
 - ✅ Directory listing (sorting, pagination, truncation cap, symlinks)
 - ✅ Template engine (timeout, abort signal, error propagation, EJS integration)

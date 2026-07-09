@@ -239,11 +239,12 @@ describe('Bug Tests - Directory Read Errors', () => {
     const server = app.listen();
 
     try {
-      const res1 = await supertest(server).get('/temp-perm-test-dir');
+      // Canonical slash (v4): a directory is served at its slash URL.
+      const res1 = await supertest(server).get('/temp-perm-test-dir/');
       expect(res1.status).toBe(200);
 
       fs.chmodSync(tempDir, 0o000);
-      const res2 = await supertest(server).get('/temp-perm-test-dir');
+      const res2 = await supertest(server).get('/temp-perm-test-dir/');
       expect([403, 500]).toContain(res2.status);
     } finally {
       try { fs.chmodSync(tempDir, 0o755); } catch { /* ignore */ }

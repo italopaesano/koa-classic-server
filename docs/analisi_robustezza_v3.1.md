@@ -58,7 +58,7 @@ spuntata in parallelo); le voci `B*`/`C*` sono definite in questo documento.
 ### Fase 3 — Footgun config + correttezza
 - [x] **#10** Copia di `opts` + errore esplicito su `null` — risolto 2026-07-08, `__tests__/options-immutability.test.js`
 - [x] **#11** Validazione `urlPrefix` / `urlsReserved` — risolto 2026-07-08 (deprecation warn una-tantum + comportamento invariato, throw rimandato a v4; entry non-stringa scartata), `__tests__/url-prefix-reserved-validation.test.js`
-- [ ] **#3** Redirect canonico `/dir` → `/dir/`
+- [x] **#3** Redirect canonico `/dir` → `/dir/` — risolto 2026-07-09 (`dirListing.trailingSlash`, default on in v4.0.0; `/dir`→301, `/file/`→404), `__tests__/dir-trailing-slash.test.js`
 
 ### Fase 4 — Conformità HTTP, minori, processo
 - [ ] **#6** q-value di `Accept-Encoding` (`q=0` da onorare)

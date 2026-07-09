@@ -256,7 +256,10 @@ function testAllPathByFileList(filesAndDirArray, getServer, options) {
         async () => {
           const server = getServer(); // Usa il getter per ottenere il server al momento dell'esecuzione
           const url = path.join(options.urlPrefix || '/', relativePath);
-          const res = await supertest(server).get(url);
+          // V4: directories are canonically slash-terminated (GET /dir → 301 /dir/),
+          // so request directory entries at their slash URL; files stay slash-less.
+          const reqUrl = (entry.type === 'file' || url.endsWith('/')) ? url : url + '/';
+          const res = await supertest(server).get(reqUrl);
 
           // Se l'entry è un file, controlla il contenuto e il MIME type
           if (entry.type === 'file') {
@@ -325,7 +328,10 @@ function testAllPathByFileList(filesAndDirArray, getServer, options) {
         async () => {
           const server = getServer(); // Usa il getter per ottenere il server al momento dell'esecuzione
           const url = path.join(options.urlPrefix || '/', relativePath);
-          const res = await supertest(server).get(url);
+          // V4: directories are canonically slash-terminated (GET /dir → 301 /dir/),
+          // so request directory entries at their slash URL; files stay slash-less.
+          const reqUrl = (entry.type === 'file' || url.endsWith('/')) ? url : url + '/';
+          const res = await supertest(server).get(reqUrl);
           expect(res.status).toBe(200);
           // Se l'entry è un file, controlla il contenuto e il MIME type
           if (entry.type === 'file') {

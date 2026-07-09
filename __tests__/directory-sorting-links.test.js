@@ -66,7 +66,7 @@ describe('Directory Sorting Links Bug Tests', () => {
 
             // Enter cartella folder
             const folderResponse = await request(server)
-                .get('/cartella')
+                .get('/cartella/')
                 .expect(200);
 
             expect(folderResponse.text).toContain('sottocartella');
@@ -79,14 +79,14 @@ describe('Directory Sorting Links Bug Tests', () => {
 
             // Enter cartella
             const folderResponse = await request(server)
-                .get('/cartella')
+                .get('/cartella/')
                 .expect(200);
 
             expect(folderResponse.text).toContain('sottocartella');
 
             // Enter sottocartella
             const subfolderResponse = await request(server)
-                .get('/cartella/sottocartella')
+                .get('/cartella/sottocartella/')
                 .expect(200);
 
             expect(subfolderResponse.text).toContain('ciao.html');

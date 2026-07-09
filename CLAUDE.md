@@ -62,6 +62,8 @@ When proposing a new feature, ask: *"does this change the default observable beh
 
 > Note: `method: ['GET']` IS technically restrictive (rejects HEAD, POST, etc. by default). It is kept as-is because it has been the v2 default since forever and the migration cost is not worth the philosophical purity. Documented as a known imperfection.
 
+> Note: `dirListing.trailingSlash: true` (V4 default) DOES change the default observable behavior of `GET /dir` (now `301 → /dir/`) and `GET /file/` (now `404`). This is a deliberate exception to "make default-changing features opt-in", defended as a **correctness fix, not a restriction**: without the redirect, an index page served at `/dir` resolves its relative links against the parent, so the page is broken. It shipped in a **major** (4.0.0) with an escape hatch (`trailingSlash: false`). The justification stands on its own merit — that Apache/nginx/Caddy/express all do the same is context, not the reason.
+
 ---
 
 ## Consequences for future changes

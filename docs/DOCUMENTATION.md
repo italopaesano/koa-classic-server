@@ -285,6 +285,25 @@ dirListing: { enabled: true }
 dirListing: { enabled: false }
 ```
 
+#### `dirListing.trailingSlash` (Boolean)
+
+**Default: `true`** (dalla v4.0.0). Impone la forma canonica dell'URL rispetto allo slash finale:
+
+- `GET /dir` su una **directory** → `301` redirect a `/dir/` (così i link **relativi** nella pagina index/listing si risolvono contro la directory, non contro il genitore);
+- `GET /file/` su un **file** → `404` (un file è raggiungibile solo al suo URL senza slash).
+
+La query string e l'eventuale percent-encoding del path sono preservati nel redirect, e il redirect include `urlPrefix`. La radice `/` non redirige mai. Il redirect scatta solo quando la directory renderizzerebbe qualcosa (listing abilitato), quindi con `dirListing.enabled: false` una directory fa direttamente `404` senza un redirect-verso-404.
+
+```javascript
+// Comportamento canonico (default v4): /dir → 301 /dir/, /file/ → 404
+dirListing: { trailingSlash: true }
+
+// Comportamento v3: serve directory e file a prescindere dallo slash finale
+dirListing: { trailingSlash: false }
+```
+
+> ⚠️ **Breaking change v4.0.0**: fino alla v3 sia `/dir` sia `/dir/` servivano il contenuto con 200, e `/file/` serviva il file. Un client che chiede `/dir` senza seguire i redirect, o che dipende da `/file/` che serve il file, deve adattarsi oppure impostare `trailingSlash: false`.
+
 #### `index` (Array)
 
 Pattern dei file index da caricare automaticamente quando si accede a una directory. Accetta un array di stringhe e/o RegExp; la priorità segue l'ordine dell'array (il primo match vince).

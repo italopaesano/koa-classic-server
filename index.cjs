@@ -207,7 +207,7 @@ function warnConfigDeprecation(logger, message) {
     _configDeprecationsWarned.add(message);
     logger.warn(...warnPayload(logger,
         '[koa-classic-server] DEPRECATION: ' + message +
-        '\n  This is tolerated for now and WILL throw in the next major version.'));
+        '\n  This is tolerated for now and WILL throw in a future major version.'));
 }
 
 // Sends an error response for a failed template render. If headers were already
@@ -606,6 +606,12 @@ module.exports = function koaClassicServer(
                                         //   when visible entries > entriesPerPage. Page index via
                                         //   ?page=N (0-based); out-of-range values are clamped silently.
                                         //   Must be a finite integer >= 0; 0 = disabled (no pagination).
+            trailingSlash: true,        // Canonical trailing-slash enforcement (V4). Default true:
+                                        //   GET /dir  (directory, no slash) → 301 redirect to /dir/
+                                        //   GET /file/ (file, trailing slash) → 404
+                                        //   so relative links in an index page resolve against the
+                                        //   directory. Set false for the v3 behavior (serve directories
+                                        //   and files regardless of the trailing slash).
         },
         index: [], // Index file name(s) - must be an ARRAY.
                    // Default: [] — no index file is looked up; directories always
@@ -823,6 +829,15 @@ module.exports = function koaClassicServer(
             'dirListing.entriesPerPage',
             100
         ),
+        // Canonical trailing-slash enforcement (V4). Default ON:
+        //   - GET /dir  (directory, no slash) → 301 redirect to /dir/
+        //   - GET /file/ (file, trailing slash) → 404
+        // so relative links in an index page resolve against the directory and
+        // a file is only reachable at its slash-less URL. Set false to keep the
+        // v3 behavior (serve directories and files regardless of trailing slash).
+        trailingSlash: userDirListing && userDirListing.trailingSlash !== undefined
+            ? !!userDirListing.trailingSlash
+            : true,
     };
 
     // Normalize index option to array format
@@ -1474,6 +1489,14 @@ module.exports = function koaClassicServer(
         const urlToUse = options.useOriginalUrl ? ctx.originalUrl : ctx.url;
         const _origin  = ctx.protocol + '://' + ctx.host;
         const fullUrl  = _origin + urlToUse;
+
+        // Whether the client's request path ends with "/" — captured from the
+        // raw originalUrl BEFORE the trailing slash is stripped for URL parsing
+        // below. Drives the canonical trailing-slash redirect / 404 in the
+        // directory / file branch. "/" (root) counts as ending with a slash, so
+        // it is already canonical and never redirects.
+        const _rawOriginalPath = ctx.originalUrl.split('?')[0];
+        const _pathEndsWithSlash = _rawOriginalPath.endsWith('/');
         // Parse the request URL. `new URL()` throws on an invalid Host header
         // (e.g. "Host: bad host") — reject as 400 rather than letting it surface as 500.
         let pageHref = '';
@@ -1700,6 +1723,26 @@ module.exports = function koaClassicServer(
             if (stat.isDirectory()) {
                 // Handle directory
                 if (options.dirListing.enabled) {
+                    // Canonical trailing-slash redirect (V4): a directory URL
+                    // without a trailing slash serves an index/listing whose
+                    // relative links would resolve against the parent. Redirect
+                    // /dir → /dir/ (301) BEFORE serving so the browser's base is
+                    // the directory itself. Built from the raw originalUrl so the
+                    // urlPrefix and any percent-encoding are preserved verbatim;
+                    // a "//host" style path is collapsed to a single leading
+                    // slash to avoid an off-origin (protocol-relative) redirect.
+                    if (options.dirListing.trailingSlash && !_pathEndsWithSlash) {
+                        let redirectPath = _rawOriginalPath + '/';
+                        if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
+                            redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
+                        }
+                        const qIndex = ctx.originalUrl.indexOf('?');
+                        const search = qIndex === -1 ? '' : ctx.originalUrl.slice(qIndex);
+                        ctx.status = 301;
+                        ctx.redirect(redirectPath + search);
+                        return;
+                    }
+
                     // Search for index file matching configured patterns
                     if (options.index && options.index.length > 0) {
                         const indexFile = await findIndexFile(toOpen, options.index);
@@ -1728,6 +1771,15 @@ module.exports = function koaClassicServer(
                 }
                 return;
             } else {
+                // Canonical trailing-slash 404 (V4): a trailing slash means
+                // "directory", but this path resolved to a FILE — a file is only
+                // reachable at its slash-less URL. Return 404 (indistinguishable
+                // from not-found) rather than serving the file at a non-canonical
+                // URL. Disabled by dirListing.trailingSlash: false (v3 behavior).
+                if (options.dirListing.trailingSlash && _pathEndsWithSlash) {
+                    sendNotFound(ctx);
+                    return;
+                }
                 await loadFile(toOpen, stat);
                 return;
             }

@@ -72,6 +72,11 @@ behavior change that requires the version bump.
 - **Open-redirect guard preserved**: the guard that collapses a leading `//` or `/\` now runs **after** the re-encode (a decoded `%2F` could otherwise reintroduce a leading `//`), and backslashes are always re-encoded (`%5C`), so the `Location` can never become protocol-relative. Verified against adversarial inputs (`//`, `/\`, `%2F%2F`, `%5C%5C`, `%09//`, `///`).
 - **Tests**: `__tests__/hideExtension-trailing-slash.test.js` (9 tests: trailing-slash → 404 for plain/encoded/index forms, the `trailingSlash:false` escape hatch, `%2E`/space redirect targets, and the `%2F`-reintroduction open-redirect guard).
 
+### 🐛 Bug Fix — directory-listing cosmetics: Parent Directory link & empty-folder row (register #13, #16)
+- **"Parent Directory" link respects `urlPrefix` (#13)**: with `urlPrefix: '/static'`, the listing of `/static/` showed a `.. Parent Directory` link pointing to `/` — outside the middleware's served tree. The link is now omitted at the middleware's **logical** root (`pageHrefOutPrefix.pathname === '/'`), not only at the absolute root; a sub-listing like `/static/sub/` still links to `/static/` (inside the prefix).
+- **"empty folder" row when every entry is hidden (#16)**: the `dir.length === 0` check ran before the hidden-entry filter, so a directory containing only hidden entries (dotfiles with `hidden.dotFiles.default: 'hidden'`, `alwaysHide`, `blacklist`) rendered a header-only table with no rows and no message. The "empty folder" row is now also shown when `items.length === 0` after filtering — making an all-hidden directory indistinguishable from an empty one (and not hinting that hidden files exist).
+- **Tests**: `__tests__/listing-parent-empty.test.js` (8 tests: parent link present/absent and its href with and without `urlPrefix`; empty-folder row for all-hidden / physically-empty / has-visible-entry directories, and the no-leak equivalence).
+
 ### 🧹 Chore — `Buffer.slice()` → `Buffer.subarray()` (register #15)
 - The Range/206 in-memory path used the deprecated `Buffer.prototype.slice` (DEP0158); replaced with `subarray()` — identical zero-copy semantics.
 

@@ -36,7 +36,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ### Validazione opzioni / API factory
 - [x] [10. `opts: null` produce un TypeError grezzo; la factory muta l'oggetto del chiamante](#10-opts-null-produce-un-typeerror-grezzo-la-factory-muta-loggetto-del-chiamante) — **RISOLTO** (throw con hint su non-oggetto; shallow copy + copie annidate)
 - [x] [11. `urlPrefix` con slash finale e `urlsReserved` senza slash iniziale: nessuna validazione](#11-urlprefix-con-slash-finale-e-urlsreserved-senza-slash-iniziale-nessuna-validazione) — **RISOLTO** (deprecation warning una-tantum, comportamento invariato; throw rimandato alla prossima major)
-- [ ] [12. `browserCacheMaxAge` negativo coerciuto silenziosamente](#12-browsercachemaxage-negativo-coerciuto-silenziosamente)
+- [x] [12. `browserCacheMaxAge` negativo coerciuto silenziosamente](#12-browsercachemaxage-negativo-coerciuto-silenziosamente) — **RISOLTO** (deprecation-warn come #11: valore non-intero-non-negativo → warn + fallback 3600; throw rimandato alla prossima major)
 
 ### Minori / cosmetici
 - [x] [13. Link "Parent Directory" alla radice di `urlPrefix` esce dal prefix](#13-link-parent-directory-alla-radice-di-urlprefix-esce-dal-prefix) — **RISOLTO** (link omesso quando `pageHrefOutPrefix.pathname === '/'`, cioè alla radice logica del middleware)
@@ -501,6 +501,15 @@ lanciare un errore con hint — coerente con lo stile delle altre validazioni.
 ---
 
 ### 12. `browserCacheMaxAge` negativo coerciuto silenziosamente
+
+**Stato: ✅ RISOLTO** (2026-07-10 — stesso approccio **deprecation-warn** del #11, come già
+previsto dalla nota di consistenza. Un `browserCacheMaxAge` fornito ma non intero-finito-≥0
+(negativo, `NaN`, non-intero, `Infinity`, stringa) emette ora un `warnConfigDeprecation`
+una-tantum e ricade su 3600 come prima; il valore omesso resta il default 3600 senza warn.
+Confine di validità **stretto** (opzione B concordata: `Number.isInteger` + `>= 0`), così ciò
+che warna oggi è esattamente ciò che lancerà con `validateNonNegativeInt` nella prossima major —
+niente valori che passino dal silenzio al throw senza preavviso. Test:
+`__tests__/browser-cache-maxage-validation.test.js`.)
 
 **Posizione:** `index.cjs:791`.
 

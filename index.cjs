@@ -2592,3 +2592,18 @@ module.exports = function koaClassicServer(
 
     };
 };
+
+// ── Test-only internals ──────────────────────────────────────────────────────
+// NOT part of the public API: exposed so the unit tests can exercise the pure
+// helpers and the LFU cache directly (eviction order, frequency preservation,
+// range parsing, validator matching) without a full HTTP round-trip. No
+// stability guarantee — do not import from application code.
+module.exports._internals = {
+    LFUCache,
+    parseRangeHeader,
+    ifNoneMatchSatisfied,
+    formatSize,
+    singleFlight,
+    refreshOrInsert,
+    escapeHtml,
+};

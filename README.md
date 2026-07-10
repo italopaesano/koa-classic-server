@@ -27,6 +27,20 @@ npm install koa-classic-server
 
 Requires **Node ≥ 18** and **Koa ≥ 2** (Koa 3 needs ≥ 3.1.2).
 
+### Import
+
+Ships as both CommonJS and ES modules via conditional exports — use whichever your project prefers:
+
+```javascript
+// CommonJS
+const koaClassicServer = require('koa-classic-server');
+
+// ES modules
+import koaClassicServer from 'koa-classic-server';
+```
+
+The examples below use CommonJS; they work identically with the ESM import.
+
 ---
 
 ## Quick start
@@ -142,6 +156,60 @@ app.use(koaClassicServer(path.join(__dirname, 'www'), {
 app.use(koaClassicServer(path.join(__dirname, 'public'), {
   urlPrefix:    '/static',              // GET /static/app.js → public/app.js
   urlsReserved: ['/api', '/admin'],     // first-level paths handed to the next middleware
+}));
+```
+
+### Serve several directories
+
+Mount it once per directory, each under its own `urlPrefix` — a request outside a mount's prefix falls through to the next:
+
+```javascript
+// Assets under /static, no listing
+app.use(koaClassicServer(path.join(__dirname, 'public'), {
+  urlPrefix: '/static',
+  dirListing: { enabled: false },
+}));
+
+// Uploads under /files, browsable
+app.use(koaClassicServer(path.join(__dirname, 'uploads'), {
+  urlPrefix: '/files',
+  dirListing: { enabled: true },
+}));
+```
+
+### Allow HEAD (health checks, preflight)
+
+Only `GET` is accepted by default; other methods fall through to the next middleware:
+
+```javascript
+app.use(koaClassicServer(root, {
+  method: ['GET', 'HEAD'],   // HEAD mirrors GET: same status + headers, no body
+}));
+```
+
+### Behind a URL rewriter (i18n, routing)
+
+When an upstream middleware mutates `ctx.url`, tell the server to resolve against the rewritten URL:
+
+```javascript
+app.use(async (ctx, next) => {
+  if (ctx.path.startsWith('/it/')) ctx.url = ctx.url.replace(/^\/it/, ''); // /it/page → /page
+  await next();
+});
+
+app.use(koaClassicServer(path.join(__dirname, 'www'), {
+  useOriginalUrl: false,   // resolve ctx.url (rewritten) instead of ctx.originalUrl
+}));
+```
+
+### Keep symlinks inside `rootDir`
+
+If `rootDir` holds files writable by untrusted parties (uploads, multi-tenant), stop a planted
+symlink from escaping the served tree:
+
+```javascript
+app.use(koaClassicServer(root, {
+  symlinks: 'follow-within-root',   // a link resolving outside rootDir → 404
 }));
 ```
 

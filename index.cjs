@@ -405,6 +405,24 @@ function parseRangeHeader(rangeHeader, fileSize) {
     return { start, end };
 }
 
+// Evaluate an If-None-Match header against our (strong) ETag, per RFC 9110 §13.1.2.
+// The header is either "*" (matches any existing representation) or a comma-separated
+// list of entity-tags. The comparison is the WEAK function: a leading "W/" is ignored
+// on both sides (a proxy/CDN may have weakened the validator). Returns true when the
+// precondition is satisfied, i.e. the client's cached representation is still current
+// and the server should answer 304 (Not Modified) for a GET/HEAD.
+function ifNoneMatchSatisfied(headerValue, etag) {
+    if (!headerValue) return false;
+    const trimmed = headerValue.trim();
+    if (trimmed === '*') return true; // "*" matches any existing representation
+    const target = etag.replace(/^W\//, ''); // our ETag is strong, but strip defensively
+    for (const part of trimmed.split(',')) {
+        const tag = part.trim().replace(/^W\//, '');
+        if (tag && tag === target) return true;
+    }
+    return false;
+}
+
 // LFU cache with O(1) eviction using frequency buckets.
 // peek(key)  — read without touching frequency (for staleness checks)
 // get(key)   — read and increment frequency
@@ -1927,6 +1945,67 @@ module.exports = function koaClassicServer(
                 }
             }
 
+            // Determine MIME type and compression encoding for the full-file response
+            const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
+            const filename = path.basename(toOpen);
+
+            // Resolve compression: enabled + compressible MIME + meets minFileSize + client supports it
+            let encoding = null; // 'br' | 'gzip' | null
+            let potentiallyCompressible = false; // response content-negotiates on Accept-Encoding
+            if (compressionConfig.enabled && compressionConfig.encodings.length > 0) {
+                const isCompressibleMime = compressionConfig.mimeTypes.has(mimeType);
+                const meetsMinSize = compressionConfig.minFileSize === false
+                    || fileStat.size >= compressionConfig.minFileSize;
+                if (isCompressibleMime && meetsMinSize) {
+                    potentiallyCompressible = true; // even if this client gets identity
+                    encoding = getClientEncoding(ctx.get('Accept-Encoding'));
+                }
+            }
+
+            // fullEtag is encoding-specific to avoid false 304 hits across representations.
+            // Proxies use Vary: Accept-Encoding to cache separate versions per encoding.
+            const etagSuffix = encoding === 'br' ? '-br' : encoding === 'gzip' ? '-gz' : '';
+            const fullEtag = `"${fileStat.mtime.getTime()}-${fileStat.size}${etagSuffix}"`;
+
+            // Vary: Accept-Encoding as soon as the resource is *potentially* compressible —
+            // regardless of whether THIS client gets a compressed variant, and regardless
+            // of browserCacheEnabled. RFC 9110 §15.4.5: the 304 below must carry the same
+            // Vary the 200 would; and a shared proxy must not serve the identity variant to
+            // a client that would have received the compressed one (#7).
+            if (potentiallyCompressible) {
+                ctx.set('Vary', 'Accept-Encoding');
+            }
+
+            // Preconditions are evaluated BEFORE the Range branch: RFC 9110 §13.2.2 gives the
+            // validators precedence over Range (steps 3/4 before step 5), so a conditional
+            // request that matches returns 304 (Not Modified), not 206 (Partial Content).
+            // Comparison uses fullEtag (the encoding-specific representation a full GET would
+            // return); a 206 below re-tags itself with baseEtag (the identity partial it serves).
+            if (options.browserCacheEnabled) {
+                ctx.set('ETag', fullEtag);
+                ctx.set('Last-Modified', fileStat.mtime.toUTCString());
+
+                // If-None-Match: "*" | comma-list, weak comparison (RFC 9110 §13.1.2).
+                if (ifNoneMatchSatisfied(ctx.get('If-None-Match'), fullEtag)) {
+                    ctx.status = 304;
+                    return;
+                }
+
+                // If-Modified-Since (date validation). The mtime is truncated to whole seconds
+                // before comparing: Last-Modified is emitted via toUTCString() (second precision
+                // — HTTP dates have no milliseconds), so a client echoing that header back would
+                // otherwise never match a sub-second mtime (e.g. 22:13:20.500 <= 22:13:20.000).
+                const clientModifiedSince = ctx.get('If-Modified-Since');
+                if (clientModifiedSince) {
+                    const clientDate = new Date(clientModifiedSince);
+                    const mtimeSeconds = Math.floor(fileStat.mtime.getTime() / 1000) * 1000;
+                    if (mtimeSeconds <= clientDate.getTime()) {
+                        ctx.status = 304;
+                        return;
+                    }
+                }
+            }
+
             // Range request handling (HTTP 206 Partial Content — compression skipped for ranges)
             const rangeHeader = ctx.get('Range');
             if (rangeHeader) {
@@ -1946,10 +2025,11 @@ module.exports = function koaClassicServer(
                     if (!ifRange || ifRange === baseEtag) {
                         const { start, end } = parsed;
                         const rangeLength = end - start + 1;
-                        const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
-                        const filename = path.basename(toOpen);
 
                         ctx.status = 206;
+                        // 206 returns identity bytes → tag with baseEtag, not the encoding-specific
+                        // fullEtag set above. Last-Modified is already set (browserCacheEnabled).
+                        if (options.browserCacheEnabled) ctx.set('ETag', baseEtag);
                         ctx.set('Content-Range', `bytes ${start}-${end}/${fileSize}`);
                         ctx.set('Content-Type', mimeType);
                         ctx.set('Content-Length', String(rangeLength));
@@ -1982,65 +2062,6 @@ module.exports = function koaClassicServer(
                     // If-Range mismatch → fall through to full 200 response
                 }
                 // Invalid Range → fall through to full 200 response
-            }
-
-            // Determine MIME type and compression encoding for the full-file response
-            const mimeType = mime.lookup(toOpen) || 'application/octet-stream';
-            const filename = path.basename(toOpen);
-
-            // Resolve compression: enabled + compressible MIME + meets minFileSize + client supports it
-            let encoding = null; // 'br' | 'gzip' | null
-            let potentiallyCompressible = false; // response content-negotiates on Accept-Encoding
-            if (compressionConfig.enabled && compressionConfig.encodings.length > 0) {
-                const isCompressibleMime = compressionConfig.mimeTypes.has(mimeType);
-                const meetsMinSize = compressionConfig.minFileSize === false
-                    || fileStat.size >= compressionConfig.minFileSize;
-                if (isCompressibleMime && meetsMinSize) {
-                    potentiallyCompressible = true; // even if this client gets identity
-                    encoding = getClientEncoding(ctx.get('Accept-Encoding'));
-                }
-            }
-
-            // fullEtag is encoding-specific to avoid false 304 hits across representations.
-            // Proxies use Vary: Accept-Encoding to cache separate versions per encoding.
-            const etagSuffix = encoding === 'br' ? '-br' : encoding === 'gzip' ? '-gz' : '';
-            const fullEtag = `"${fileStat.mtime.getTime()}-${fileStat.size}${etagSuffix}"`;
-
-            // Vary: Accept-Encoding as soon as the resource is *potentially* compressible —
-            // regardless of whether THIS client gets a compressed variant, and regardless
-            // of browserCacheEnabled. RFC 9110 §15.4.5: the 304 below must carry the same
-            // Vary the 200 would; and a shared proxy must not serve the identity variant to
-            // a client that would have received the compressed one (#7).
-            if (potentiallyCompressible) {
-                ctx.set('Vary', 'Accept-Encoding');
-            }
-
-            // ETag, Last-Modified, and 304 check — deferred until encoding is known
-            if (options.browserCacheEnabled) {
-                ctx.set('ETag', fullEtag);
-                ctx.set('Last-Modified', fileStat.mtime.toUTCString());
-
-                // Check If-None-Match (ETag validation)
-                const clientEtag = ctx.get('If-None-Match');
-                if (clientEtag && clientEtag === fullEtag) {
-                    ctx.status = 304;
-                    return;
-                }
-
-                // Check If-Modified-Since (date validation). The mtime is truncated
-                // to whole seconds before comparing: Last-Modified is emitted via
-                // toUTCString() (second precision — HTTP dates have no milliseconds),
-                // so a client echoing that header back would otherwise never match a
-                // sub-second mtime (e.g. 22:13:20.500 <= 22:13:20.000 → always 200).
-                const clientModifiedSince = ctx.get('If-Modified-Since');
-                if (clientModifiedSince) {
-                    const clientDate = new Date(clientModifiedSince);
-                    const mtimeSeconds = Math.floor(fileStat.mtime.getTime() / 1000) * 1000;
-                    if (mtimeSeconds <= clientDate.getTime()) {
-                        ctx.status = 304;
-                        return;
-                    }
-                }
             }
 
             // Common response headers

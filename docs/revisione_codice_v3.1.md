@@ -30,8 +30,8 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ### Conformità HTTP
 - [x] [6. `getClientEncoding` ignora i q-value di Accept-Encoding](#6-getclientencoding-ignora-i-q-value-di-accept-encoding) — **RISOLTO** (parser minimale token+q: `q=0` escluso, match esatto sul token, wildcard `*`; ordine di preferenza server invariato)
 - [x] [7. Header `Vary: Accept-Encoding` incompleto](#7-header-vary-accept-encoding-incompleto) — **RISOLTO** (`Vary` settato appena la risorsa è potenzialmente comprimibile, prima del 304 e indipendente da `browserCacheEnabled`; fallback compressione: `Vary` mantenuto + ETag ripristinato senza suffisso)
-- [ ] [8. Precedenza Range vs validatori; 206 senza ETag/Last-Modified](#8-precedenza-range-vs-validatori-206-senza-etaglast-modified)
-- [ ] [9. `If-None-Match`: niente liste con virgole né `*`](#9-if-none-match-niente-liste-con-virgole-né-)
+- [x] [8. Precedenza Range vs validatori; 206 senza ETag/Last-Modified](#8-precedenza-range-vs-validatori-206-senza-etaglast-modified) — **RISOLTO** (validatori valutati prima del ramo Range per RFC §13.2.2; 206 taggata con `baseEtag` + `Last-Modified`)
+- [x] [9. `If-None-Match`: niente liste con virgole né `*`](#9-if-none-match-niente-liste-con-virgole-né-) — **RISOLTO** (helper `ifNoneMatchSatisfied`: `*`, liste, weak comparison `W/`)
 
 ### Validazione opzioni / API factory
 - [x] [10. `opts: null` produce un TypeError grezzo; la factory muta l'oggetto del chiamante](#10-opts-null-produce-un-typeerror-grezzo-la-factory-muta-loggetto-del-chiamante) — **RISOLTO** (throw con hint su non-oggetto; shallow copy + copie annidate)
@@ -368,6 +368,15 @@ senza suffisso (o ri-emetterlo) nel ramo di fallback.
 
 ### 8. Precedenza Range vs validatori; 206 senza ETag/Last-Modified
 
+**Stato: ✅ RISOLTO** (2026-07-10 — il blocco metadati/`Vary`/validatori è stato spostato
+**prima** del ramo Range, così `If-None-Match`/`If-Modified-Since` hanno la precedenza su
+`Range` come da RFC 9110 §13.2.2 (una richiesta condizionale che matcha ora dà **304 (Not
+Modified)**, non **206 (Partial Content)**). Le 206 ora portano `ETag` + `Last-Modified`
+(con `browserCacheEnabled`): l'ETag della 206 è `baseEtag` — la rappresentazione parziale
+servita è identity, non compressa — mentre le precondizioni si confrontano con `fullEtag`
+(encoding-specifico, coerente col #7). `If-Range` resta un confronto strong ed esatto con
+`baseEtag`, invariato. Test: `__tests__/conditional-precedence.test.js`.)
+
 **Posizione:** `index.cjs:1636-1689` (ramo Range) vs `index.cjs:1712-1731` (validatori).
 
 **Problema:**
@@ -386,6 +395,14 @@ limitato ma è non-conformità RFC).
 ---
 
 ### 9. `If-None-Match`: niente liste con virgole né `*`
+
+**Stato: ✅ RISOLTO** (2026-07-10 — nuovo helper `ifNoneMatchSatisfied(headerValue, etag)`
+a livello modulo, accanto a `parseRangeHeader`: gestisce `*` (matcha qualsiasi
+rappresentazione esistente → 304), le liste separate da virgola (match per singolo
+elemento) e il **weak comparison** (prefisso `W/` ignorato su entrambi i lati, come
+richiesto dalla RFC per `If-None-Match`). Il vecchio confronto esatto era un caso
+particolare di questo, quindi nessuna regressione sul singolo ETag strong. Test:
+`__tests__/conditional-precedence.test.js`, describe "If-None-Match parsing".)
 
 **Posizione:** `index.cjs:1717-1721`.
 

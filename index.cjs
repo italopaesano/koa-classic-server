@@ -971,7 +971,21 @@ module.exports = function koaClassicServer(
         );
     }
 
-    options.browserCacheMaxAge = typeof options.browserCacheMaxAge === 'number' && options.browserCacheMaxAge >= 0 ? options.browserCacheMaxAge : 3600;
+    // browserCacheMaxAge: non-negative integer seconds. An invalid value (negative, NaN,
+    // non-integer, Infinity, or a string) previously fell back to 3600 SILENTLY (#12).
+    // Consistent with #11: warn now and keep the fallback; a future major will throw
+    // (validateNonNegativeInt semantics) — so what warns here is exactly what will throw then.
+    if (options.browserCacheMaxAge === undefined) {
+        options.browserCacheMaxAge = 3600;
+    } else if (!(typeof options.browserCacheMaxAge === 'number'
+        && Number.isInteger(options.browserCacheMaxAge)
+        && options.browserCacheMaxAge >= 0)) {
+        warnConfigDeprecation(_logger,
+            'browserCacheMaxAge must be a non-negative integer (seconds). Got: ' +
+            String(options.browserCacheMaxAge) + '. Falling back to the default 3600 for now.');
+        options.browserCacheMaxAge = 3600;
+    }
+    // else: valid — keep as-is
     options.browserCacheEnabled = typeof options.browserCacheEnabled === 'boolean' ? options.browserCacheEnabled : false;
     options.useOriginalUrl = typeof options.useOriginalUrl === 'boolean' ? options.useOriginalUrl : true;
 

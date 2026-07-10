@@ -77,6 +77,12 @@ behavior change that requires the version bump.
 - **"empty folder" row when every entry is hidden (#16)**: the `dir.length === 0` check ran before the hidden-entry filter, so a directory containing only hidden entries (dotfiles with `hidden.dotFiles.default: 'hidden'`, `alwaysHide`, `blacklist`) rendered a header-only table with no rows and no message. The "empty folder" row is now also shown when `items.length === 0` after filtering — making an all-hidden directory indistinguishable from an empty one (and not hinting that hidden files exist).
 - **Tests**: `__tests__/listing-parent-empty.test.js` (8 tests: parent link present/absent and its href with and without `urlPrefix`; empty-folder row for all-hidden / physically-empty / has-visible-entry directories, and the no-leak equivalence).
 
+### ⚠️ Deprecation — invalid `browserCacheMaxAge` now warns (will throw in a future major) (register #12)
+- **Issue**: an invalid `browserCacheMaxAge` (negative, `NaN`, non-integer, `Infinity`, or a string) fell back to the default `3600` **silently** — inconsistent with `dirListing.maxEntries` / `template.renderTimeout` / `serverCache.*.maxAge`, which throw with a hint.
+- **Fix**: consistent with the #11 decision, the factory now emits a **once-per-process deprecation warning** and keeps the `3600` fallback; a future major will turn it into a hard throw. The validity boundary is strict (non-negative finite integer), so exactly the values that warn now are the ones that will throw later — nothing goes from silently-accepted straight to throwing without a deprecation window. An omitted value still defaults to `3600` with no warning.
+- **No behavior change beyond the warning**: any value that produced a given `Cache-Control: max-age` before still does; only previously-silent fallbacks (and the now-flagged non-integer/`Infinity` cases) additionally log the warning. The caller's options object is not mutated.
+- **Tests**: `__tests__/browser-cache-maxage-validation.test.js` (11 tests: warn + `max-age=3600` fallback for each invalid form, valid values used without warning, `0`/undefined handling, once-per-process dedup, no caller mutation).
+
 ### 🧹 Chore — `Buffer.slice()` → `Buffer.subarray()` (register #15)
 - The Range/206 in-memory path used the deprecated `Buffer.prototype.slice` (DEP0158); replaced with `subarray()` — identical zero-copy semantics.
 

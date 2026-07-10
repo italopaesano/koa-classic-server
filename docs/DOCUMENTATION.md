@@ -933,6 +933,80 @@ Se MIME type non riconosciuto:
 Estensione sconosciuta → 'unknow' (nel directory listing)
 ```
 
+### Compressione (gzip / brotli)
+
+La compressione delle risposte è **attiva di default** per i tipi MIME comprimibili (HTML, CSS,
+JS, JSON, XML, SVG, testo…). Non richiede configurazione: l'encoding viene **negoziato** in base
+all'header `Accept-Encoding` del client e il risultato viene messo in cache lato server (vedi
+`serverCache.compressedFile`).
+
+**Negoziazione (conforme a RFC 9110):**
+- Vince l'ordine di **preferenza del server** (`compression.encodings`, default `['br', 'gzip']`);
+  i q-value del client servono solo a **escludere** gli encoding rifiutati (`Accept-Encoding: br;q=0`).
+- Il match sul token è esatto e il wildcard `*` è gestito.
+- Le risposte comprimibili portano `Vary: Accept-Encoding` (anche i 304 e le varianti identity),
+  così i proxy condivisi cacheano correttamente le varianti.
+- L'`ETag` è **specifico dell'encoding** (suffisso `-br` / `-gz`) per evitare falsi 304 tra
+  rappresentazioni diverse.
+
+**Soglie:**
+- Sotto `minFileSize` (default `1024` byte) il file non viene compresso.
+- Sopra `maxFileSize` (default `10 MB`) si passa alla **modalità streaming a RAM limitata**
+  (brotli Q4 / gzip 6, senza `Content-Length`, non cachata) invece del percorso bufferizzato ad
+  alta qualità (file intero in RAM → brotli Q11 → cache). È una *safety net* contro RAM/CPU
+  illimitate su file comprimibili enormi (log/JSON/CSV multi-GB), non una restrizione al serving.
+  `maxFileSize: false` toglie il tetto.
+
+```javascript
+// tuning
+app.use(koaClassicServer(root, {
+  compression: {
+    enabled:     true,
+    encodings:   ['br', 'gzip'], // ordine di preferenza server; [] disabilita
+    minFileSize: 1024,
+    maxFileSize: 10485760,       // 10 MB; false = nessun tetto al percorso bufferizzato
+    mimeTypes:   [],             // se valorizzato, SOSTITUISCE la lista di tipi comprimibili
+  },
+}));
+
+// disabilitare del tutto
+app.use(koaClassicServer(root, { compression: false }));
+```
+
+| Opzione | Tipo | Default | Descrizione |
+|---|---|---|---|
+| `compression.enabled` | `Boolean` | `true` | Interruttore generale (o `compression: false`) |
+| `compression.encodings` | `String[]` | `['br','gzip']` | Algoritmi in ordine di preferenza server; `[]` disabilita |
+| `compression.minFileSize` | `Number\|false` | `1024` | Dimensione minima per comprimere; `false` = nessun minimo |
+| `compression.maxFileSize` | `Number\|false` | `10485760` | Oltre questa soglia → streaming a RAM limitata; `false` = nessun tetto |
+| `compression.mimeTypes` | `String[]` | `[]` | Sostituisce la lista dei MIME comprimibili di default |
+
+### Cache lato server (`serverCache`)
+
+Cache in RAM **indipendenti** dalla cache HTTP del browser (`browserCacheEnabled`):
+
+- **`serverCache.compressedFile`** *(default: `enabled: true`)* — memorizza i buffer delle risposte
+  **compresse** (br/gzip), così un file richiesto più volte non viene ricompresso a ogni richiesta.
+  Non è una cache dei file `.zip`/`.tar` su disco.
+- **`serverCache.rawFile`** *(default: `enabled: false`)* — memorizza i buffer dei file **grezzi**
+  (non compressi) per evitare la lettura da disco; utile per file piccoli molto richiesti.
+
+Richieste concorrenti sullo stesso file condividono un'unica lettura+compressione (*single-flight*):
+niente "thundering herd" a cache fredda.
+
+| Opzione | Tipo | Default | Descrizione |
+|---|---|---|---|
+| `serverCache.compressedFile.enabled` | `Boolean` | `true` | Abilita la cache delle risposte compresse |
+| `serverCache.compressedFile.maxSize` | `Number` | `104857600` | RAM massima della cache (byte; 100 MB) |
+| `serverCache.compressedFile.maxAge` | `Number` | `0` | ms dopo cui un'entry è considerata stantia (0 = disabilitato) |
+| `serverCache.rawFile.enabled` | `Boolean` | `false` | Abilita la cache dei buffer grezzi |
+| `serverCache.rawFile.maxSize` | `Number` | `52428800` | RAM massima (byte; 50 MB) |
+| `serverCache.rawFile.maxFileSize` | `Number` | `1048576` | File oltre questa dimensione non vengono mai cachati (1 MB) |
+| `serverCache.rawFile.maxAge` | `Number` | `0` | ms dopo cui un'entry è stantia (0 = disabilitato) |
+
+> `maxAge > 0` è utile su NFS/SMB/overlay FS dove `mtime`+`size` potrebbero non riflettere modifiche
+> remote entro la finestra di attribute-cache del sistema operativo.
+
 ---
 
 ## Testing

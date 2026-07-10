@@ -38,12 +38,12 @@ describe('dirListing — V3 default values (HTTP file server first philosophy)',
         expect(() => koaClassicServer(fakeRoot, {})).not.toThrow();
     });
 
-    test('dirListing.maxEntries default is 100000 (soft anti-OOM cap, not a policy restriction)', async () => {
+    test('dirListing.maxEntries default is 10000 (soft anti-OOM cap, not a policy restriction)', async () => {
         // Generate a directory with 200 entries and confirm that:
         //   - all are visible
         //   - no truncation banner
         //   - no X-Dir-Truncated header
-        // — this matches expectation under the default (cap is 100000).
+        // — this matches expectation under the default (cap is 10000).
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-default-cap-'));
         for (let i = 0; i < 200; i++) fs.writeFileSync(path.join(tmpDir, `f${i}.txt`), 'x');
         const app = new Koa(); app.silent = true;

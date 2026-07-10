@@ -39,10 +39,10 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [ ] [12. `browserCacheMaxAge` negativo coerciuto silenziosamente](#12-browsercachemaxage-negativo-coerciuto-silenziosamente)
 
 ### Minori / cosmetici
-- [ ] [13. Link "Parent Directory" alla radice di `urlPrefix` esce dal prefix](#13-link-parent-directory-alla-radice-di-urlprefix-esce-dal-prefix)
+- [x] [13. Link "Parent Directory" alla radice di `urlPrefix` esce dal prefix](#13-link-parent-directory-alla-radice-di-urlprefix-esce-dal-prefix) — **RISOLTO** (link omesso quando `pageHrefOutPrefix.pathname === '/'`, cioè alla radice logica del middleware)
 - [x] [14. `hideExtension`: incoerenza decoded/raw nel check dell'estensione](#14-hideextension-incoerenza-decodedraw-nel-check-dellestensione) — **RISOLTO** (check sul path decodificato; target del redirect ricostruito in spazio decodificato e ri-encodato — insieme al #20, Modello B)
 - [x] [15. `Buffer.slice()` deprecato](#15-bufferslice-deprecato) — **RISOLTO** (`subarray()`)
-- [ ] [16. Riga "empty folder" assente se tutte le entry sono nascoste](#16-riga-empty-folder-assente-se-tutte-le-entry-sono-nascoste)
+- [x] [16. Riga "empty folder" assente se tutte le entry sono nascoste](#16-riga-empty-folder-assente-se-tutte-le-entry-sono-nascoste) — **RISOLTO** (riga mostrata anche quando `items.length === 0` dopo il filtro hidden)
 - [x] [20. `hideExtension`: `/foo.ejs/` (slash finale) redirige a `/foo.` (target rotto)](#20-hideextension-fooejs-slash-finale-redirige-a-foo-target-rotto) — **RISOLTO** (Modello B: URL con estensione + slash finale → 404 come da #3; niente più redirect rotto)
 
 ---
@@ -521,6 +521,13 @@ valutare un `warn` in v3.x e throw in v4.
 
 ### 13. Link "Parent Directory" alla radice di `urlPrefix` esce dal prefix
 
+**Stato: ✅ RISOLTO** (2026-07-10 — la condizione che decide se mostrare il link ora è
+`pageHrefOutPrefix.pathname !== "/"` (radice **logica** del middleware) invece di confrontare
+il path *con prefix* contro la root assoluta. Con `urlPrefix: '/static'`, il listing di
+`/static/` non mostra più il link a `/` (fuori dall'albero servito); un sotto-listing
+`/static/sub/` punta correttamente a `/static/` (dentro il prefix). Test:
+`__tests__/listing-parent-empty.test.js`.)
+
 **Posizione:** `index.cjs:1949-1957`.
 
 **Problema:** con `urlPrefix: '/static'`, il listing di `GET /static/` mostra il link
@@ -580,6 +587,12 @@ semantica zero-copy ed è l'API raccomandata.
 ---
 
 ### 16. Riga "empty folder" assente se tutte le entry sono nascoste
+
+**Stato: ✅ RISOLTO** (2026-07-10 — la riga "empty folder" viene mostrata anche quando
+`items.length === 0` **dopo** il filtro hidden (oltre al caso `dir.length === 0` già gestito).
+Una directory con sole entry nascoste è così indistinguibile da una vuota — niente tabella
+senza righe, e nessun indizio che esistano file nascosti. Test:
+`__tests__/listing-parent-empty.test.js`.)
 
 **Posizione:** `index.cjs:1959` (check `dir.length === 0` fatto **prima** del filtro hidden).
 

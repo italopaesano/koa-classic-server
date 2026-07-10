@@ -2326,9 +2326,12 @@ module.exports = function koaClassicServer(
             parts.push("</thead>");
             parts.push("<tbody>");
 
-            // Parent directory link
+            // Parent directory link — omitted at the middleware's LOGICAL root
+            // (pageHrefOutPrefix.pathname === '/'), not only at the absolute root: with
+            // urlPrefix '/static', the listing of /static/ must not link to '/', which is
+            // outside the served tree (#13).
             const currentPath = pageHref.origin + pageHref.pathname;
-            if (currentPath !== pageHrefOutPrefix.origin + "/") {
+            if (pageHrefOutPrefix.pathname !== "/") {
                 // Build parent directory URL without query parameters
                 const a_pD = currentPath.split("/");
                 a_pD.pop();
@@ -2337,8 +2340,9 @@ module.exports = function koaClassicServer(
                 parts.push(`<tr><td><a href="${escapeHtml(parentDirectory)}"><b>.. Parent Directory</b></a></td><td>DIR</td><td>-</td></tr>`);
             }
 
+            const emptyFolderRow = `<tr><td>empty folder</td><td></td><td></td></tr>`;
             if (dir.length === 0) {
-                parts.push(`<tr><td>empty folder</td><td></td><td></td></tr>`);
+                parts.push(emptyFolderRow);
             } else {
                 const _listingBaseUrl = pageHref.origin + pageHref.pathname;
                 const _listingOriginPrefix = pageHref.origin + options.urlPrefix;
@@ -2431,6 +2435,13 @@ module.exports = function koaClassicServer(
                     rawItems.push(...batch);
                 }
                 const items = rawItems.filter(Boolean);
+
+                // Every entry was filtered out as hidden (dotfiles / alwaysHide / blacklist):
+                // show the same "empty folder" row as a physically empty directory (#16), not a
+                // header-only empty table (which would also hint that hidden files exist).
+                if (items.length === 0) {
+                    parts.push(emptyFolderRow);
+                }
 
                 // Places directories before non-directories; falls back to `tieBreaker`
                 // when both items are in the same bucket. `effectiveType === 2` covers plain

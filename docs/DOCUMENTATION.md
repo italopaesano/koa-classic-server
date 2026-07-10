@@ -46,7 +46,7 @@
 #### 4. Gestione URL Avanzata
 - Supporto per URL prefix (es. `/public`, `/static`, `/files`)
 - URL riservati non accessibili da remoto
-- Normalizzazione automatica degli URL (rimozione trailing slash)
+- Canonicalizzazione del trailing slash (V4): `/dir` → 301 `/dir/`, un file con slash finale → 404 (opzione `dirListing.trailingSlash`)
 - Decodifica URI corretta per spazi e caratteri speciali
 - Gestione case-sensitive dei path
 
@@ -78,7 +78,7 @@ koa-classic-server/
 Il middleware segue questo flusso per ogni richiesta HTTP:
 
 1. **Validazione Metodo HTTP**: Verifica che il metodo sia tra quelli ammessi
-2. **Normalizzazione URL**: Rimuove trailing slash e normalizza il path
+2. **Normalizzazione URL**: decodifica e normalizza il path (protezione da traversal e null-byte)
 3. **Verifica URL Prefix**: Controlla che la richiesta cada sotto il prefix configurato
 4. **Controllo URL Riservati**: Verifica che non sia una risorsa protetta
 5. **Risoluzione Path**: Costruisce il path completo file/directory
@@ -830,16 +830,21 @@ Nel directory listing, viene sempre mostrato link alla parent directory, tranne 
 </table>
 ```
 
-### Normalizzazione URL
+### Trailing slash canonico (V4)
 
-Il middleware normalizza automaticamente gli URL:
+Dalla v4.0.0 il middleware **canonicalizza** il trailing slash (opzione
+`dirListing.trailingSlash`, default `true`):
 
 ```
-http://localhost:3000/folder/  → http://localhost:3000/folder
-http://localhost:3000/file.txt/ → http://localhost:3000/file.txt
+http://localhost:3000/folder    → 301 → http://localhost:3000/folder/   (una directory è servita al suo URL con slash)
+http://localhost:3000/file.txt/ → 404                                    (un file è raggiungibile solo senza slash finale)
 ```
 
-Questo assicura comportamento coerente indipendentemente dal trailing slash.
+Il redirect fa sì che i riferimenti relativi in una pagina index si risolvano contro la
+directory corretta. Con `dirListing: { trailingSlash: false }` si ripristina il comportamento
+pre-v4 (file e directory serviti indipendentemente dallo slash). Anche `hideExtension` segue
+questo modello: `/foo.ejs/` (estensione + slash finale) → 404, mentre `/foo.ejs` → 301 verso
+l'URL pulito `/foo`.
 
 ### Gestione dei Link Simbolici (Symlink)
 

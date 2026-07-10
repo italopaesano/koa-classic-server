@@ -1656,11 +1656,15 @@ module.exports = function koaClassicServer(
                 const rawPath = urlToUse.split('?')[0];
                 const hadTrailingSlash = rawPath.length > 1 && rawPath.endsWith('/');
 
-                // Strip a trailing slash before the extension check so URLs like /foo.html/
-                // still match (the slash is URL formality, not part of the filename) — without
-                // this, /foo.html/ would skip the redirect and 404 trying to open it as a dir.
-                const pathForExtCheck = hadTrailingSlash ? rawPath.slice(0, -1) : requestedPath;
-                if (pathForExtCheck.endsWith(hideExt)) {
+                // Model B (V4): an extension URL is canonicalized to its clean form only when it
+                // has NO trailing slash. A trailing slash means directory intent, so /foo.ejs/
+                // falls through to the file/dir dispatch, where a file requested with a trailing
+                // slash is a 404 (finding #3). We gate on _pathEndsWithSlash — the very flag that
+                // #3's file-branch 404 uses — so "skip the redirect" and "404 downstream" are the
+                // same condition. requestedPath is decoded (and already slash-stripped by the URL
+                // parse), so a percent-encoded dot (/foo%2Eejs → /foo.ejs) matches consistently (#14),
+                // while /foo%2Eejs/ is excluded here by _pathEndsWithSlash and 404s downstream.
+                if (!_pathEndsWithSlash && requestedPath.endsWith(hideExt)) {
                     // Build redirect target using ctx.originalUrl (always, regardless of
                     // useOriginalUrl). With useOriginalUrl: false the URL-parsing prologue
                     // validated ctx.url (the rewritten one), NOT originalUrl — a malformed
@@ -1674,29 +1678,45 @@ module.exports = function koaClassicServer(
                         sendBadRequest(ctx);
                         return;
                     }
-                    let redirectPath = originalUrlObj.pathname;
 
-                    // Collapse leading slashes: a Location header starting with "//" (or "/\")
-                    // is a protocol-relative URL and would let "GET //evil.com/foo.ejs" redirect
-                    // off-origin. path.normalize() upstream already collapses these for the
-                    // filesystem check, so the source-of-truth URL has a single leading slash.
-                    if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
-                        redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
+                    // Build the clean target in DECODED space: the extension may be percent-encoded
+                    // in the raw URL (e.g. "%2Eejs"), so decoding first makes it literal and
+                    // sliceable, then we re-encode per segment (#14, #20). The URL constructor
+                    // already validated the encoding, so decodeURIComponent cannot throw — but
+                    // guard for symmetry with the other malformed-client-input guards.
+                    let decodedPath;
+                    try {
+                        decodedPath = decodeURIComponent(originalUrlObj.pathname);
+                    } catch {
+                        sendBadRequest(ctx);
+                        return;
                     }
 
-                    redirectPath = redirectPath.slice(0, redirectPath.length - hideExt.length);
+                    let cleanPath = decodedPath.slice(0, decodedPath.length - hideExt.length);
 
                     // Special case: /index.ejs → /, /sezione/index.ejs → /sezione/
-                    const baseName = path.basename(redirectPath);
-                    // Check if the remaining path points to an index file
+                    const baseName = path.basename(cleanPath);
                     if (options.index && options.index.length > 0) {
                         for (const pattern of options.index) {
                             if (typeof pattern === 'string' && (baseName + hideExt) === pattern) {
                                 // Redirect to the directory (with trailing slash)
-                                redirectPath = redirectPath.slice(0, redirectPath.length - baseName.length);
+                                cleanPath = cleanPath.slice(0, cleanPath.length - baseName.length);
                                 break;
                             }
                         }
+                    }
+
+                    // Re-encode per path segment: round-trips spaces, "%", etc. back into a valid
+                    // URL. encodeURIComponent may over-encode sub-delims in exotic filenames, but
+                    // the result always resolves to the same path.
+                    let redirectPath = cleanPath.split('/').map(encodeURIComponent).join('/');
+
+                    // Open-redirect guard LAST: a Location starting with "//" (or "/\") is a
+                    // protocol-relative URL that would navigate off-origin ("GET //evil.com/foo.ejs").
+                    // Placed after re-encoding because a decoded "%2F" can reintroduce a leading
+                    // "//"; collapse any run of leading slashes/backslashes to a single slash.
+                    if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
+                        redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
                     }
 
                     // Preserve query string

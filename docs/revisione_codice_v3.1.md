@@ -40,10 +40,10 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 ### Minori / cosmetici
 - [ ] [13. Link "Parent Directory" alla radice di `urlPrefix` esce dal prefix](#13-link-parent-directory-alla-radice-di-urlprefix-esce-dal-prefix)
-- [ ] [14. `hideExtension`: incoerenza decoded/raw nel check dell'estensione](#14-hideextension-incoerenza-decodedraw-nel-check-dellestensione)
+- [x] [14. `hideExtension`: incoerenza decoded/raw nel check dell'estensione](#14-hideextension-incoerenza-decodedraw-nel-check-dellestensione) — **RISOLTO** (check sul path decodificato; target del redirect ricostruito in spazio decodificato e ri-encodato — insieme al #20, Modello B)
 - [x] [15. `Buffer.slice()` deprecato](#15-bufferslice-deprecato) — **RISOLTO** (`subarray()`)
 - [ ] [16. Riga "empty folder" assente se tutte le entry sono nascoste](#16-riga-empty-folder-assente-se-tutte-le-entry-sono-nascoste)
-- [ ] [20. `hideExtension`: `/foo.ejs/` (slash finale) redirige a `/foo.` (target rotto)](#20-hideextension-fooejs-slash-finale-redirige-a-foo-target-rotto)
+- [x] [20. `hideExtension`: `/foo.ejs/` (slash finale) redirige a `/foo.` (target rotto)](#20-hideextension-fooejs-slash-finale-redirige-a-foo-target-rotto) — **RISOLTO** (Modello B: URL con estensione + slash finale → 404 come da #3; niente più redirect rotto)
 
 ---
 
@@ -537,6 +537,18 @@ logica del middleware), non solo quando il path assoluto è `/`.
 
 ### 14. `hideExtension`: incoerenza decoded/raw nel check dell'estensione
 
+**Stato: ✅ RISOLTO** (2026-07-10, insieme al #20 — **Modello B** concordato col manutentore).
+Il check dell'estensione ora usa `requestedPath` (**decodificato**) in modo uniforme, quindi
+`/foo%2Eejs` è riconosciuto come `/foo.ejs`. Il **target del redirect** non viene più
+costruito affettando `hideExt.length` caratteri dal path *grezzo* (dove il punto poteva
+essere `%2E`, 6 caratteri invece di 4, → target rotto `/foo%2`): ora si **decodifica** il
+path, si toglie l'estensione nello spazio decodificato (dove è letterale) e si **ri-encoda
+per segmento** (`split('/').map(encodeURIComponent).join('/')`). La guardia anti-open-redirect
+è stata **spostata dopo** il re-encode (un `%2F` decodificato potrebbe reintrodurre un `//`
+iniziale) e i backslash restano sempre encodati (`%5C`), quindi la `Location` non può diventare
+protocol-relative — verificato con probe avversariali (`//`, `/\`, `%2F%2F`, `%5C%5C`, `%09//`,
+`///`). Test: `__tests__/hideExtension-trailing-slash.test.js`.
+
 **Posizione:** `index.cjs:1422-1429`.
 
 **Problema:** il ramo senza trailing slash confronta l'estensione sul path **decodificato**
@@ -586,6 +598,17 @@ filtro (oltre al caso `dir.length === 0`).
 
 **Posizione:** ramo hideExtension del redirect (`index.cjs`, costruzione di `redirectPath`
 da `originalUrlObj.pathname` seguita da `slice(0, len - hideExt.length)`).
+
+**Stato: ✅ RISOLTO** (2026-07-10 — **Modello B** concordato col manutentore, coerente col #3.
+Chiarimento decisivo: dopo il #3 (V4), *lo slash finale = intento-directory*, e un **file**
+richiesto con lo slash → **404 (Not Found)**. Quindi `/foo.ejs/` non va più redirette a `/foo`
+(assunzione originale del registro, **precedente** al #3) ma cade nel dispatch file/dir dove il
+404-file del #3 lo intercetta. Implementazione: il redirect di `hideExtension` è gated su
+`!_pathEndsWithSlash` — **lo stesso flag** che usa il 404-file del #3 — così "salta il redirect"
+e "404 a valle" sono la stessa condizione. Risultato: `/foo.ejs/` → 404, `/sub/index.ejs/` → 404,
+`/foo%2Eejs/` → 404; mentre senza slash `/foo.ejs` → `/foo`, `/foo%2Eejs` → `/foo` (grazie al fix
+del target decoded del #14). Con `dirListing.trailingSlash: false` l'escape hatch fa servire il
+file (200) ignorando lo slash. Test: `__tests__/hideExtension-trailing-slash.test.js`.)
 
 **Origine:** emersa dalla code review di #3 (2026-07-09) tracciando l'interazione
 hideExtension ↔ trailing-slash. **Non** introdotta da #3 (pre-esistente); orthogonale.

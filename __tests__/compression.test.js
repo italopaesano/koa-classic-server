@@ -252,6 +252,80 @@ describe('Compression — serverCache.compressedFile disabled (streaming)', () =
         // supertest auto-decompresses gzip — res.text is the original content
         expect(res.text).toBe('A'.repeat(2000));
     });
+
+    test('streaming with BROTLI: correct Content-Encoding, no Content-Length, valid payload', async () => {
+        const zlib = require('zlib');
+        const res = await supertest(server)
+            .get('/large.txt')
+            .set('Accept-Encoding', 'br')
+            .buffer(true)
+            .parse((r, cb) => {
+                const chunks = [];
+                r.on('data', c => chunks.push(c));
+                r.on('end', () => cb(null, Buffer.concat(chunks)));
+            });
+        expect(res.status).toBe(200);
+        expect(res.headers['content-encoding']).toBe('br');
+        expect(res.headers['content-length']).toBeUndefined();
+        // The payload must decode back to the original bytes. Depending on the
+        // superagent version the body may arrive already inflated; otherwise
+        // decode the raw brotli stream ourselves.
+        const decoded = res.body.toString().startsWith('AA')
+            ? res.body.toString()
+            : zlib.brotliDecompressSync(res.body).toString();
+        expect(decoded).toBe('A'.repeat(2000));
+    });
+
+    test('streaming sourced from the rawFile cache buffer (no second disk read)', async () => {
+        const fs = require('fs');
+        const s = createApp({
+            serverCache: {
+                compressedFile: { enabled: false },
+                rawFile: { enabled: true, maxFileSize: 1048576 },
+            },
+        });
+        try {
+            // First request populates the rawFile cache
+            await supertest(s).get('/large.txt').set('Accept-Encoding', 'identity');
+            // Second request compresses FROM the cached buffer: no createReadStream
+            const spy = jest.spyOn(fs, 'createReadStream');
+            const res = await supertest(s).get('/large.txt').set('Accept-Encoding', 'gzip');
+            expect(res.status).toBe(200);
+            expect(res.headers['content-encoding']).toBe('gzip');
+            expect(res.text).toBe('A'.repeat(2000));
+            const diskReads = spy.mock.calls.filter(c => String(c[0]).endsWith('large.txt'));
+            expect(diskReads.length).toBe(0);
+            spy.mockRestore();
+        } finally {
+            s.close();
+        }
+    });
+});
+
+// ─── minFileSize: custom numeric threshold is honored ────────────────────────
+
+describe('Compression — custom numeric minFileSize', () => {
+    test('minFileSize: 10 → a 16-byte JSON file becomes compressible', async () => {
+        const s = createApp({ compression: { minFileSize: 10 } });
+        try {
+            const res = await supertest(s).get('/data.json').set('Accept-Encoding', 'gzip');
+            expect(res.status).toBe(200);
+            expect(res.headers['content-encoding']).toBe('gzip');
+        } finally {
+            s.close();
+        }
+    });
+
+    test('minFileSize: 3000 → the 2000-byte file stays identity', async () => {
+        const s = createApp({ compression: { minFileSize: 3000 } });
+        try {
+            const res = await supertest(s).get('/large.txt').set('Accept-Encoding', 'gzip');
+            expect(res.status).toBe(200);
+            expect(res.headers['content-encoding']).toBeUndefined();
+        } finally {
+            s.close();
+        }
+    });
 });
 
 // ─── Compression does not apply to Range requests ────────────────────────────

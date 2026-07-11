@@ -145,6 +145,78 @@ describe('LFUCache', () => {
         expect(logger.warns.length).toBe(0);
     });
 
+    test('omitted logger falls back to console', () => {
+        const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const cache = new LFUCache(4, 0, 'rawFile'); // no logger argument
+            cache.set('a', entry('AAAA'));
+            cache.set('b', entry('BBBB')); // eviction → warn goes to console
+            expect(consoleWarn).toHaveBeenCalled();
+        } finally {
+            consoleWarn.mockRestore();
+        }
+    });
+
+    test('refresh() with only a buffer keeps mtime/size/insertedAt untouched', () => {
+        const cache = new LFUCache(1024, false, 'rawFile', silentLogger());
+        cache.set('a', entry('AAAA', { mtime: 1000, size: 4, insertedAt: 7 }));
+        expect(cache.refresh('a', { buffer: Buffer.from('BBBBBB') })).toBe(true);
+        const e = cache.peek('a');
+        expect(e.buffer.toString()).toBe('BBBBBB');
+        expect(e.mtime).toBe(1000);      // not overwritten by undefined
+        expect(e.size).toBe(4);
+        expect(e.insertedAt).toBe(7);
+        expect(cache.currentSize).toBe(6);
+    });
+
+    test('delete() of one key leaves same-frequency siblings in their bucket', () => {
+        const cache = new LFUCache(1024, false, 'rawFile', silentLogger());
+        cache.set('a', entry('AAAA'));
+        cache.set('b', entry('BBBB')); // both freq 1, same bucket
+        cache.delete('a');
+        expect(cache.peek('b')).toBeDefined();
+        expect(cache.currentSize).toBe(4);
+        // the surviving sibling is still evictable through its bucket
+        cache.set('c', entry('X'.repeat(1024))); // forces eviction of b
+        expect(cache.peek('b')).toBeUndefined();
+        expect(cache.peek('c')).toBeDefined();
+    });
+
+    // ── White-box defensive-branch tests ─────────────────────────────────────
+    // These corrupt private fields on purpose: the branches exist to make the
+    // cache survive an internal inconsistency (a bug elsewhere) without
+    // crashing the whole server. If a refactor removes the guards, these fail.
+
+    test('[defensive] delete() tolerates a key whose frequency bucket vanished', () => {
+        const cache = new LFUCache(1024, false, 'rawFile', silentLogger());
+        cache.set('a', entry('AAAA'));
+        cache._freqMap.delete(1); // simulate internal inconsistency
+        expect(() => cache.delete('a')).not.toThrow();
+        expect(cache.peek('a')).toBeUndefined();
+        expect(cache.currentSize).toBe(0);
+    });
+
+    test('[defensive] _evictOne() returns cleanly when every bucket is empty', () => {
+        const cache = new LFUCache(1024, false, 'rawFile', silentLogger());
+        cache.set('a', entry('AAAA'));
+        // Empty the bucket WITHOUT removing the key from _keyMap: the recovery
+        // loop must drain the stale bucket, find nothing else, and bail out.
+        cache._freqMap.get(1).clear();
+        expect(() => cache._evictOne()).not.toThrow();
+        expect(cache.peek('a')).toBeDefined(); // nothing evicted, nothing corrupted
+    });
+
+    test('[defensive] _evictOne() skips a stale empty bucket and evicts from the next', () => {
+        const cache = new LFUCache(1024, false, 'rawFile', silentLogger());
+        cache.set('a', entry('AAAA'));
+        cache.get('a'); // a now in bucket 2
+        cache._freqMap.set(1, new Set()); // stale empty bucket at _minFreq…
+        cache._minFreq = 1;               // …and _minFreq pointing at it
+        expect(() => cache._evictOne()).not.toThrow();
+        expect(cache.peek('a')).toBeUndefined(); // recovered and evicted from bucket 2
+        expect(cache.currentSize).toBe(0);
+    });
+
     test('warnInterval: 0 warns on every eviction; a positive interval throttles', () => {
         const always = silentLogger();
         const cacheAlways = new LFUCache(4, 0, 'rawFile', always);

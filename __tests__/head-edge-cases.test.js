@@ -145,3 +145,52 @@ describe('HEAD × template render producing a stream body', () => {
         expect(headRes.text ?? '').toBe('');
     });
 });
+
+// ─── HEAD × template renders that leave nothing to strip ─────────────────────
+// stripBodyForHead has two early-return guards that were previously untested:
+// a render that produced NO body at all (redirect / pass-through style), and a
+// render that already FLUSHED the response head itself.
+
+describe('HEAD × template render that sets no body', () => {
+    test('HEAD mirrors the no-body GET outcome instead of crashing on ctx.body', async () => {
+        const render = async (ctx) => {
+            ctx.status = 204; // render answers with a bodyless status of its own
+        };
+        const server = createServer({ template: { ext: ['ejs'], render } });
+
+        let getRes, headRes;
+        try {
+            getRes = await supertest(server).get('/page.ejs');
+            headRes = await supertest(server).head('/page.ejs');
+        } finally {
+            server.close();
+        }
+
+        // GET and HEAD agree: the render's status survives untouched.
+        expect(getRes.status).toBe(204);
+        expect(headRes.status).toBe(204);
+        expect(headRes.text ?? '').toBe('');
+    });
+});
+
+describe('HEAD × template render that flushes its own headers', () => {
+    test('stripBodyForHead leaves an already-flushed response alone', async () => {
+        const render = async (ctx) => {
+            ctx.status = 200;
+            ctx.type = 'text/html';
+            ctx.res.flushHeaders(); // head is on the wire — nothing may be rewritten
+        };
+        const server = createServer({ template: { ext: ['ejs'], render } });
+
+        let headRes;
+        try {
+            headRes = await supertest(server).head('/page.ejs');
+        } finally {
+            server.close();
+        }
+
+        expect(headRes.status).toBe(200);
+        expect(headRes.headers['content-type']).toContain('text/html');
+        expect(headRes.text ?? '').toBe('');
+    });
+});

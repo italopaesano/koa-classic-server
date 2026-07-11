@@ -101,6 +101,38 @@ describe('Content negotiation (#6) — Accept-Encoding q-values', () => {
         const res = await supertest(server).get('/large.txt').set('Accept-Encoding', '');
         expect(res.headers['content-encoding']).toBeUndefined();
     });
+
+    // ── Malformed-but-parseable headers (resilience: never crash, degrade sanely) ──
+
+    test('empty list members are skipped: ",, gzip ," → gzip', async () => {
+        const res = await enc(',, gzip ,');
+        expect(res.status).toBe(200);
+        expect(res.headers['content-encoding']).toBe('gzip');
+    });
+
+    test('non-q parameters are ignored: "gzip;level=9" → gzip', async () => {
+        const res = await enc('gzip;level=9');
+        expect(res.status).toBe(200);
+        expect(res.headers['content-encoding']).toBe('gzip');
+    });
+
+    test('unparseable q-value falls back to q=1: "gzip;q=abc" → gzip', async () => {
+        const res = await enc('gzip;q=abc');
+        expect(res.status).toBe(200);
+        expect(res.headers['content-encoding']).toBe('gzip');
+    });
+
+    test('lone semicolons and empty params survive: "gzip;;q=1;" → gzip', async () => {
+        const res = await enc('gzip;;q=1;');
+        expect(res.status).toBe(200);
+        expect(res.headers['content-encoding']).toBe('gzip');
+    });
+
+    test('header of only separators: ";,;," → identity, no crash', async () => {
+        const res = await enc(';,;,');
+        expect(res.status).toBe(200);
+        expect(res.headers['content-encoding']).toBeUndefined();
+    });
 });
 
 // ─── #7 — Vary: Accept-Encoding completeness ───────────────────────────────────

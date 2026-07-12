@@ -203,6 +203,10 @@ operator-controlled (escaping, headers, `nosniff` are up to you).
   larger compressible files are compressed via bounded-RAM streaming instead of being read
   whole into memory. Lower it on RAM-constrained hosts; `false` removes the cap (not
   recommended if untrusted parties can place large text files under `rootDir`).
+  The streamed output is itself cached when it fits in a quarter of the compressed cache's
+  `maxSize`, so repeat downloads of the same large file cost RAM proportional to the
+  *compressed* size, never the input size; disable `serverCache.compressedFile` to keep
+  large-file responses fully stateless.
 
 ### 3.11 Logging
 

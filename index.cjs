@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const zlib = require("zlib");
 const util = require("util");
 const mime = require("mime-types");
-const { Readable, pipeline } = require('stream');
+const { Readable, Transform, pipeline } = require('stream');
 
 const _brotliCompressAsync = util.promisify(zlib.brotliCompress);
 const _gzipAsync           = util.promisify(zlib.gzip);
@@ -717,9 +717,14 @@ module.exports = function koaClassicServer(
                                           //   result cached). Default: 10 MB; false = no cap.
                                           //   Larger files are STILL compressed, but via the
                                           //   bounded-RAM streaming mode (brotli Q4 / gzip 6, no
-                                          //   Content-Length, not cached). This is a SAFETY NET
-                                          //   against unbounded RAM/CPU on huge compressible files
-                                          //   (multi-GB logs/JSON/CSV), not a serving restriction.
+                                          //   Content-Length on the first response). This is a
+                                          //   SAFETY NET against unbounded RAM/CPU on huge
+                                          //   compressible files (multi-GB logs/JSON/CSV), not a
+                                          //   serving restriction. When serverCache.compressedFile
+                                          //   is enabled, the streamed OUTPUT is also cached
+                                          //   (when it fits in a quarter of that cache's maxSize),
+                                          //   so subsequent requests are served from RAM with
+                                          //   Content-Length.
             mimeTypes: [],                // compressible MIME types (replaces default list if provided)
         },
         // compression: false            // shorthand to disable all compression
@@ -1419,6 +1424,11 @@ module.exports = function koaClassicServer(
     // ETag/Last-Modified).
     const _inflightRawReads     = new Map(); // `${path}:${mtime}:${size}` → Promise<Buffer>
     const _inflightCompressions = new Map(); // `${path}:${encoding}:${mtime}:${size}` → Promise<Buffer>
+    // Streamed-compression tee leaders in flight (`${path}:${encoding}:${mtime}:${size}`).
+    // Only ONE request per key accumulates the compressed output for the cache,
+    // so worst-case tee RAM is bounded by (distinct large files in flight) × cap,
+    // never by the number of concurrent clients.
+    const _inflightStreamTees = new Set();
 
     // Returns the server-preferred enabled encoding the client is willing to accept.
     // Server preference order (compressionConfig.encodings) still wins; the
@@ -2110,11 +2120,15 @@ module.exports = function koaClassicServer(
                 // Safety net (#4): the buffered path reads the WHOLE file into RAM and
                 // compresses at max quality — fine for web assets, catastrophic for a
                 // multi-GB log/CSV. Above compression.maxFileSize the bounded-RAM
-                // streaming mode below is used instead (still compressed, not cached).
+                // streaming mode below is used instead. The cap gates only HOW the
+                // compression runs (buffered Q11 vs streamed Q4) — the compressed
+                // cache stays in play on both sides: above the cap the streamed
+                // OUTPUT is teed into the cache when it fits (see the tee branch),
+                // so later requests are RAM hits either way.
                 const withinCompressCap = compressionConfig.maxFileSize === false
                     || fileStat.size <= compressionConfig.maxFileSize;
 
-                if (serverCacheConfig.compressedFile.enabled && withinCompressCap) {
+                if (serverCacheConfig.compressedFile.enabled) {
                     // compressedFile cache mode: compress once → buffer in RAM → Content-Length known
                     const cacheKey = `${toOpen}:${encoding}`;
                     const cached = _compressedFileCache.peek(cacheKey);
@@ -2129,6 +2143,69 @@ module.exports = function koaClassicServer(
                     if (!stale) {
                         _compressedFileCache.get(cacheKey); // increment frequency
                         buf = cached.buffer; // Serve from cache
+                    } else if (!withinCompressCap) {
+                        // Above the buffered-compression cap: stream at the bounded-RAM
+                        // quality (never buffer the input), and tee the compressed OUTPUT
+                        // into the cache so later requests are RAM hits with Content-Length.
+                        // The cap protects against a large INPUT; the cache admission below
+                        // is decided on the actual OUTPUT size, which is only known here.
+                        if (ctx.method === 'HEAD') {
+                            // Mirror the GET status/headers (RFC 9110 §9.3.2) without running
+                            // the compression: no Content-Length (unknown), no cache insert.
+                            ctx.status = 200;
+                            return;
+                        }
+                        const mtimeMs = fileStat.mtime.getTime();
+                        const teeKey = `${cacheKey}:${mtimeMs}:${fileStat.size}`;
+                        // Leader election: concurrent requests for the same file version
+                        // all stream independently (no added latency for anyone), but only
+                        // the first accumulates a copy for the cache.
+                        const isLeader = !_inflightStreamTees.has(teeKey);
+                        if (isLeader) _inflightStreamTees.add(teeKey);
+                        let acc = isLeader ? [] : null;
+                        let accBytes = 0;
+                        // A single streamed entry may take at most a quarter of the cache:
+                        // one huge file must not evict most of the working set on insert.
+                        const entryCap = Math.floor(serverCacheConfig.compressedFile.maxSize / 4);
+                        const compress = encoding === 'br'
+                            ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
+                            : zlib.createGzip({ level: 6 });
+                        const src = rawBuffer
+                            ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
+                            : fs.createReadStream(toOpen);
+                        const tee = new Transform({
+                            transform(chunk, _enc, done) {
+                                if (acc) {
+                                    accBytes += chunk.length;
+                                    if (accBytes > entryCap) {
+                                        acc = null; // too big for the cache: stop accumulating, keep streaming
+                                    } else {
+                                        acc.push(chunk);
+                                    }
+                                }
+                                done(null, chunk);
+                            },
+                        });
+                        // pipeline (NOT pipe): teardown propagates in BOTH directions —
+                        // same fd-leak rationale as the non-cached streaming branch below.
+                        ctx.body = pipeline(src, compress, tee, (err) => {
+                            if (isLeader) _inflightStreamTees.delete(teeKey);
+                            if (!err && acc) {
+                                // Clean completion only: an aborted or failed stream never
+                                // inserts a (truncated) entry.
+                                refreshOrInsert(_compressedFileCache, cacheKey, {
+                                    buffer: Buffer.concat(acc, accBytes),
+                                    mtime: mtimeMs,
+                                    size: fileStat.size,
+                                    insertedAt: Date.now(),
+                                }, cached, staleByAge);
+                            }
+                            acc = null;
+                            if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
+                            _logger.error('Stream error:', err);
+                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                        });
+                        return;
                     } else {
                         try {
                             // Single-flight: concurrent misses on the same path+encoding

@@ -5,6 +5,45 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] - 2026-07-12
+
+### ⚡ Performance — streamed compression output is cached (large-file RAM hits)
+- **Issue**: above `compression.maxFileSize` (default 10 MB) every request re-ran the
+  streaming compression from scratch and discarded the output — the cap gates the
+  *input* size (never buffer a huge file), but it also disabled the compressed cache
+  *lookup*, so a 20 MB log downloaded N times cost N full compressions (~0.4 s CPU and
+  ~370 ms latency each, measured) while its ~6.5 MB compressed output would comfortably
+  fit the 100 MB compressed cache. Benchmarks: `docs/performance_v3_vs_v4.md`.
+- **Fix**: the compressed-cache lookup now runs on both sides of the cap. On a miss
+  above the cap, the response is still streamed exactly as before (bounded RAM, brotli
+  Q4 / gzip 6, no `Content-Length` on that first response), but the **leader** request
+  also tees the compressed output into the cache through a passthrough `Transform` in
+  the `pipeline`: from the second request on, the file is a RAM hit with
+  `Content-Length` (measured: 15.5 ms vs 364 ms on a 20 MB file — on par with the v3
+  buffered path, without its 35–50 s first-hit cost).
+- **Bounded by construction**: only one request per `path:encoding:mtime:size`
+  accumulates (concurrent cold requests all stream independently, no added latency);
+  accumulation stops — and the entry is skipped — beyond a quarter of the compressed
+  cache's `maxSize`, so one huge file can never evict most of the working set on
+  insert; an abort or stream error discards the accumulation (never a truncated
+  entry). Admission is decided on the actual *output* size, known only after
+  compressing.
+- **No API change, no new option**: gated by the existing
+  `serverCache.compressedFile.enabled` (disable it for fully stateless large-file
+  responses). `HEAD` on a warm entry now carries the real `Content-Length`.
+- **Docs**: `index.cjs` defaults JSDoc, `DOCUMENTATION.md` (§ compression thresholds +
+  options table), `SECURITY_HARDENING.md` §3.10, CLAUDE.md safety-net table.
+- **Tests**: `__tests__/compression-stream-tee.test.js` (9 tests: miss→tee→hit for
+  br/gzip, per-entry cap, staleness on rewrite, abort mid-stream, read error, 5
+  concurrent cold requests, cache-disabled gate; 5 verified to fail pre-fix). Two
+  assertions in `compression-max-file-size.test.js` updated to the new contract
+  (second request is a hit; warm `HEAD` has `Content-Length`).
+
+### 📦 Package Changes
+- **Version**: `4.0.0` → `4.1.0`
+- **Semver**: Minor — pure performance improvement; no observable-semantics change
+  beyond `Content-Length` (and faster responses) from the second request on.
+
 ## [4.0.0] - 2026-07-09
 
 This major release bundles the v3.1 robustness work with one intentional

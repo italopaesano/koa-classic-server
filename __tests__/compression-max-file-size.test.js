@@ -105,14 +105,17 @@ describe('compression.maxFileSize — files above the cap use streaming mode', (
         expect(calls.length).toBe(0); // createReadStream, not readFile: never buffered
     });
 
-    test('second request streams again — nothing was cached', async () => {
+    test('second request is served from the compressed cache (streamed output teed in)', async () => {
         const calls = instrumentReadFile();
         const res = await supertest(server)
             .get('/mid.txt')
             .set('Accept-Encoding', 'gzip');
         expect(res.status).toBe(200);
         expect(res.headers['content-encoding']).toBe('gzip');
-        expect(res.headers['content-length']).toBeUndefined();
+        // The first request streamed AND teed its compressed output into the
+        // cache: this one is a RAM hit — Content-Length known, no disk read.
+        expect(res.headers['content-length']).toBeDefined();
+        expect(res.text).toBe(MID_CONTENT);
         expect(calls.length).toBe(0);
     });
 
@@ -163,19 +166,30 @@ describe('compression.maxFileSize — invalid values fall back to the 10 MB defa
 // maxFileSize gate; also present with the compressed cache disabled.
 
 describe('HEAD on the streaming compression path mirrors GET', () => {
-    test('file above maxFileSize: HEAD → 200 with compression headers, no Content-Length', async () => {
+    test('file above maxFileSize: HEAD → 200 with compression headers', async () => {
         const server = createApp({
             method: ['GET', 'HEAD'],
             compression: { maxFileSize: 2048 },
         });
+        // Cold cache: HEAD mirrors GET's status/headers but never runs the
+        // compression, so the compressed size is unknown — no Content-Length.
+        const coldHead = await supertest(server).head('/mid.txt').set('Accept-Encoding', 'gzip');
+        expect(coldHead.status).toBe(200); // was 404 before the fix
+        expect(coldHead.headers['content-encoding']).toBe('gzip');
+        expect(coldHead.headers['content-length']).toBeUndefined(); // compressed size unknown
+        expect(coldHead.text).toBeFalsy(); // no body on HEAD
+
+        // After a completed GET the streamed output has been teed into the
+        // compressed cache: HEAD now mirrors the cached representation,
+        // Content-Length included.
         const get = await supertest(server).get('/mid.txt').set('Accept-Encoding', 'gzip');
-        const head = await supertest(server).head('/mid.txt').set('Accept-Encoding', 'gzip');
-        server.close();
         expect(get.status).toBe(200);
-        expect(head.status).toBe(200); // was 404 before the fix
-        expect(head.headers['content-encoding']).toBe('gzip');
-        expect(head.headers['content-length']).toBeUndefined(); // compressed size unknown
-        expect(head.text).toBeFalsy(); // no body on HEAD
+        const warmHead = await supertest(server).head('/mid.txt').set('Accept-Encoding', 'gzip');
+        server.close();
+        expect(warmHead.status).toBe(200);
+        expect(warmHead.headers['content-encoding']).toBe('gzip');
+        expect(warmHead.headers['content-length']).toBeDefined();
+        expect(warmHead.text).toBeFalsy();
     });
 
     test('compressed cache disabled (pre-existing streaming path): HEAD → 200', async () => {

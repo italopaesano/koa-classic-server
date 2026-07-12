@@ -136,3 +136,81 @@ compressione bloccante sul primo colpo dei file grandi, moltiplicazione
 CPU×concorrenza a cache fredda, fd leak sugli abort) al prezzo, configurabile,
 del throughput a regime sui file comprimibili sopra i 10 MB e di un redirect
 sulle URL di directory non canoniche.
+
+---
+
+# Appendice — proposta "stream + tee in cache" (prototipo validato)
+
+Approfondimento del 2026-07-12 sull'unico margine di miglioramento emerso:
+tutti i test in cui la v3 batte la v4 appartengono alla famiglia "file
+comprimibile sopra `compression.maxFileSize`", dove la v4 ricomprime in
+streaming a ogni richiesta e **butta via l'output**. Il cap della v4 è
+sull'*input* (20 MB), ma l'output compresso (~6,5 MB) starebbe comodamente
+nella cache compressa da 100 MB.
+
+## Il design
+
+Nel ramo streaming (`index.cjs`, sezione "Streaming mode"), quando
+`serverCache.compressedFile.enabled`:
+
+1. **La lookup in cache viene valutata anche sopra il cap** (oggi il gate
+   `withinCompressCap` esclude i file grandi dalla cache *in lettura*, non solo
+   in scrittura). Hit fresca → risposta bufferizzata dalla RAM, con
+   `Content-Length` e stessa logica di staleness (mtime+size+maxAge) del
+   percorso bufferizzato.
+2. **Su miss, la prima richiesta (leader) fa da "tee"**: un `Transform`
+   passthrough inserito nella `pipeline(src, compress, tee, cb)` accumula i
+   chunk compressi mentre il client li riceve — zero latenza aggiunta, la
+   backpressure resta intatta. Al completamento **pulito** della pipeline
+   l'accumulo è inserito in `_compressedFileCache` via `refreshOrInsert`.
+3. **Vincoli di RAM invariati**: accumula solo il leader (un `Set` di chiavi
+   `path:encoding:mtime:size` in volo, come il single-flight); l'accumulo si
+   interrompe (e si scarta) appena supera la `maxSize` della cache — una voce
+   che non può mai entrare non alloca mai più del cap; un errore o un abort del
+   client (`ERR_STREAM_PREMATURE_CLOSE`) scarta l'accumulo, mai voci troncate.
+
+Filosofia rispettata: nessun cambiamento alla semantica osservabile di
+`GET /file` (stessi byte, a parità di negotiation), RAM e CPU restano limitate
+— si smette solo di buttare via lavoro già fatto.
+
+## Risultati del prototipo (kcs4 patchato, stessa sessione di misura)
+
+`GET /big.txt` (20 MB, brotli ≈ 3:1, `Accept-Encoding: br`), run a tre vie:
+
+| Metrica | v3.1.0 | v4.0.0 | v4 + tee |
+|---|---:|---:|---:|
+| 1ª richiesta — TTFB / totale | 35 500 / 35 511 ms | 67 / 380 ms | **66 / 372 ms** |
+| 1ª richiesta — CPU | 35,6 s | 0,43 s | **0,41 s** |
+| 2ª richiesta — totale | 14,9 ms | 364 ms | **15,5 ms** |
+| 3ª richiesta — totale | 10,6 ms | 355 ms | **9,6 ms** |
+| Regime (4 conn) | 9,3 req/s · p99 3 586 ms | 6,8 req/s · p99 691 ms | **7,6 req/s · p99 549 ms** |
+| Herd: 20 richieste concorrenti a freddo | 181 385 ms · 717 s CPU | 2 101 ms · 7,2 s CPU | 2 358 ms · 7,9 s CPU |
+| RSS dopo il regime | 138 MB | 168 MB | **94 MB** |
+
+- Il **32× della v3 sulla 2ª richiesta è recuperato per intero** (15,5 ms vs
+  14,9 ms), mantenendo il primo colpo istantaneo della v4.
+- Il gap residuo a regime (7,6 vs 9,3 req/s) è **interamente spiegato dalla
+  dimensione del payload**: la voce cached è output Q4 (6,45 MB) contro il Q11
+  della v3 (5,42 MB) — 9,3 × 5,42/6,45 ≈ 7,8. La coda p99 è però ~6× migliore
+  della v3.
+- L'herd a freddo della v3 su questo scenario è **catastrofico** (3 minuti di
+  wall, 717 s di CPU, 563 MB di RSS per 20 client): la proposta conserva il
+  comportamento v4.
+
+Correttezza verificata sul prototipo: byte identici all'originale dopo
+decompressione (br e gzip, voci indipendenti), `Content-Length`/ETag coerenti
+dalla 2ª risposta, 10 richieste concorrenti a freddo tutte valide con una sola
+voce in cache, abort del client a metà download → nessuna voce inserita e
+richiesta successiva corretta.
+
+## Lavoro rimanente per portarlo in produzione
+
+- Suite di test dedicata (miss→tee→hit, abort, leader/follower, cap
+  d'accumulo, staleness su mtime/size, br+gzip, HEAD post-cache).
+- Decidere se il tee meriti un'opzione di opt-out (proposta: no — è coperto
+  dal gate esistente `serverCache.compressedFile.enabled`).
+- Aggiornare JSDoc dei default e `SECURITY_HARDENING.md` §3.10.
+- Raffinamenti possibili, non necessari alla prima iterazione: qualità di
+  compressione più alta per il solo passaggio del leader (recupererebbe parte
+  del −19 % di banda vs Q11); follower che attendono la voce del leader per
+  risparmiare CPU a freddo (al costo del loro TTFB).

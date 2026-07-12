@@ -22,12 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Content-Length` (measured: 15.5 ms vs 364 ms on a 20 MB file — on par with the v3
   buffered path, without its 35–50 s first-hit cost).
 - **Bounded by construction**: only one request per `path:encoding:mtime:size`
-  accumulates (concurrent cold requests all stream independently, no added latency);
-  accumulation stops — and the entry is skipped — beyond a quarter of the compressed
-  cache's `maxSize`, so one huge file can never evict most of the working set on
-  insert; an abort or stream error discards the accumulation (never a truncated
-  entry). Admission is decided on the actual *output* size, known only after
-  compressing.
+  accumulates (concurrent cold requests all stream independently, with no tee stage
+  and no added latency); accumulation stops — and the entry is skipped — beyond a
+  quarter of the compressed cache's `maxSize` (one huge file can never evict most of
+  the working set on insert) **and** beyond an aggregate in-flight budget equal to
+  the cache's whole `maxSize` (many *distinct* large files teed concurrently can
+  never hold more transient RAM than the cache they feed); an abort or stream error
+  discards the accumulation (never a truncated entry). Admission is decided on the
+  actual *output* size, known only after compressing.
 - **No API change, no new option**: gated by the existing
   `serverCache.compressedFile.enabled` (disable it for fully stateless large-file
   responses). `HEAD` on a warm entry now carries the real `Content-Length`.

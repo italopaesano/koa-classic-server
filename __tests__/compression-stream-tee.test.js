@@ -263,6 +263,41 @@ describe('stream tee — concurrent cold requests are all valid, cache populated
     });
 });
 
+// ─── aggregate tee budget is released on settle ──────────────────────────────
+
+describe('stream tee — the aggregate accumulation budget is released after every tee', () => {
+    test('many successive tees keep caching (no budget leak)', async () => {
+        // Tiny cache: maxSize 400 → per-entry cap 100, aggregate budget 400.
+        // Each round rewrites the file (different SIZE → always stale) and tees
+        // a ~40-60 B gzip entry. If a settled tee failed to release its share
+        // of the aggregate budget, it would exhaust the 400 B budget within a
+        // few rounds and later rounds would stop caching.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-stream-tee-budget-'));
+        const filePath = path.join(dir, 'data.txt');
+        const app = new Koa();
+        app.use(koaClassicServer(dir, {
+            dirListing: { enabled: false },
+            compression: { maxFileSize: 2048 },
+            serverCache: { compressedFile: { maxSize: 400 } },
+        }));
+        const server = app.listen();
+        try {
+            for (let round = 0; round < 12; round++) {
+                const content = 'x'.repeat(3000 + round * 10);
+                fs.writeFileSync(filePath, content);
+                const streamed = await getRaw(server, '/data.txt', 'gzip');
+                expect(streamed.status).toBe(200);
+                const cachedRes = await getRaw(server, '/data.txt', 'gzip');
+                expect(cachedRes.headers['content-length']).toBeDefined(); // still caching
+                expect(cachedRes.body.toString()).toBe(content);
+            }
+        } finally {
+            server.close();
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+});
+
 // ─── read error mid-pipeline: 500, no insert ─────────────────────────────────
 
 describe('stream tee — a source read error never inserts an entry', () => {

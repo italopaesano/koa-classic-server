@@ -577,6 +577,15 @@ function singleFlight(map, key, work) {
 // stale-by-age (mtime + size unchanged), updates in place so the existing
 // frequency counter survives — important for popular files refreshed by maxAge.
 // Otherwise falls back to delete + set (frequency resets to 1).
+// Bounded-RAM streaming compressor: constant-memory transform, lower quality
+// than the buffered path (which can afford brotli Q11 because it runs once and
+// is cached). Used by every streamed-compression pipeline.
+function createStreamCompressor(encoding) {
+    return encoding === 'br'
+        ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
+        : zlib.createGzip({ level: 6 });
+}
+
 function refreshOrInsert(cache, key, newEntry, cached, staleByAge) {
     const canRefreshInPlace = cached
         && staleByAge
@@ -1426,9 +1435,35 @@ module.exports = function koaClassicServer(
     const _inflightCompressions = new Map(); // `${path}:${encoding}:${mtime}:${size}` → Promise<Buffer>
     // Streamed-compression tee leaders in flight (`${path}:${encoding}:${mtime}:${size}`).
     // Only ONE request per key accumulates the compressed output for the cache,
-    // so worst-case tee RAM is bounded by (distinct large files in flight) × cap,
-    // never by the number of concurrent clients.
+    // so tee RAM never scales with the number of concurrent clients.
     const _inflightStreamTees = new Set();
+    // Aggregate bytes currently accumulated by ALL in-flight tees. Bounds the
+    // transient RAM across DISTINCT large files too: accumulation stops (the
+    // entry is skipped, streaming continues) rather than let the tees hold more
+    // RAM in aggregate than the compressed cache they feed (its maxSize).
+    let _inflightTeeBytes = 0;
+
+    // Streams `toOpen` (or `rawBuffer`) through the bounded-RAM compressor for
+    // `encoding` and sets it as the response body. Shared by the cache-disabled
+    // streaming branch and by tee followers; the tee leader builds its own
+    // pipeline with the extra accumulator stage.
+    // pipeline (NOT pipe): teardown propagates in BOTH directions. When the
+    // client disconnects mid-transfer, Koa destroys the body (the zlib
+    // transform) and pipeline destroys `src` too, closing its file descriptor.
+    // A bare src.pipe(compress) leaves the ReadStream paused with the fd open
+    // forever — fd leak under aborted downloads. Client disconnects are a
+    // normal event and are not logged (avoids client-driven log spam).
+    function streamCompressedBody(ctx, toOpen, rawBuffer, encoding) {
+        const compress = createStreamCompressor(encoding);
+        const src = rawBuffer
+            ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
+            : fs.createReadStream(toOpen);
+        ctx.body = pipeline(src, compress, (err) => {
+            if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
+            _logger.error('Stream error:', err);
+            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+        });
+    }
 
     // Returns the server-preferred enabled encoding the client is willing to accept.
     // Server preference order (compressionConfig.encodings) still wins; the
@@ -2157,54 +2192,78 @@ module.exports = function koaClassicServer(
                         }
                         const mtimeMs = fileStat.mtime.getTime();
                         const teeKey = `${cacheKey}:${mtimeMs}:${fileStat.size}`;
-                        // Leader election: concurrent requests for the same file version
-                        // all stream independently (no added latency for anyone), but only
-                        // the first accumulates a copy for the cache.
-                        const isLeader = !_inflightStreamTees.has(teeKey);
-                        if (isLeader) _inflightStreamTees.add(teeKey);
-                        let acc = isLeader ? [] : null;
+                        if (_inflightStreamTees.has(teeKey)) {
+                            // Follower: another request is already accumulating this exact
+                            // file version. Stream independently (no added latency, no tee
+                            // stage) — the cache will be warm for the NEXT request.
+                            streamCompressedBody(ctx, toOpen, rawBuffer, encoding);
+                            return;
+                        }
+                        // Leader: stream AND accumulate a copy for the cache.
+                        _inflightStreamTees.add(teeKey);
+                        let acc = [];
                         let accBytes = 0;
-                        // A single streamed entry may take at most a quarter of the cache:
-                        // one huge file must not evict most of the working set on insert.
+                        // Two admission bounds, both on the real OUTPUT size:
+                        //  - per entry: a quarter of the cache, so one huge file cannot
+                        //    evict most of the working set on insert;
+                        //  - aggregate (_inflightTeeBytes): all in-flight tees together may
+                        //    never hold more RAM than the cache's own maxSize.
                         const entryCap = Math.floor(serverCacheConfig.compressedFile.maxSize / 4);
-                        const compress = encoding === 'br'
-                            ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
-                            : zlib.createGzip({ level: 6 });
-                        const src = rawBuffer
-                            ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
-                            : fs.createReadStream(toOpen);
-                        const tee = new Transform({
-                            transform(chunk, _enc, done) {
-                                if (acc) {
-                                    accBytes += chunk.length;
-                                    if (accBytes > entryCap) {
-                                        acc = null; // too big for the cache: stop accumulating, keep streaming
-                                    } else {
-                                        acc.push(chunk);
-                                    }
-                                }
-                                done(null, chunk);
-                            },
-                        });
-                        // pipeline (NOT pipe): teardown propagates in BOTH directions —
-                        // same fd-leak rationale as the non-cached streaming branch below.
-                        ctx.body = pipeline(src, compress, tee, (err) => {
-                            if (isLeader) _inflightStreamTees.delete(teeKey);
-                            if (!err && acc) {
-                                // Clean completion only: an aborted or failed stream never
-                                // inserts a (truncated) entry.
-                                refreshOrInsert(_compressedFileCache, cacheKey, {
-                                    buffer: Buffer.concat(acc, accBytes),
-                                    mtime: mtimeMs,
-                                    size: fileStat.size,
-                                    insertedAt: Date.now(),
-                                }, cached, staleByAge);
+                        // Stops accumulating and releases this tee's share of the aggregate
+                        // budget. Safe to call more than once.
+                        const abandonAccumulation = () => {
+                            if (acc) {
+                                _inflightTeeBytes -= accBytes;
+                                acc = null;
                             }
-                            acc = null;
-                            if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
-                            _logger.error('Stream error:', err);
-                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
-                        });
+                        };
+                        try {
+                            const compress = createStreamCompressor(encoding);
+                            const src = rawBuffer
+                                ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
+                                : fs.createReadStream(toOpen);
+                            const tee = new Transform({
+                                transform(chunk, _enc, done) {
+                                    if (acc) {
+                                        accBytes += chunk.length;
+                                        _inflightTeeBytes += chunk.length;
+                                        if (accBytes > entryCap
+                                            || _inflightTeeBytes > serverCacheConfig.compressedFile.maxSize) {
+                                            abandonAccumulation(); // over budget: keep streaming, skip the cache
+                                        } else {
+                                            acc.push(chunk);
+                                        }
+                                    }
+                                    done(null, chunk);
+                                },
+                            });
+                            // pipeline (NOT pipe): teardown propagates in BOTH directions —
+                            // same fd-leak rationale as streamCompressedBody.
+                            ctx.body = pipeline(src, compress, tee, (err) => {
+                                _inflightStreamTees.delete(teeKey);
+                                if (!err && acc) {
+                                    // Clean completion only: an aborted or failed stream never
+                                    // inserts a (truncated) entry.
+                                    refreshOrInsert(_compressedFileCache, cacheKey, {
+                                        buffer: Buffer.concat(acc, accBytes),
+                                        mtime: mtimeMs,
+                                        size: fileStat.size,
+                                        insertedAt: Date.now(),
+                                    }, cached, staleByAge);
+                                }
+                                abandonAccumulation();
+                                if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
+                                _logger.error('Stream error:', err);
+                                if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                            });
+                        } catch (err) {
+                            // Defensive: nothing between add() and pipeline() is expected to
+                            // throw synchronously, but a leaked teeKey would silently disable
+                            // the tee for this file version forever.
+                            _inflightStreamTees.delete(teeKey);
+                            abandonAccumulation();
+                            throw err;
+                        }
                         return;
                     } else {
                         try {
@@ -2272,26 +2331,10 @@ module.exports = function koaClassicServer(
                     }
 
                 } else {
-                    // Streaming mode: pipe through zlib transform — Content-Length not known in advance
+                    // Streaming mode (compressed cache disabled): pipe through the zlib
+                    // transform — Content-Length not known in advance, nothing cached.
                     if (ctx.method !== 'HEAD') {
-                        const compress = encoding === 'br'
-                            ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
-                            : zlib.createGzip({ level: 6 });
-                        const src = rawBuffer
-                            ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
-                            : fs.createReadStream(toOpen);
-                        // pipeline (NOT pipe): teardown propagates in BOTH directions.
-                        // When the client disconnects mid-transfer, Koa destroys the body
-                        // (`compress`) and pipeline destroys `src` too, closing its file
-                        // descriptor. A bare src.pipe(compress) leaves the ReadStream
-                        // paused with the fd open forever — fd leak under aborted
-                        // downloads. Client disconnects are a normal event and are not
-                        // logged (avoids client-driven log spam).
-                        ctx.body = pipeline(src, compress, (err) => {
-                            if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
-                            _logger.error('Stream error:', err);
-                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
-                        });
+                        streamCompressedBody(ctx, toOpen, rawBuffer, encoding);
                     } else {
                         // HEAD: mirror the GET status and headers (RFC 9110 §9.3.2) — no
                         // Content-Length, since the compressed size is unknown without

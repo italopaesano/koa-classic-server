@@ -203,14 +203,33 @@ dalla 2ª risposta, 10 richieste concorrenti a freddo tutte valide con una sola
 voce in cache, abort del client a metà download → nessuna voce inserita e
 richiesta successiva corretta.
 
-## Lavoro rimanente per portarlo in produzione
+## Risultati finali — implementazione 4.1.0 (2026-07-12)
 
-- Suite di test dedicata (miss→tee→hit, abort, leader/follower, cap
-  d'accumulo, staleness su mtime/size, br+gzip, HEAD post-cache).
-- Decidere se il tee meriti un'opzione di opt-out (proposta: no — è coperto
-  dal gate esistente `serverCache.compressedFile.enabled`).
-- Aggiornare JSDoc dei default e `SECURITY_HARDENING.md` §3.10.
-- Raffinamenti possibili, non necessari alla prima iterazione: qualità di
-  compressione più alta per il solo passaggio del leader (recupererebbe parte
-  del −19 % di banda vs Q11); follower che attendono la voce del leader per
-  risparmiare CPU a freddo (al costo del loro TTFB).
+La proposta è stata implementata in `index.cjs` e rilasciata come **4.1.0**
+(vedi `docs/CHANGELOG.md`). Rispetto al prototipo, la code review ha aggiunto
+tre irrobustimenti: un **budget aggregato** per gli accumuli in volo (la somma
+non può superare la `maxSize` della cache — N file grandi *distinti*
+concorrenti non possono più gonfiare la RAM transiente), i **follower senza
+stadio tee** (streaming puro via helper condiviso `streamCompressedBody`, che
+deduplica anche il ramo cache-disabilitata), e una guardia sul ciclo di vita
+della chiave di leader-election.
+
+Benchmark a tre vie sul pacchetto finale (`big.txt` 20 MB, brotli ≈ 3:1):
+
+| Metrica | v3.1.0 | v4.0.0 | **v4.1.0** |
+|---|---:|---:|---:|
+| Hot path `small.html` (sanity) | 3 030 req/s | 3 019 req/s | 2 992 req/s |
+| 1ª richiesta — TTFB / totale | 44 378 / 44 388 ms | 72 / 389 ms | **90 / 460 ms** |
+| 1ª richiesta — CPU | 43,8 s | 0,45 s | 0,54 s |
+| 2ª / 3ª richiesta — totale | 11,4 / 18,2 ms | 399 / 373 ms | **11,8 / 9,0 ms** |
+| Regime (4 conn) | 10,1 req/s | 6,3 req/s | **8,6 req/s** |
+| Herd 20 concorrenti a freddo | 221 221 ms · 869 s CPU · 892 MB RSS | 2 942 ms · 10,3 s | 2 855 ms · 9,8 s |
+| Richiesta subito dopo l'herd | 13,4 ms | 387,9 ms | **6,7 ms** (cache già calda) |
+| RSS dopo il regime | 148 MB | 208 MB | **136 MB** |
+
+Conclusioni: la 4.1.0 **recupera integralmente il vantaggio v3 dalla seconda
+richiesta** (l'unico caso in cui la v3 batteva la v4), mantiene primo colpo,
+herd e RAM della v4, e a regime arriva all'85 % della v3 — differenza spiegata
+per intero dal payload Q4 (+19 % di byte vs Q11). Il residuo teorico (qualità
+più alta per il solo passaggio del leader) resta un raffinamento possibile
+futuro, non necessario.

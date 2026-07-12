@@ -952,10 +952,14 @@ all'header `Accept-Encoding` del client e il risultato viene messo in cache lato
 **Soglie:**
 - Sotto `minFileSize` (default `1024` byte) il file non viene compresso.
 - Sopra `maxFileSize` (default `10 MB`) si passa alla **modalità streaming a RAM limitata**
-  (brotli Q4 / gzip 6, senza `Content-Length`, non cachata) invece del percorso bufferizzato ad
-  alta qualità (file intero in RAM → brotli Q11 → cache). È una *safety net* contro RAM/CPU
-  illimitate su file comprimibili enormi (log/JSON/CSV multi-GB), non una restrizione al serving.
-  `maxFileSize: false` toglie il tetto.
+  (brotli Q4 / gzip 6, senza `Content-Length` sulla prima risposta) invece del percorso
+  bufferizzato ad alta qualità (file intero in RAM → brotli Q11 → cache). È una *safety net*
+  contro RAM/CPU illimitate su file comprimibili enormi (log/JSON/CSV multi-GB), non una
+  restrizione al serving. `maxFileSize: false` toglie il tetto.
+- Con `serverCache.compressedFile` attiva (default), **l'output compresso dello streaming viene
+  a sua volta cachato** quando pesa al massimo un quarto della `maxSize` di quella cache: dalla
+  seconda richiesta in poi il file è servito dalla RAM, con `Content-Length`. Il tetto protegge
+  dall'*input* grande; l'ammissione in cache è decisa sulla dimensione reale dell'*output*.
 
 ```javascript
 // tuning
@@ -978,7 +982,7 @@ app.use(koaClassicServer(root, { compression: false }));
 | `compression.enabled` | `Boolean` | `true` | Interruttore generale (o `compression: false`) |
 | `compression.encodings` | `String[]` | `['br','gzip']` | Algoritmi in ordine di preferenza server; `[]` disabilita |
 | `compression.minFileSize` | `Number\|false` | `1024` | Dimensione minima per comprimere; `false` = nessun minimo |
-| `compression.maxFileSize` | `Number\|false` | `10485760` | Oltre questa soglia → streaming a RAM limitata; `false` = nessun tetto |
+| `compression.maxFileSize` | `Number\|false` | `10485760` | Oltre questa soglia → streaming a RAM limitata (output riusato dalla cache compressa quando vi entra); `false` = nessun tetto |
 | `compression.mimeTypes` | `String[]` | `[]` | Sostituisce la lista dei MIME comprimibili di default |
 
 ### Cache lato server (`serverCache`)

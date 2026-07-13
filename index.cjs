@@ -2042,8 +2042,11 @@ module.exports = function koaClassicServer(
                         }
                     }
 
-                    // No index file found, show directory listing
-                    ctx.body = await show_dir(toOpen, ctx);
+                    // No index file found, show directory listing. On a readdir
+                    // failure show_dir writes the 500 error page itself and returns
+                    // undefined — don't clobber that body with the listing assignment.
+                    const listing = await show_dir(toOpen, ctx);
+                    if (listing !== undefined) ctx.body = listing;
                 } else {
                     // Directory listing disabled
                     await sendErrorPage(ctx, 404);
@@ -2534,21 +2537,13 @@ module.exports = function koaClassicServer(
                 }
             } catch (error) {
                 _logger.error('Directory read error:', error);
-                ctx.status = 500;
-                setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
-                return `
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="UTF-8">
-                        <title>Error</title>
-                    </head>
-                    <body>
-                        <h1>Error Reading Directory</h1>
-                        <p>Unable to access directory contents.</p>
-                    </body>
-                    </html>
-                `;
+                // Route through the unified writer so this 500 honors errorPages[500]
+                // (custom page when configured), the no-store / header-scrub, and the
+                // generated-page security headers — like every other 500. sendErrorPage
+                // sets ctx.status/headers/body itself; returning undefined signals the
+                // caller not to overwrite the body it just wrote.
+                await sendErrorPage(ctx, 500);
+                return undefined;
             }
 
             // Relative path of this directory from rootDir (used for alwaysHide path matching)

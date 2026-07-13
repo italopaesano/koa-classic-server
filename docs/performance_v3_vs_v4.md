@@ -233,3 +233,30 @@ herd e RAM della v4, e a regime arriva all'85 % della v3 — differenza spiegata
 per intero dal payload Q4 (+19 % di byte vs Q11). Il residuo teorico (qualità
 più alta per il solo passaggio del leader) resta un raffinamento possibile
 futuro, non necessario.
+
+## Stress concorrente e finestra brotli (follow-up sicurezza)
+
+Domanda emersa in review umana: molte richieste concorrenti *prima* che il
+leader abbia popolato la cache causano N elaborazioni parallele? Misura (100
+richieste concorrenti, 20 MB, cache fredda): il file **non** viene mai
+bufferizzato per intero — la RAM per richiesta è lo stato dell'encoder brotli,
+e il costo era **pre-esistente e identico in 4.0** (picco ~1,3 GB in
+entrambe). La 4.1 anzi disinnesca il flood sul singolo file: dopo il primo
+completamento (~0,5 s) ogni richiesta è un hit RAM.
+
+Mitigazione applicata: la finestra brotli dello streaming è stata limitata a
+**512 KB** (`BROTLI_PARAM_LGWIN: 19`, era il default 4 MB):
+
+| 100 concorrenti a freddo, 20 MB | finestra 4 MB | **finestra 512 KB** |
+|---|---:|---:|
+| Picco RSS | 1 414 MB | **344 MB (−76 %)** |
+| CPU | 87 s | 84 s |
+| Byte per risposta | 6,45 MB | **6,44 MB** (invariato) |
+
+Sul testo tipico a Q4 la finestra grande non migliorava il rapporto di
+compressione (misurato: output identico, ~40 % più veloce); il caso peggiore
+(blocchi identici ripetuti a distanza > 512 KB) comprime peggio, ma è
+contenuto degenere. La superficie residua — flood su molti file grandi
+comprimibili *distinti*, comune a ogni server che comprime al volo — è ora
+documentata in `SECURITY_HARDENING.md` §3.10 con le mitigazioni per profilo
+(rate limiting sul reverse proxy in primis).

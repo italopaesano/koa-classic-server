@@ -580,9 +580,19 @@ function singleFlight(map, key, work) {
 // Bounded-RAM streaming compressor: constant-memory transform, lower quality
 // than the buffered path (which can afford brotli Q11 because it runs once and
 // is cached). Used by every streamed-compression pipeline.
+// LGWIN 19 (512 KB window instead of brotli's default 4 MB): the encoder state
+// is the dominant per-request RAM on this path (~10 MB/stream at the default,
+// ~1.3 GB peak measured under 100 concurrent cold requests), and at Q4 the big
+// window buys nothing on typical text (measured: same output size, ~40% faster).
+// The trade-off: content with identical blocks repeated at >512 KB distance
+// (rare, pathological) compresses worse than with the 4 MB window. gzip's
+// window is 32 KB by design — nothing to bound there.
 function createStreamCompressor(encoding) {
     return encoding === 'br'
-        ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
+        ? zlib.createBrotliCompress({ params: {
+            [zlib.constants.BROTLI_PARAM_QUALITY]: 4,
+            [zlib.constants.BROTLI_PARAM_LGWIN]: 19,
+        } })
         : zlib.createGzip({ level: 6 });
 }
 

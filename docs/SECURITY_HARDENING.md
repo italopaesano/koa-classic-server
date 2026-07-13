@@ -207,6 +207,23 @@ operator-controlled (escaping, headers, `nosniff` are up to you).
   `maxSize`, so repeat downloads of the same large file cost RAM proportional to the
   *compressed* size, never the input size; disable `serverCache.compressedFile` to keep
   large-file responses fully stateless.
+- **Concurrent on-the-fly compression is a CPU/RAM amplification surface** — as on any
+  server that compresses at request time (nginx `gzip on` included). Each concurrent
+  streamed compression costs one encoder state in RAM (bounded: the streaming brotli
+  window is deliberately 512 KB, a few MB per stream in total) plus real CPU for the
+  duration of the transfer. The compressed cache defuses repeat requests to the *same*
+  file (after the first completion they are RAM hits), but a client fanning out over
+  many *distinct* large compressible files pays one compression per stream. Measured
+  order of magnitude: 100 concurrent cold requests to a 20 MB text file ≈ 340 MB peak
+  RSS and ~85 s of CPU. Mitigations, per profile:
+  - internet-facing: **rate-limit / cap per-IP concurrency at the reverse proxy**
+    (`limit_conn` / `limit_req` in nginx) — the canonical fix, out of the middleware's
+    scope;
+  - RAM/CPU-constrained hosts: lowering `compression.maxFileSize` changes only *how*
+    large files compress, not *whether* — if the concern is the compression work
+    itself, disable compression for those trees (`compression: false` on that mount)
+    or keep large compressible files out of untrusted-facing roots;
+  - the identity (uncompressed) path is unaffected: it streams with no encoder state.
 
 ### 3.11 Logging
 

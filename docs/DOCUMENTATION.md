@@ -224,6 +224,14 @@ const options = {
     // Se un file ha una di queste estensioni, viene chiamato render()
     // Default: []
     ext: ['ejs', 'EJS', 'pug', 'html']
+  },
+
+  // Pagine di errore personalizzate (V4.2+)
+  // Chiavi supportate: 404, 500, 504 — path filesystem a un .html autosufficiente
+  // Default: nessuna (pagine builtin)
+  errorPages: {
+    404: './errors/404.html',
+    500: './errors/500.html'
   }
 };
 ```
@@ -272,6 +280,31 @@ staticSecurityHeaders: { nosniff: true }
 ```
 
 Impedisce il MIME sniffing (content-sniffing XSS su file caricati dagli utenti). Default `nosniff: false` (nessun cambio di comportamento). Non si applica all'output del template engine. Dettagli nella sezione *Security Headers → Eccezione opt-in `staticSecurityHeaders.nosniff`*.
+
+#### `errorPages` (Object)
+
+Pagine di errore personalizzate (V4.2+). **Opt-in**: senza questa opzione le pagine builtin restano invariate. Ogni chiave è uno status HTTP supportato, ogni valore è il path filesystem di un file `.html`:
+
+```javascript
+errorPages: {
+  404: './errors/404.html',
+  500: './errors/500.html',
+  504: './errors/504.html',   // timeout del template render
+}
+```
+
+**Status supportati:** `404`, `500`, `504` — gli status per cui il middleware genera una pagina HTML. Qualsiasi altra chiave lancia un errore all'istanziazione. Il `400` (richieste malformate) resta deliberatamente minimale e non è personalizzabile.
+
+**Semantica del path:** path filesystem, assoluto o relativo a `process.cwd()`. Il file può (ed è consigliabile che debba) stare **fuori da `rootDir`**: così non è raggiungibile via URL e non interagisce con `hidden`, `urlPrefix` o la policy `symlinks`.
+
+**Requisito self-contained:** la pagina deve essere un **unico file `.html` autosufficiente** — CSS inline, niente riferimenti esterni a `.css`/`.js`/immagini. Il requisito è documentato ma non verificato dal middleware: le pagine custom sono servite **senza** la `Content-Security-Policy` delle pagine builtin (che ne bloccherebbe gli stili inline); gli altri header delle pagine generate (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`) restano attivi. Un riferimento esterno inserito per errore verrebbe quindi caricato davvero dal browser — è responsabilità dell'operatore non metterlo.
+
+**Ciclo di vita del file:**
+- **All'istanziazione**: il file viene letto e validato; se manca o non è leggibile la factory lancia un errore (un typo emerge all'avvio, non al primo 404).
+- **A runtime**: il contenuto è tenuto in RAM; a ogni risposta d'errore uno `stat()` rileva modifiche (mtime/size) e ricarica il file — le pagine sono **modificabili senza riavvio**.
+- **Fallback**: se al momento dell'errore il file non è più leggibile (cancellato, permessi cambiati), viene servita la pagina builtin di default e loggato un warning (throttled a 1/minuto per status).
+
+**Comportamento invariato:** gli errori con header già inviati al client non possono cambiare risposta (la connessione viene chiusa); i redirect, il `304`, il `416` e il `400` non sono pagine d'errore personalizzabili. Le risposte d'errore non ereditano mai gli header di caching di `browserCacheEnabled`; i `500`/`504` escono con `Cache-Control: no-store`.
 
 #### `dirListing.enabled` (Boolean)
 
@@ -1533,22 +1566,36 @@ template: {
 ```
 
 #### 404 Fallback
+
+Dalla V4.2 il modo consigliato per personalizzare le pagine di errore è l'opzione [`errorPages`](#errorpages-object):
+
 ```javascript
-// Ultimo middleware
-app.use(async (ctx) => {
-  ctx.status = 404;
-  ctx.type = 'html';
-  ctx.body = `
-    <!DOCTYPE html>
-    <html>
-      <head><title>404</title></head>
-      <body>
-        <h1>Pagina Non Trovata</h1>
-        <p>La risorsa richiesta non esiste.</p>
-      </body>
-    </html>
-  `;
+app.use(koaClassicServer(rootDir, {
+  errorPages: { 404: './errors/404.html' }
+}));
+```
+
+In alternativa (per esigenze dinamiche che un file statico non copre) un middleware **a monte** può riscrivere la risposta dopo `await next()`. Attenzione: deve anche rimuovere la `Content-Security-Policy` impostata dalla pagina 404 builtin, che altrimenti bloccherebbe gli stili inline della pagina custom:
+
+```javascript
+app.use(async (ctx, next) => {
+  await next();
+  if (ctx.status === 404) {
+    ctx.remove('Content-Security-Policy');
+    ctx.type = 'html';
+    ctx.body = `
+      <!DOCTYPE html>
+      <html>
+        <head><title>404</title></head>
+        <body>
+          <h1>Pagina Non Trovata</h1>
+          <p>La risorsa ${ctx.path.replace(/[&<>"']/g, '')} non esiste.</p>
+        </body>
+      </html>
+    `;
+  }
 });
+app.use(koaClassicServer(rootDir));
 ```
 
 ---

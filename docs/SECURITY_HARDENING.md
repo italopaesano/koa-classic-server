@@ -140,6 +140,15 @@ app.use(async (ctx, next) => {
 > Note: `nosniff` applies to static files only, not to template-rendered output (that is the
 > operator's responsibility inside the `render` function).
 
+**Custom error pages (`errorPages`, v4.2+):** built-in error pages carry a fully restrictive
+CSP; a **custom** page (operator-authored content) is served **without** `Content-Security-Policy`
+— the other generated-page headers (`nosniff`, `X-Frame-Options`, …) stay. Two rules:
+keep each page a single self-contained `.html` (inline CSS, no external css/js/img — an
+external reference *would* load, and a third-party endpoint would see your visitors' error
+traffic), and keep the content generic — no stack traces, versions, paths, or hostnames.
+A 404 page is shown for *every* not-found/hidden/outside-root request, so anything in it is
+public. Keep the files **outside** `rootDir` so they are not themselves served.
+
 ### 3.6 `Host` validation / DNS rebinding
 
 **Risk:** with the server exposed **directly** (loopback/LAN, no proxy), a malicious web page can

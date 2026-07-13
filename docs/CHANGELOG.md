@@ -5,6 +5,55 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0] - 2026-07-13
+
+### ✨ Feature — `errorPages`: operator-supplied custom error pages
+- **What**: new opt-in `errorPages` option mapping a supported status to a filesystem path:
+  `errorPages: { 404: './errors/404.html', 500: './errors/500.html', 504: './errors/504.html' }`.
+  Supported statuses are exactly the ones the middleware generates HTML pages for (**404, 500,
+  504**); any other key throws at factory time. `400` replies to malformed/hostile requests stay
+  deliberately minimal and are not customizable. Omitted statuses keep the built-in pages
+  byte-for-byte.
+- **Path semantics**: filesystem path (absolute or relative to `process.cwd()`), intentionally
+  NOT a URL inside `rootDir` — the page can (and should) live outside the served tree, and it
+  never interacts with `hidden` / `urlPrefix` / `symlinks`.
+- **Lifecycle**: read and validated at factory time (missing/unreadable → throw with hint, so a
+  typo fails at startup, not on the first 404); cached in RAM; re-read automatically when
+  mtime/size changes (editable without a restart); if unreadable at request time the built-in
+  page is served and a throttled warning (1/min per status) goes to the operator's `logger`.
+- **Security model**: custom pages must be a single self-contained `.html` (inline CSS, no
+  external css/js/img references). Documented, not enforced: custom pages are served **without**
+  the built-in pages' `Content-Security-Policy` (whose `default-src 'none'` would block inline
+  styles); the other generated-page headers (`nosniff`, `X-Frame-Options`, `Referrer-Policy`,
+  `Permissions-Policy`) are still sent. See `SECURITY_HARDENING.md` §3.5.
+
+### 🛡️ Robustness — every error branch unified through one writer
+- **Issue**: error responses were assembled in three inconsistent styles: the HTML pages
+  (404/template-500/504), the last-resort catch (HTML + header scrubbing + `no-store`), and five
+  stream-failure branches replying **plain text** `Error reading file` with no security headers
+  and no header cleanup — two of which could leave a stale `Content-Encoding: br/gzip` on a
+  plain-text body. One 404 branch (file became unreadable between `stat` and `access`) could
+  also leak `Cache-Control: public, max-age=...` onto the error, letting a proxy cache the 404
+  as the resource.
+- **Fix**: a single writer now produces every middleware-generated error response: custom or
+  built-in page, generated-page security headers, scrubbing of leftover representation/caching
+  headers (`Content-Encoding`, `ETag`, `Vary`, `Cache-Control`, ...), and `Cache-Control:
+  no-store` on ≥ 500 (now including the template 500/504). The template-failure 500 keeps its
+  specific built-in message when no custom page is configured.
+- **Observable change** (rare branches only): the five stream-failure 500s now reply with the
+  HTML error page instead of 11 bytes of plain text — when a reply is deliverable at all: Koa 3
+  answers a stream-body error by tearing down the socket, so these writes are best-effort
+  (verified: the old plain-text reply was equally undelivered under Koa 3). The
+  `access`-failure 404 no longer carries the public `Cache-Control`. No test asserted the old
+  bodies.
+- **Docs**: `index.cjs` defaults JSDoc, `README.md` (options block + example),
+  `DOCUMENTATION.md` (§ `errorPages` + updated 404-fallback best practice),
+  `SECURITY_HARDENING.md` §3.5.
+- **Tests**: `__tests__/error-pages.test.js` (22 tests: factory validation, custom/built-in
+  serving, CSP presence/absence, HEAD, live reload, runtime fallback + warn throttling,
+  template 500/504, last-resort catch, stream-failure branches, Cache-Control scrub,
+  minimal 400 preserved).
+
 ## [4.1.0] - 2026-07-12
 
 ### ⚡ Performance — streamed compression output is cached (large-file RAM hits)

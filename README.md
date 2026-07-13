@@ -311,8 +311,19 @@ koaClassicServer(rootDir, {
   },
 
   serverCache: {                         // in-memory server-side caches
-    rawFile:        { enabled: false },  // cache raw file buffers
-    compressedFile: { enabled: true },   // cache br/gzip responses
+    rawFile: {                           // cache raw file buffers (skip disk reads)
+      enabled:      false,
+      maxSize:      52428800,            // total RAM cap, bytes (50 MB)
+      maxFileSize:  1048576,             // larger files are never cached, bytes (1 MB)
+      maxAge:       0,                   // ms before an entry counts as stale (0 = off)
+      warnInterval: 60000,               // ms between "maxSize reached" warnings (0 = always, false = never)
+    },
+    compressedFile: {                    // cache br/gzip responses (compress once)
+      enabled:      true,
+      maxSize:      104857600,           // total RAM cap, bytes (100 MB)
+      maxAge:       0,                   // ms before an entry counts as stale (0 = off)
+      warnInterval: 60000,               // ms between "maxSize reached" warnings (0 = always, false = never)
+    },
   },
 
   symlinks: 'follow',                    // 'follow' | 'follow-within-root' | 'deny'

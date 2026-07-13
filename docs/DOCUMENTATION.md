@@ -1036,10 +1036,12 @@ niente "thundering herd" a cache fredda.
 | `serverCache.compressedFile.enabled` | `Boolean` | `true` | Abilita la cache delle risposte compresse |
 | `serverCache.compressedFile.maxSize` | `Number` | `104857600` | RAM massima della cache (byte; 100 MB) |
 | `serverCache.compressedFile.maxAge` | `Number` | `0` | ms dopo cui un'entry è considerata stantia (0 = disabilitato) |
+| `serverCache.compressedFile.warnInterval` | `Number\|false` | `60000` | ms tra i warning "maxSize raggiunto" (`0` = a ogni evento; `false` = mai) |
 | `serverCache.rawFile.enabled` | `Boolean` | `false` | Abilita la cache dei buffer grezzi |
 | `serverCache.rawFile.maxSize` | `Number` | `52428800` | RAM massima (byte; 50 MB) |
 | `serverCache.rawFile.maxFileSize` | `Number` | `1048576` | File oltre questa dimensione non vengono mai cachati (1 MB) |
 | `serverCache.rawFile.maxAge` | `Number` | `0` | ms dopo cui un'entry è stantia (0 = disabilitato) |
+| `serverCache.rawFile.warnInterval` | `Number\|false` | `60000` | ms tra i warning "maxSize raggiunto" (`0` = a ogni evento; `false` = mai) |
 
 > `maxAge > 0` è utile su NFS/SMB/overlay FS dove `mtime`+`size` potrebbero non riflettere modifiche
 > remote entro la finestra di attribute-cache del sistema operativo.

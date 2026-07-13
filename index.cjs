@@ -2863,4 +2863,11 @@ module.exports._internals = {
     singleFlight,
     refreshOrInsert,
     escapeHtml,
+    // writeErrorPage is the shared output path for every middleware-generated error
+    // response (sendErrorPage / sendErrorPageSync delegate to it). Exposed so its
+    // contract — header scrub, no-store on >=500, Content-Type, custom-vs-built-in
+    // body, CSP only for the built-in page — can be asserted deterministically: the
+    // stream-failure branches that also use it can't be, because Koa 3 tears the
+    // socket down on a mid-stream body error before the client sees the response.
+    writeErrorPage,
 };

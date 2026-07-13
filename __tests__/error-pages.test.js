@@ -27,6 +27,7 @@ const { PassThrough } = require('stream');
 const Koa = require('koa');
 const supertest = require('supertest');
 const koaClassicServer = require('../index.cjs');
+const { writeErrorPage } = require('../index.cjs')._internals;
 
 let fixturesDir; // served rootDir
 let pagesDir;    // custom pages live OUTSIDE rootDir
@@ -417,5 +418,103 @@ describe('500 branches unified through the error-page writer', () => {
         // Previously this branch leaked `public, max-age=...` onto the 404 —
         // a proxy could cache the error as the resource. Now scrubbed.
         expect(res.headers['cache-control']).toBeUndefined();
+    });
+});
+
+// ─── writeErrorPage output contract (deterministic) ──────────────────────────
+//
+// The stream-failure branches above route through sendErrorPageSync → the
+// module-level writeErrorPage, but their delivered output can't be asserted:
+// Koa 3 tears the socket down on a mid-stream body error, so the client always
+// sees ECONNRESET (the response never arrives). These tests exercise the SAME
+// writeErrorPage through a normal Koa response — a middleware pre-sets the
+// "dirty" headers a partially-built response would have left behind, then calls
+// writeErrorPage — so the exact scrub / no-store / Content-Type / body / CSP
+// contract is verified end-to-end without depending on the socket surviving.
+
+describe('writeErrorPage output contract', () => {
+    // Headers a partial file response typically set before an error is detected.
+    const DIRTY_HEADERS = {
+        'Content-Encoding': 'gzip',                 // the compressed-stream corruption vector
+        'Content-Type': 'image/png',                // must be overwritten to text/html
+        'Cache-Control': 'public, max-age=3600',    // must not survive onto an error
+        'ETag': '"123-456-gz"',
+        'Last-Modified': 'Mon, 13 Jul 2026 00:00:00 GMT',
+        'Vary': 'Accept-Encoding',
+        'Content-Range': 'bytes 0-9/100',
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': 'attachment; filename="x.png"',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+    };
+    const SCRUBBED = Object.keys(DIRTY_HEADERS)
+        .map(h => h.toLowerCase())
+        .filter(h => h !== 'content-type' && h !== 'cache-control'); // these two are re-set, not just removed
+
+    // Spins up a one-shot Koa server whose sole middleware dirties the response
+    // then calls writeErrorPage(status, customBuffer, builtinHtml).
+    function serveViaWriter(status, customBuffer, builtinHtml) {
+        const app = new Koa();
+        app.on('error', () => {});
+        app.use((ctx) => {
+            for (const [k, v] of Object.entries(DIRTY_HEADERS)) ctx.set(k, v);
+            writeErrorPage(ctx, status, customBuffer, builtinHtml);
+        });
+        return app.listen();
+    }
+
+    test('built-in 500: dirty headers scrubbed, text/html, no-store, CSP present', async () => {
+        const server = serveViaWriter(500, null, '<html>BUILTIN 500</html>');
+        const res = await supertest(server).get('/').ok(() => true);
+        server.close();
+
+        expect(res.status).toBe(500);
+        expect(res.text).toBe('<html>BUILTIN 500</html>');
+        expect(res.headers['content-type']).toContain('text/html');
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.headers['content-security-policy']).toBeDefined(); // built-in page keeps its CSP
+        expect(res.headers['x-content-type-options']).toBe('nosniff');
+        for (const h of SCRUBBED) expect(res.headers[h]).toBeUndefined();
+    });
+
+    test('custom-buffer 500: serves the buffer, NO CSP, still scrubbed + no-store', async () => {
+        const buf = Buffer.from('<html>CUSTOM 500 BODY</html>');
+        const server = serveViaWriter(500, buf, '<html>BUILTIN 500</html>');
+        const res = await supertest(server).get('/').ok(() => true);
+        server.close();
+
+        expect(res.status).toBe(500);
+        expect(res.text).toBe('<html>CUSTOM 500 BODY</html>'); // operator's page, not the built-in
+        expect(res.headers['content-type']).toContain('text/html');
+        expect(res.headers['content-length']).toBe(String(buf.length));
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.headers['content-security-policy']).toBeUndefined(); // operator-authored → no CSP
+        expect(res.headers['content-encoding']).toBeUndefined();        // the corruption vector, gone
+        for (const h of SCRUBBED) expect(res.headers[h]).toBeUndefined();
+    });
+
+    test('built-in 404: Cache-Control removed entirely (no no-store on < 500), CSP present', async () => {
+        const server = serveViaWriter(404, null, '<html>BUILTIN 404</html>');
+        const res = await supertest(server).get('/').ok(() => true);
+        server.close();
+
+        expect(res.status).toBe(404);
+        expect(res.text).toBe('<html>BUILTIN 404</html>');
+        expect(res.headers['content-type']).toContain('text/html');
+        expect(res.headers['cache-control']).toBeUndefined(); // scrubbed, and NOT replaced by no-store
+        expect(res.headers['content-security-policy']).toBeDefined();
+        for (const h of SCRUBBED) expect(res.headers[h]).toBeUndefined();
+    });
+
+    test('custom-buffer 404: serves the buffer with no CSP', async () => {
+        const buf = Buffer.from('<html>CUSTOM 404 BODY</html>');
+        const server = serveViaWriter(404, buf, '<html>BUILTIN 404</html>');
+        const res = await supertest(server).get('/').ok(() => true);
+        server.close();
+
+        expect(res.status).toBe(404);
+        expect(res.text).toBe('<html>CUSTOM 404 BODY</html>');
+        expect(res.headers['content-security-policy']).toBeUndefined();
+        expect(res.headers['content-encoding']).toBeUndefined();
     });
 });

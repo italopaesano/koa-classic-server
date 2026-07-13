@@ -150,6 +150,25 @@ app.use(koaClassicServer(path.join(__dirname, 'www'), {
 // .env, .git/config, *.key → 404
 ```
 
+### Custom error pages
+
+Branded 404/500/504 pages from self-contained `.html` files (v4.2+). Keep them **outside**
+`rootDir` so they are not themselves reachable via URL; edit them anytime — changes are
+picked up without a restart, and an unreadable file falls back to the built-in page:
+
+```javascript
+app.use(koaClassicServer(path.join(__dirname, 'www'), {
+  errorPages: {
+    404: path.join(__dirname, 'errors', '404.html'),
+    500: path.join(__dirname, 'errors', '500.html'),
+  },
+}));
+```
+
+One rule: each page must be a single self-contained file (inline CSS, no external
+css/js/img references). Custom pages are served without the built-in pages'
+`Content-Security-Policy`, so an external reference would really load.
+
 ### Mount under a prefix, pass through some routes
 
 ```javascript
@@ -298,6 +317,12 @@ koaClassicServer(rootDir, {
 
   symlinks: 'follow',                    // 'follow' | 'follow-within-root' | 'deny'
   staticSecurityHeaders: { nosniff: false }, // set nosniff on static responses
+
+  errorPages: {                          // custom error pages (v4.2+); omitted → built-ins
+    // 404: './errors/404.html',         // supported statuses: 404, 500, 504
+    // 500: './errors/500.html',         // self-contained .html (inline CSS, no external refs)
+    // 504: './errors/504.html',         // editable without a restart; unreadable → built-in
+  },
 
   template: {
     ext: [],                             // e.g. ['ejs']

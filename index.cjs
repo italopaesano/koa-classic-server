@@ -121,9 +121,12 @@ const LISTING_CSP = `default-src 'none'; style-src '${_listingCssHash}'; frame-a
 const NOT_FOUND_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 // Sets security headers on all middleware-generated HTML pages (listing + error).
-// Must NOT be called for user files served from disk.
+// Must NOT be called for user files served from disk. `csp` may be null for
+// operator-authored custom error pages (options.errorPages): the built-in pages'
+// `default-src 'none'` would block their inline styles, so they get the non-CSP
+// headers only — the self-contained requirement is documented, not enforced.
 function setGeneratedPageHeaders(ctx, csp) {
-    ctx.set('Content-Security-Policy', csp);
+    if (csp) ctx.set('Content-Security-Policy', csp);
     ctx.set('X-Content-Type-Options', 'nosniff');
     ctx.set('X-Frame-Options', 'DENY');
     ctx.set('Referrer-Policy', 'no-referrer');
@@ -153,10 +156,38 @@ const _GATEWAY_TIMEOUT_HTML = buildErrorHtml('Gateway Timeout',       'Gateway T
 const _TEMPLATE_ERROR_HTML  = buildErrorHtml('Internal Server Error', 'Internal Server Error', 'Template rendering failed for the requested resource.');
 const _INTERNAL_ERROR_HTML  = buildErrorHtml('Internal Server Error', 'Internal Server Error', 'The server encountered an unexpected condition.');
 
-function sendNotFound(ctx) {
-    setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
-    ctx.status = 404;
-    ctx.body = _NOT_FOUND_HTML;
+// Statuses an operator can override via options.errorPages, each with its
+// built-in fallback page. 400 is deliberately absent: it answers malformed /
+// hostile requests and stays minimal by design. _TEMPLATE_ERROR_HTML is a
+// call-site-specific 500 body (template failures), not a separate status.
+const _BUILTIN_ERROR_HTML = {
+    404: _NOT_FOUND_HTML,
+    500: _INTERNAL_ERROR_HTML,
+    504: _GATEWAY_TIMEOUT_HTML,
+};
+
+// Representation / caching headers a partially-built response may have left
+// behind by the time an error is detected: a stale Content-Encoding would
+// corrupt the error page (its body is never compressed), a public
+// Cache-Control could get the 404/500 cached by proxies under the resource's
+// URL. Scrubbed on every error page write.
+const ERROR_PAGE_SCRUB_HEADERS = [
+    'Content-Encoding', 'Content-Disposition', 'Content-Range', 'Vary',
+    'ETag', 'Last-Modified', 'Accept-Ranges',
+    'Cache-Control', 'Pragma', 'Expires',
+];
+
+// Single writer for every middleware-generated error response (404 / 500 / 504).
+// `customBuffer` is the operator's page from options.errorPages (or null →
+// `builtinHtml` is served). Assumes the response is still writable — callers
+// keep their own headerSent / writableEnded guards.
+function writeErrorPage(ctx, status, customBuffer, builtinHtml) {
+    for (const h of ERROR_PAGE_SCRUB_HEADERS) ctx.remove(h);
+    if (status >= 500) ctx.set('Cache-Control', 'no-store');
+    setGeneratedPageHeaders(ctx, customBuffer ? null : NOT_FOUND_CSP);
+    ctx.set('Content-Type', 'text/html; charset=utf-8');
+    ctx.status = status;
+    ctx.body = customBuffer || builtinHtml;
 }
 
 // Plain-text 400 for malformed requests (bad percent-encoding, invalid Host,
@@ -212,16 +243,16 @@ function warnConfigDeprecation(logger, message) {
 
 // Sends an error response for a failed template render. If headers were already
 // flushed by the render itself, destroys the underlying socket instead (the
-// status/body can no longer be changed at that point).
-function sendTemplateError(ctx, status, html, logMsg, err, logger) {
+// status/body can no longer be changed at that point). Page selection (custom
+// vs built-in) goes through the instance's sendErrorPage; `builtinHtml` keeps
+// the call-site-specific fallback body (timeout vs render failure).
+async function sendTemplateError(ctx, status, builtinHtml, logMsg, err, logger, sendErrorPage) {
     logger.error(logMsg, err);
     if (ctx.headerSent || ctx.res.writableEnded) {
         ctx.res.destroy();
         return;
     }
-    setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
-    ctx.status = status;
-    ctx.body = html;
+    await sendErrorPage(ctx, status, builtinHtml);
 }
 
 // Rewrites an already-rendered response into an RFC 9110 §9.3.2 compliant HEAD
@@ -256,7 +287,7 @@ function stripBodyForHead(ctx) {
 // client disconnect. Cooperative renders that propagate the signal to fetch/db
 // release backend resources promptly; non-cooperative renders still get a 504
 // response, but their work continues in the background.
-async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts, logger) {
+async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts, logger, sendErrorPage) {
     if (templateOpts.ext.length === 0 || !templateOpts.render) return false;
 
     const fileExt = path.extname(filePath).slice(1);
@@ -304,11 +335,11 @@ async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts, l
         }
     } catch (error) {
         if (timedOut || error.code === 'ETEMPLATETIMEOUT') {
-            sendTemplateError(ctx, 504, _GATEWAY_TIMEOUT_HTML,
-                'Template render timeout after ' + timeoutMs + 'ms:', filePath, logger);
+            await sendTemplateError(ctx, 504, _GATEWAY_TIMEOUT_HTML,
+                'Template render timeout after ' + timeoutMs + 'ms:', filePath, logger, sendErrorPage);
         } else {
-            sendTemplateError(ctx, 500, _TEMPLATE_ERROR_HTML,
-                'Template rendering error:', error, logger);
+            await sendTemplateError(ctx, 500, _TEMPLATE_ERROR_HTML,
+                'Template rendering error:', error, logger, sendErrorPage);
         }
     } finally {
         if (timer) clearTimeout(timer);
@@ -690,6 +721,25 @@ module.exports = function koaClassicServer(
         hideExtension: {     // Hide file extension from URLs (clean URLs like mod_rewrite)
             ext: '.ejs',     // Extension to hide (required, string, case-sensitive, must start with '.')
             redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301)
+        },
+        errorPages: {        // Custom error pages (V4.2+). Opt-in — omitted statuses keep the built-in pages.
+            // Keys: the statuses the middleware generates error pages for: 404, 500, 504.
+            //   Any other key throws at factory time. (400 replies to malformed/hostile
+            //   requests are deliberately NOT customizable — they stay minimal.)
+            // Values: filesystem path (absolute, or relative to process.cwd()) to a
+            //   SELF-CONTAINED .html file: one single file, inline CSS only, no external
+            //   css/js/img references. Documented requirement, not enforced — custom
+            //   pages are served WITHOUT the built-in pages' Content-Security-Policy
+            //   (which would block their inline styles); the other generated-page
+            //   security headers (nosniff, X-Frame-Options, ...) are still sent.
+            //   The file may live outside rootDir (recommended: keeps it unreachable via URL).
+            //   Read and validated at factory time (missing/unreadable → throw), cached in
+            //   RAM, and re-read automatically when its mtime/size changes — editable
+            //   without a restart. If it becomes unreadable at request time, the built-in
+            //   page is served instead (fallback; throttled warning via logger).
+            // 404: './errors/404.html',
+            // 500: './errors/500.html',
+            // 504: './errors/504.html',
         },
         hidden: {            // Block files/dirs from listing and serving (HTTP 404)
             dotFiles: {      // Dot-files (names starting with '.'): visible by default — design philosophy
@@ -1414,6 +1464,98 @@ module.exports = function koaClassicServer(
         nosniff: !!(_ssh && _ssh.nosniff),
     };
 
+    // ── errorPages (V4.2+) — operator-supplied custom error pages ──
+    // Validated and read once at factory time (a typo must fail at startup, not
+    // on the first 404), then kept in RAM and refreshed when mtime/size changes.
+    const _errorPages = new Map(); // status → { path, buffer, mtimeMs, size }
+    const userErrorPages = opts.errorPages;
+    if (userErrorPages !== undefined) {
+        if (typeof userErrorPages !== 'object' || userErrorPages === null || Array.isArray(userErrorPages)) {
+            throw new Error(
+                '[koa-classic-server] options.errorPages must be an object mapping a supported HTTP status ' +
+                "to an .html file path. Example: errorPages: { 404: './errors/404.html' }"
+            );
+        }
+        for (const key of Object.keys(userErrorPages)) {
+            const status = Number(key);
+            if (_BUILTIN_ERROR_HTML[status] === undefined) {
+                throw new Error(
+                    `[koa-classic-server] errorPages: unsupported status "${key}". ` +
+                    'Supported statuses: ' + Object.keys(_BUILTIN_ERROR_HTML).join(', ') + '. ' +
+                    '(400 is deliberately not customizable: replies to malformed requests stay minimal.)'
+                );
+            }
+            const value = userErrorPages[key];
+            if (typeof value !== 'string' || value === '') {
+                throw new Error(
+                    `[koa-classic-server] errorPages[${key}] must be a non-empty string path to an .html file. ` +
+                    'Got: ' + (value === '' ? 'an empty string' : value === null ? 'null' : typeof value)
+                );
+            }
+            const resolved = path.resolve(value);
+            let pageStat, pageBuffer;
+            try {
+                pageStat = fs.statSync(resolved);
+                if (!pageStat.isFile()) throw new Error('not a regular file');
+                pageBuffer = fs.readFileSync(resolved);
+            } catch (err) {
+                throw new Error(
+                    `[koa-classic-server] errorPages[${key}]: cannot read "${resolved}" (${err.message}). ` +
+                    'The file must exist and be readable at startup.'
+                );
+            }
+            _errorPages.set(status, { path: resolved, buffer: pageBuffer, mtimeMs: pageStat.mtimeMs, size: pageStat.size });
+        }
+    }
+
+    // Runtime read-failure warnings, throttled per status: a 404 flood against a
+    // deleted custom page must not flood the log.
+    const _errorPageWarnAt = new Map(); // status → last warn timestamp (ms)
+    function warnErrorPageUnreadable(status, entry, err) {
+        const now = Date.now();
+        if (now - (_errorPageWarnAt.get(status) || 0) < 60000) return;
+        _errorPageWarnAt.set(status, now);
+        _logger.warn(...warnPayload(_logger,
+            `[koa-classic-server] errorPages[${status}]: cannot read "${entry.path}" — ` +
+            `serving the built-in page instead. (${err.message})`));
+    }
+
+    // Returns the custom page buffer for `status`, re-read from disk when the
+    // file changed (mtime+size — pages are editable without a restart). Returns
+    // null when no custom page is configured for the status, or when the file is
+    // no longer readable (the caller falls back to the built-in page).
+    async function getCustomErrorPage(status) {
+        const entry = _errorPages.get(status);
+        if (!entry) return null;
+        try {
+            const st = await fs.promises.stat(entry.path);
+            if (st.mtimeMs !== entry.mtimeMs || st.size !== entry.size) {
+                entry.buffer = await fs.promises.readFile(entry.path);
+                entry.mtimeMs = st.mtimeMs;
+                entry.size = st.size;
+            }
+            return entry.buffer;
+        } catch (err) {
+            warnErrorPageUnreadable(status, entry, err);
+            return null;
+        }
+    }
+
+    // Single sender for every middleware-generated error response. `builtinHtml`
+    // lets a call site keep its specific fallback body (e.g. the template-failure
+    // 500) while still honoring the operator's custom page when configured.
+    async function sendErrorPage(ctx, status, builtinHtml = _BUILTIN_ERROR_HTML[status]) {
+        writeErrorPage(ctx, status, await getCustomErrorPage(status), builtinHtml);
+    }
+
+    // Sync variant for stream-error callbacks, where no await is possible: serves
+    // the last-loaded custom buffer without the freshness stat — an acceptable
+    // trade for a branch that only fires when the disk fails mid-response.
+    function sendErrorPageSync(ctx, status) {
+        const entry = _errorPages.get(status);
+        writeErrorPage(ctx, status, entry ? entry.buffer : null, _BUILTIN_ERROR_HTML[status]);
+    }
+
     const compressionConfig = normalizeCompressionConfig(options.compression);
     const serverCacheConfig = normalizeServerCacheConfig(options.serverCache);
 
@@ -1471,7 +1613,7 @@ module.exports = function koaClassicServer(
         ctx.body = pipeline(src, compress, (err) => {
             if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
             _logger.error('Stream error:', err);
-            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+            if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
         });
     }
 
@@ -1695,7 +1837,7 @@ module.exports = function koaClassicServer(
             // Returns 404 (not 403) so "outside root" is indistinguishable from "not found",
             // matching the symlink-escape and hidden-entry outcomes.
             if (!_isWithinRoot(fullPath, normalizedRootDir)) {
-                sendNotFound(ctx);
+                await sendErrorPage(ctx, 404);
                 return;
             }
 
@@ -1708,7 +1850,7 @@ module.exports = function koaClassicServer(
                     const segName = segments[i];
                     const segRelPath = segments.slice(0, i + 1).join('/');
                     if (isHiddenEntry(segName, segRelPath, true)) {
-                        sendNotFound(ctx);
+                        await sendErrorPage(ctx, 404);
                         return;
                     }
                 }
@@ -1823,7 +1965,7 @@ module.exports = function koaClassicServer(
                 stat = await fs.promises.stat(toOpen);
             } catch {
                 // File/directory doesn't exist or can't be accessed
-                sendNotFound(ctx);
+                await sendErrorPage(ctx, 404);
                 return;
             }
 
@@ -1832,7 +1974,7 @@ module.exports = function koaClassicServer(
                 const entryName = path.basename(toOpen);
                 const entryRelPath = path.relative(normalizedRootDir, toOpen).split(path.sep).join('/');
                 if (isHiddenEntry(entryName, entryRelPath, stat.isDirectory())) {
-                    sendNotFound(ctx);
+                    await sendErrorPage(ctx, 404);
                     return;
                 }
             }
@@ -1842,7 +1984,7 @@ module.exports = function koaClassicServer(
             // resolved below rootDir). The `_symlinkMode !== 'follow'` guard short-circuits
             // before any await so the default 'follow' mode stays truly zero-overhead.
             if (_symlinkMode !== 'follow' && !(await symlinkAllowed(toOpen))) {
-                sendNotFound(ctx);
+                await sendErrorPage(ctx, 404);
                 return;
             }
 
@@ -1891,7 +2033,7 @@ module.exports = function koaClassicServer(
                                 // symlink escaping rootDir — validate before serving it.
                                 // Guarded so the default 'follow' mode skips the await entirely.
                                 if (_symlinkMode !== 'follow' && !(await symlinkAllowed(indexPath))) {
-                                    sendNotFound(ctx);
+                                    await sendErrorPage(ctx, 404);
                                     return;
                                 }
                                 await loadFile(indexPath, indexFile.stat);
@@ -1904,7 +2046,7 @@ module.exports = function koaClassicServer(
                     ctx.body = await show_dir(toOpen, ctx);
                 } else {
                     // Directory listing disabled
-                    sendNotFound(ctx);
+                    await sendErrorPage(ctx, 404);
                 }
                 return;
             } else {
@@ -1914,7 +2056,7 @@ module.exports = function koaClassicServer(
                 // from not-found) rather than serving the file at a non-canonical
                 // URL. Disabled by dirListing.trailingSlash: false (v3 behavior).
                 if (options.dirListing.trailingSlash && _pathEndsWithSlash) {
-                    sendNotFound(ctx);
+                    await sendErrorPage(ctx, 404);
                     return;
                 }
                 await loadFile(toOpen, stat);
@@ -1926,17 +2068,10 @@ module.exports = function koaClassicServer(
                 ctx.res.destroy(); // response already in flight — nothing sane left to send
                 return;
             }
-            // Scrub representation/caching headers a partially-built response may
-            // have left behind: a stale Content-Encoding would corrupt the error
-            // page, a public Cache-Control could get the 500 cached by proxies.
-            for (const h of ['Content-Encoding', 'Content-Disposition', 'Content-Range', 'Vary', 'ETag', 'Last-Modified', 'Accept-Ranges']) {
-                ctx.remove(h);
-            }
-            ctx.set('Cache-Control', 'no-store');
-            ctx.set('Content-Type', 'text/html; charset=utf-8');
-            setGeneratedPageHeaders(ctx, NOT_FOUND_CSP);
-            ctx.status = 500;
-            ctx.body = _INTERNAL_ERROR_HTML;
+            // writeErrorPage scrubs the representation/caching headers a
+            // partially-built response may have left behind (stale
+            // Content-Encoding, public Cache-Control, ...) and sets no-store.
+            await sendErrorPage(ctx, 500);
         }
 
         // Internal functions
@@ -1949,7 +2084,7 @@ module.exports = function koaClassicServer(
                     fileStat = await fs.promises.stat(toOpen);
                 } catch (error) {
                     _logger.error('File stat error:', error);
-                    sendNotFound(ctx);
+                    await sendErrorPage(ctx, 404);
                     return;
                 }
             }
@@ -1993,7 +2128,7 @@ module.exports = function koaClassicServer(
                 }
             }
 
-            if (await tryRenderTemplate(ctx, next, toOpen, rawBuffer, options.template, _logger)) {
+            if (await tryRenderTemplate(ctx, next, toOpen, rawBuffer, options.template, _logger, sendErrorPage)) {
                 return;
             }
 
@@ -2029,7 +2164,7 @@ module.exports = function koaClassicServer(
                     await fs.promises.access(toOpen, fs.constants.R_OK);
                 } catch (error) {
                     _logger.error('File access error:', error);
-                    sendNotFound(ctx);
+                    await sendErrorPage(ctx, 404);
                     return;
                 }
             }
@@ -2133,10 +2268,7 @@ module.exports = function koaClassicServer(
                                 const src = fs.createReadStream(toOpen, { start, end });
                                 src.on('error', (err) => {
                                     _logger.error('Stream error:', err);
-                                    if (!ctx.headerSent) {
-                                        ctx.status = 500;
-                                        ctx.body = 'Error reading file';
-                                    }
+                                    if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
                                 });
                                 ctx.body = src;
                             }
@@ -2264,7 +2396,7 @@ module.exports = function koaClassicServer(
                                 abandonAccumulation();
                                 if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
                                 _logger.error('Stream error:', err);
-                                if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                                if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
                             });
                         } catch (err) {
                             // Defensive: nothing between add() and pipeline() is expected to
@@ -2319,7 +2451,7 @@ module.exports = function koaClassicServer(
                                     const src = fs.createReadStream(toOpen);
                                     src.on('error', (streamErr) => {
                                         _logger.error('Stream error:', streamErr);
-                                        if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                                        if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
                                     });
                                     ctx.body = src;
                                 } else {
@@ -2371,7 +2503,7 @@ module.exports = function koaClassicServer(
                         const src = fs.createReadStream(toOpen);
                         src.on('error', (err) => {
                             _logger.error('Stream error:', err);
-                            if (!ctx.headerSent) { ctx.status = 500; ctx.body = 'Error reading file'; }
+                            if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
                         });
                         ctx.body = src;
                     } else {

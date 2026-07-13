@@ -41,10 +41,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assertions in `compression-max-file-size.test.js` updated to the new contract
   (second request is a hit; warm `HEAD` has `Content-Length`).
 
+### 🛡️ Robustness — streaming brotli window bounded (LGWIN 19) + hardening docs
+- **Issue**: the per-stream brotli encoder state was the dominant RAM cost of concurrent
+  streamed compressions (~10 MB per stream at brotli's default 4 MB window): 100
+  concurrent cold requests to a 20 MB compressible file peaked at **~1.3 GB RSS**
+  (pre-existing in 4.0.0 — the tee added nothing measurable). A client fanning out over
+  many distinct large compressible files could drive RAM/CPU as a DoS vector.
+- **Fix**: the streaming compressor (shared `createStreamCompressor()`) now sets
+  `BROTLI_PARAM_LGWIN: 19` (512 KB window). Measured: same output size on typical text
+  at Q4 (6.44 vs 6.45 MB on the 20 MB benchmark file, ~40% faster), peak RSS for the
+  100-concurrent stress **1 414 → 344 MB (−76%)**. Trade-off: content with identical
+  blocks repeated at > 512 KB distance (pathological) compresses worse than with the
+  4 MB window. Buffered-path quality (brotli Q11, files ≤ `maxFileSize`) is untouched;
+  gzip's window is 32 KB by design.
+- **Docs**: new `SECURITY_HARDENING.md` §3.10 bullet documenting the concurrent
+  on-the-fly-compression amplification surface (common to all compress-at-request-time
+  servers) and the per-profile mitigations (reverse-proxy rate limiting first).
+
 ### 📦 Package Changes
 - **Version**: `4.0.0` → `4.1.0`
 - **Semver**: Minor — pure performance improvement; no observable-semantics change
-  beyond `Content-Length` (and faster responses) from the second request on.
+  beyond `Content-Length` (and faster responses) from the second request on, plus the
+  smaller brotli window on the streaming path (different but equivalent compressed
+  bytes).
 
 ## [4.0.0] - 2026-07-09
 

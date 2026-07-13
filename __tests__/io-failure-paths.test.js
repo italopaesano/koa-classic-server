@@ -126,8 +126,31 @@ describe('directory read failure', () => {
         const outcome = await outcomeOf(server, supertest(server).get('/sub/').ok(() => true));
 
         expect(outcome.status).toBe(500);
-        expect(outcome.text).toContain('Error Reading Directory');
+        // Routed through the unified error writer: generic 500 body (like every
+        // other 500), security headers, no-store — no longer a bespoke page.
+        expect(outcome.text).toContain('unexpected condition');
         expect(logger.errors.some(e => e.includes('Directory read error'))).toBe(true);
+    });
+
+    test('readdir error with a custom errorPages[500] → serves the custom page', async () => {
+        const custom = path.join(fixturesDir, 'custom-500.html');
+        fs.writeFileSync(custom, '<!DOCTYPE html><html><body><h1>Custom Dir 500</h1></body></html>');
+        const logger = capturingLogger();
+        const server = createServer({ logger, errorPages: { 500: custom } });
+        const original = fs.promises.readdir;
+        jest.spyOn(fs.promises, 'readdir').mockImplementation(async (p, o) => {
+            if (path.resolve(String(p)) === path.resolve(path.join(fixturesDir, 'sub'))) {
+                throw Object.assign(new Error('injected EACCES'), { code: 'EACCES' });
+            }
+            return original.call(fs.promises, p, o);
+        });
+
+        const outcome = await outcomeOf(server, supertest(server).get('/sub/').ok(() => true));
+
+        expect(outcome.status).toBe(500);
+        expect(outcome.text).toContain('Custom Dir 500');           // operator's page, not the built-in
+        expect(outcome.text).not.toContain('unexpected condition');
+        fs.rmSync(custom, { force: true });
     });
 });
 

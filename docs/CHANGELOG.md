@@ -28,11 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Permissions-Policy`) are still sent. See `SECURITY_HARDENING.md` §3.5.
 
 ### 🛡️ Robustness — every error branch unified through one writer
-- **Issue**: error responses were assembled in three inconsistent styles: the HTML pages
-  (404/template-500/504), the last-resort catch (HTML + header scrubbing + `no-store`), and five
-  stream-failure branches replying **plain text** `Error reading file` with no security headers
-  and no header cleanup — two of which could leave a stale `Content-Encoding: br/gzip` on a
-  plain-text body. One 404 branch (file became unreadable between `stat` and `access`) could
+- **Issue**: error responses were assembled in four inconsistent styles: the HTML pages
+  (404/template-500/504), the last-resort catch (HTML + header scrubbing + `no-store`), the
+  directory-read 500 in `show_dir` (its own bespoke HTML, no `no-store`, ignoring `errorPages`),
+  and five stream-failure branches replying **plain text** `Error reading file` with no security
+  headers and no header cleanup — two of which could leave a stale `Content-Encoding: br/gzip` on
+  a plain-text body. One 404 branch (file became unreadable between `stat` and `access`) could
   also leak `Cache-Control: public, max-age=...` onto the error, letting a proxy cache the 404
   as the resource.
 - **Fix**: a single writer now produces every middleware-generated error response: custom or
@@ -43,16 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Observable change** (rare branches only): the five stream-failure 500s now reply with the
   HTML error page instead of 11 bytes of plain text — when a reply is deliverable at all: Koa 3
   answers a stream-body error by tearing down the socket, so these writes are best-effort
-  (verified: the old plain-text reply was equally undelivered under Koa 3). The
-  `access`-failure 404 no longer carries the public `Cache-Control`. No test asserted the old
-  bodies.
+  (verified: the old plain-text reply was equally undelivered under Koa 3). The `access`-failure
+  404 no longer carries the public `Cache-Control`. The directory-read 500 now serves the generic
+  built-in 500 body (was a bespoke "Error Reading Directory" page) and honors `errorPages[500]`.
+  No test asserted the old stream/404 bodies; the one directory-read assertion was updated.
 - **Docs**: `index.cjs` defaults JSDoc, `README.md` (options block + example),
   `DOCUMENTATION.md` (§ `errorPages` + updated 404-fallback best practice),
   `SECURITY_HARDENING.md` §3.5.
 - **Tests**: `__tests__/error-pages.test.js` (22 tests: factory validation, custom/built-in
   serving, CSP presence/absence, HEAD, live reload, runtime fallback + warn throttling,
   template 500/504, last-resort catch, stream-failure branches, Cache-Control scrub,
-  minimal 400 preserved).
+  minimal 400 preserved). `__tests__/io-failure-paths.test.js`: directory-read 500 updated to the
+  unified body + a case asserting it serves a configured `errorPages[500]`.
 
 ## [4.1.0] - 2026-07-12
 

@@ -17,7 +17,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ## Indice / Checklist
 
 ### Bug confermati (riprodotti con richieste reali)
-- [ ] [1. File con nome non-latin1 (CJK, emoji) → 500 invece di 200](#1-file-con-nome-non-latin1-cjk-emoji--500-invece-di-200)
+- [x] [1. File con nome non-latin1 (CJK, emoji) → 500 invece di 200](#1-file-con-nome-non-latin1-cjk-emoji--500-invece-di-200) — **RISOLTO** (fallback quoted-string sanitizzato a latin1 stampabile)
 - [ ] [2. Link di ordinamento e paginazione del listing perdono `urlPrefix`](#2-link-di-ordinamento-e-paginazione-del-listing-perdono-urlprefix)
 - [ ] [3. `If-Modified-Since` non ignorato quando `If-None-Match` è presente](#3-if-modified-since-non-ignorato-quando-if-none-match-è-presente)
 
@@ -40,6 +40,16 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ## Bug confermati
 
 ### 1. File con nome non-latin1 (CJK, emoji) → 500 invece di 200
+
+**Stato: ✅ RISOLTO** (2026-07-14 — fallback quoted-string sanitizzato: i caratteri
+fuori dal latin1 stampabile (`[^\x20-\x7E\xA0-\xFF]` — controlli C0/C1, DEL, e tutto
+ciò che è > `0xFF`) diventano `?`, stessa policy del pacchetto `content-disposition`
+di express/send; i nomi latin1 (`café.txt`) restano letterali come prima — zero
+regressione sul range già funzionante. Il nome vero continua a round-trippare via
+`filename*` RFC 5987, che era già corretto. Test:
+`__tests__/content-disposition-filename.test.js`, 10 test (CJK, emoji, carattere di
+controllo, latin1 invariato, escaping `"`/`\`, 206 Range, nessun errore loggato);
+verificato che 8/10 falliscono sul codice pre-fix.)
 
 **Posizione:** `index.cjs:1789-1799` (`buildContentDisposition`), usato in `index.cjs:2381` (206) e `index.cjs:2411` (200/streaming).
 

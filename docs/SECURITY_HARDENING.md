@@ -212,10 +212,15 @@ operator-controlled (escaping, headers, `nosniff` are up to you).
   larger compressible files are compressed via bounded-RAM streaming instead of being read
   whole into memory. Lower it on RAM-constrained hosts; `false` removes the cap (not
   recommended if untrusted parties can place large text files under `rootDir`).
-  The streamed output is itself cached when it fits in a quarter of the compressed cache's
-  `maxSize`, so repeat downloads of the same large file cost RAM proportional to the
-  *compressed* size, never the input size; disable `serverCache.compressedFile` to keep
-  large-file responses fully stateless.
+  The streamed output is itself cached when it fits in `serverCache.compressedFile.maxEntrySize`
+  (default: a quarter of that cache's `maxSize`), so repeat downloads of the same large file
+  cost RAM proportional to the *compressed* size, never the input size; disable
+  `serverCache.compressedFile` to keep large-file responses fully stateless. Lower
+  `maxEntrySize` to keep single large outputs from claiming cache RAM; setting it to `false`
+  lets one entry grow up to `maxSize` (one huge file can then evict the whole working set).
+- On CPU-constrained hosts, `compression.buffered.brotliQuality` (default 11) can be lowered
+  to make cold-cache first requests cheaper; `compression.streaming` quality is paid on every
+  non-cached request, so raise it only if that per-request CPU cost is acceptable.
 - **Concurrent on-the-fly compression is a CPU/RAM amplification surface** — as on any
   server that compresses at request time (nginx `gzip on` included). Each concurrent
   streamed compression costs one encoder state in RAM (bounded: the streaming brotli

@@ -460,8 +460,12 @@ function ifNoneMatchSatisfied(headerValue, etag) {
 // set(key, entry) — insert, evicting LFU entries if needed
 // delete(key) — remove explicitly (e.g. stale entry before re-insert)
 class LFUCache {
-    constructor(maxSize, warnInterval, cacheLabel, logger) {
+    constructor(maxSize, warnInterval, cacheLabel, logger, maxEntrySize) {
         this.maxSize     = maxSize;
+        // Per-entry admission cap (bytes). Entries larger than this are never
+        // cached (they are still served). Infinity = no per-entry cap: only the
+        // physical maxSize bound applies.
+        this.maxEntrySize = typeof maxEntrySize === 'number' ? maxEntrySize : Infinity;
         this.warnInterval = warnInterval;
         this.cacheLabel  = cacheLabel;
         this.logger      = logger || console;
@@ -495,6 +499,12 @@ class LFUCache {
             this._warnThrottled(`[koa-classic-server] serverCache.${this.cacheLabel}: entry of ${entry.buffer.length} bytes exceeds maxSize (${this.maxSize} bytes) and will never be cached. Consider increasing maxSize.`);
             return;
         }
+        // Per-entry admission cap: refuse (and keep serving uncached) instead of
+        // letting one oversized entry evict most of the working set on insert.
+        if (entry.buffer.length > this.maxEntrySize) {
+            this._warnThrottled(`[koa-classic-server] serverCache.${this.cacheLabel}: entry of ${entry.buffer.length} bytes exceeds maxEntrySize (${this.maxEntrySize} bytes) and will not be cached. Increase serverCache.${this.cacheLabel}.maxEntrySize or set it to false.`);
+            return;
+        }
         while (this.currentSize + entry.buffer.length > this.maxSize && this._keyMap.size > 0) {
             this._evictOne();
         }
@@ -514,6 +524,7 @@ class LFUCache {
         const entry = this._keyMap.get(key);
         if (!entry) return false;
 
+        if (fields.buffer.length > this.maxEntrySize) return false;
         const sizeDelta = fields.buffer.length - entry.buffer.length;
         if (this.currentSize + sizeDelta > this.maxSize) return false;
 
@@ -609,22 +620,25 @@ function singleFlight(map, key, work) {
 // frequency counter survives — important for popular files refreshed by maxAge.
 // Otherwise falls back to delete + set (frequency resets to 1).
 // Bounded-RAM streaming compressor: constant-memory transform, lower quality
-// than the buffered path (which can afford brotli Q11 because it runs once and
-// is cached). Used by every streamed-compression pipeline.
+// than the buffered path (which can afford max quality because it runs once and
+// is cached). Used by every streamed-compression pipeline. `quality` carries the
+// normalized compression.streaming settings (brotliQuality default 4, gzipLevel
+// default 6).
 // LGWIN 19 (512 KB window instead of brotli's default 4 MB): the encoder state
 // is the dominant per-request RAM on this path (~10 MB/stream at the default,
 // ~1.3 GB peak measured under 100 concurrent cold requests), and at Q4 the big
 // window buys nothing on typical text (measured: same output size, ~40% faster).
 // The trade-off: content with identical blocks repeated at >512 KB distance
 // (rare, pathological) compresses worse than with the 4 MB window. gzip's
-// window is 32 KB by design — nothing to bound there.
-function createStreamCompressor(encoding) {
+// window is 32 KB by design — nothing to bound there. LGWIN is deliberately
+// NOT configurable: it is what bounds the per-stream RAM.
+function createStreamCompressor(encoding, quality) {
     return encoding === 'br'
         ? zlib.createBrotliCompress({ params: {
-            [zlib.constants.BROTLI_PARAM_QUALITY]: 4,
+            [zlib.constants.BROTLI_PARAM_QUALITY]: quality.brotliQuality,
             [zlib.constants.BROTLI_PARAM_LGWIN]: 19,
         } })
-        : zlib.createGzip({ level: 6 });
+        : zlib.createGzip({ level: quality.gzipLevel });
 }
 
 function refreshOrInsert(cache, key, newEntry, cached, staleByAge) {
@@ -773,6 +787,14 @@ module.exports = function koaClassicServer(
             compressedFile: {                 // cache for HTTP br/gzip responses — not for .zip/.tar files on disk
                 enabled: true,               // enable in-memory cache of compressed response buffers
                 maxSize: 104857600,          // max total RAM used by this cache (bytes; default: 100 MB)
+                maxEntrySize: undefined,     // max bytes of a SINGLE cached entry, measured on the compressed
+                                             //   OUTPUT (V4.3+). Applies to every insertion: buffered path and
+                                             //   streamed-tee path alike. Oversized entries are still served,
+                                             //   just not cached (throttled warning via logger).
+                                             //   undefined (default) → maxSize / 4, so one huge file cannot
+                                             //   evict most of the working set on insert; false → no per-entry
+                                             //   cap (maxSize still bounds); explicit bytes must be <= maxSize
+                                             //   (larger throws at factory time — use false instead).
                 maxAge: 0,                   // ms after insertion to consider an entry stale; 0 = disabled. See rawFile.maxAge.
                 warnInterval: 60000,         // ms between "maxSize reached" warnings; 0 = always; false = never
             },
@@ -795,6 +817,15 @@ module.exports = function koaClassicServer(
                                           //   so subsequent requests are served from RAM with
                                           //   Content-Length.
             mimeTypes: [],                // compressible MIME types (replaces default list if provided)
+            buffered: {                   // quality for the BUFFERED path (V4.3+): file <= maxFileSize,
+                brotliQuality: 11,        //   compressed once, output cached — the cost is paid once per
+                gzipLevel: 9,             //   file, so max quality by default. brotliQuality: integer 0-11;
+            },                            //   gzipLevel: integer 0-9. Out-of-range throws at factory time.
+            streaming: {                  // quality for the STREAMING path (V4.3+): file > maxFileSize, or
+                brotliQuality: 4,         //   compressed cache disabled — the cost is paid on EVERY
+                gzipLevel: 6,             //   non-cached request, so deliberately light by default.
+            },                            //   The brotli window stays fixed at 512 KB (bounds per-stream
+                                          //   RAM; not configurable). Same ranges as `buffered`.
         },
         // compression: false            // shorthand to disable all compression
         staticSecurityHeaders: {   // Opt-in security headers on STATIC file responses (V3.1+).
@@ -1276,6 +1307,54 @@ module.exports = function koaClassicServer(
     // Normalize and validate the compression option into a clean internal structure.
     // compression: false is a valid shorthand for { enabled: false }.
     function normalizeCompressionConfig(compression) {
+        // Per-path quality defaults (V4.3+). Two groups because the two execution
+        // modes have opposite cost models: the buffered path compresses once and
+        // caches the result (can afford max quality), the streaming path pays the
+        // CPU on every non-cached request (must stay light).
+        const defaultBuffered  = { brotliQuality: 11, gzipLevel: 9 };
+        const defaultStreaming = { brotliQuality: 4,  gzipLevel: 6 };
+
+        // Strict validation: these namespaces are new in 4.3.0, so unknown keys
+        // are caught as typos instead of being silently ignored (an operator who
+        // misspells brotliQuality must not believe they lowered the quality).
+        function validateQualityGroup(group, groupName, defaults) {
+            if (group === undefined) return { ...defaults };
+            if (!group || typeof group !== 'object' || Array.isArray(group)) {
+                throw new Error(
+                    `[koa-classic-server] compression.${groupName} must be an object, e.g. ` +
+                    `{ brotliQuality: ${defaults.brotliQuality}, gzipLevel: ${defaults.gzipLevel} }. Got: ` + String(group)
+                );
+            }
+            for (const key of Object.keys(group)) {
+                if (key !== 'brotliQuality' && key !== 'gzipLevel') {
+                    throw new Error(
+                        `[koa-classic-server] compression.${groupName}.${key} is not a valid option. ` +
+                        'Valid keys: brotliQuality, gzipLevel.'
+                    );
+                }
+            }
+            const out = { ...defaults };
+            if (group.brotliQuality !== undefined) {
+                if (!Number.isInteger(group.brotliQuality) || group.brotliQuality < 0 || group.brotliQuality > 11) {
+                    throw new Error(
+                        `[koa-classic-server] compression.${groupName}.brotliQuality must be an integer between 0 and 11. ` +
+                        'Got: ' + String(group.brotliQuality)
+                    );
+                }
+                out.brotliQuality = group.brotliQuality;
+            }
+            if (group.gzipLevel !== undefined) {
+                if (!Number.isInteger(group.gzipLevel) || group.gzipLevel < 0 || group.gzipLevel > 9) {
+                    throw new Error(
+                        `[koa-classic-server] compression.${groupName}.gzipLevel must be an integer between 0 and 9. ` +
+                        'Got: ' + String(group.gzipLevel)
+                    );
+                }
+                out.gzipLevel = group.gzipLevel;
+            }
+            return out;
+        }
+
         if (compression === false) return { enabled: false };
 
         if (!compression || typeof compression !== 'object' || Array.isArray(compression)) {
@@ -1285,6 +1364,8 @@ module.exports = function koaClassicServer(
                 minFileSize: 1024,                      // bytes; skip compression for files smaller than this
                 maxFileSize: 10485760,                  // bytes; above this the buffered+cached path is skipped (streaming instead)
                 mimeTypes: new Set(DEFAULT_COMPRESSIBLE_MIME_TYPES),
+                buffered: { ...defaultBuffered },
+                streaming: { ...defaultStreaming },
             };
         }
 
@@ -1316,7 +1397,10 @@ module.exports = function koaClassicServer(
             ? compression.mimeTypes
             : DEFAULT_COMPRESSIBLE_MIME_TYPES;
 
-        return { enabled, encodings, minFileSize, maxFileSize, mimeTypes: new Set(mimeTypes) };
+        const buffered  = validateQualityGroup(compression.buffered,  'buffered',  defaultBuffered);
+        const streaming = validateQualityGroup(compression.streaming, 'streaming', defaultStreaming);
+
+        return { enabled, encodings, minFileSize, maxFileSize, mimeTypes: new Set(mimeTypes), buffered, streaming };
     }
 
     // Normalize and validate the serverCache option into a clean internal structure.
@@ -1331,6 +1415,7 @@ module.exports = function koaClassicServer(
         const defaultCompressedFile = {
             enabled: true,
             maxSize: 104857600,     // 100 MB
+            maxEntrySize: 26214400, // maxSize / 4
             maxAge: 0,
             warnInterval: 60000,
         };
@@ -1341,6 +1426,30 @@ module.exports = function koaClassicServer(
                 throw new Error(
                     `[koa-classic-server] serverCache.${cacheName}.maxAge must be a finite number >= 0 (ms). ` +
                     'Use 0 to disable. Got: ' + String(value)
+                );
+            }
+            return value;
+        }
+
+        // maxEntrySize (V4.3+): per-entry admission cap for the compressed cache,
+        // measured on the compressed OUTPUT. Applies to every insertion (buffered
+        // path and streamed-tee path alike). undefined → a quarter of maxSize
+        // (the historical tee-path bound, and it keeps scaling with maxSize);
+        // false → no per-entry cap (normalized to Infinity; maxSize still bounds).
+        function validateMaxEntrySize(value, maxSize) {
+            if (value === undefined) return Math.floor(maxSize / 4);
+            if (value === false) return Infinity;
+            if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+                throw new Error(
+                    '[koa-classic-server] serverCache.compressedFile.maxEntrySize must be a positive integer (bytes) or false. ' +
+                    'Got: ' + String(value)
+                );
+            }
+            if (value > maxSize) {
+                throw new Error(
+                    `[koa-classic-server] serverCache.compressedFile.maxEntrySize (${value}) exceeds maxSize (${maxSize}) — ` +
+                    'a per-entry cap larger than the whole cache is a configuration contradiction. ' +
+                    'Use false to disable the per-entry cap.'
                 );
             }
             return value;
@@ -1360,12 +1469,19 @@ module.exports = function koaClassicServer(
         };
 
         const cf = serverCache.compressedFile;
-        const compressedFile = (!cf || typeof cf !== 'object' || Array.isArray(cf)) ? defaultCompressedFile : {
-            enabled: typeof cf.enabled === 'boolean' ? cf.enabled : true,
-            maxSize: typeof cf.maxSize === 'number' && cf.maxSize > 0 ? cf.maxSize : 104857600,
-            maxAge: validateMaxAge(cf.maxAge, 'compressedFile'),
-            warnInterval: cf.warnInterval === false ? false : (typeof cf.warnInterval === 'number' ? cf.warnInterval : 60000),
-        };
+        let compressedFile;
+        if (!cf || typeof cf !== 'object' || Array.isArray(cf)) {
+            compressedFile = defaultCompressedFile;
+        } else {
+            const cfMaxSize = typeof cf.maxSize === 'number' && cf.maxSize > 0 ? cf.maxSize : 104857600;
+            compressedFile = {
+                enabled: typeof cf.enabled === 'boolean' ? cf.enabled : true,
+                maxSize: cfMaxSize,
+                maxEntrySize: validateMaxEntrySize(cf.maxEntrySize, cfMaxSize),
+                maxAge: validateMaxAge(cf.maxAge, 'compressedFile'),
+                warnInterval: cf.warnInterval === false ? false : (typeof cf.warnInterval === 'number' ? cf.warnInterval : 60000),
+            };
+        }
 
         return { rawFile, compressedFile };
     }
@@ -1574,7 +1690,8 @@ module.exports = function koaClassicServer(
         serverCacheConfig.compressedFile.maxSize,
         serverCacheConfig.compressedFile.warnInterval,
         'compressedFile',
-        _logger
+        _logger,
+        serverCacheConfig.compressedFile.maxEntrySize
     );
 
     // Single-flight maps for cache population (thundering-herd protection):
@@ -1606,7 +1723,7 @@ module.exports = function koaClassicServer(
     // forever — fd leak under aborted downloads. Client disconnects are a
     // normal event and are not logged (avoids client-driven log spam).
     function streamCompressedBody(ctx, toOpen, rawBuffer, encoding) {
-        const compress = createStreamCompressor(encoding);
+        const compress = createStreamCompressor(encoding, compressionConfig.streaming);
         const src = rawBuffer
             ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
             : fs.createReadStream(toOpen);
@@ -1646,15 +1763,16 @@ module.exports = function koaClassicServer(
         return null;
     }
 
-    // Compress a Buffer using the given encoding ('br' or 'gzip').
-    // Quality is maxed out: serverCache pays this cost once per file, not per request.
+    // Compress a Buffer using the given encoding ('br' or 'gzip') at the
+    // buffered-path quality (compression.buffered). Defaults are maxed out:
+    // serverCache pays this cost once per file, not per request.
     function compressBuffer(data, encoding) {
         if (encoding === 'br') {
             return _brotliCompressAsync(data, {
-                params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 }
+                params: { [zlib.constants.BROTLI_PARAM_QUALITY]: compressionConfig.buffered.brotliQuality }
             });
         }
-        return _gzipAsync(data, { level: zlib.constants.Z_BEST_COMPRESSION });
+        return _gzipAsync(data, { level: compressionConfig.buffered.gzipLevel });
     }
 
     /**
@@ -2349,11 +2467,13 @@ module.exports = function koaClassicServer(
                         let acc = [];
                         let accBytes = 0;
                         // Two admission bounds, both on the real OUTPUT size:
-                        //  - per entry: a quarter of the cache, so one huge file cannot
-                        //    evict most of the working set on insert;
+                        //  - per entry: maxEntrySize (default: a quarter of the cache), so
+                        //    one huge file cannot evict most of the working set on insert.
+                        //    Checked here — not just in LFUCache.set() — to stop ACCUMULATING
+                        //    RAM as soon as the budget is blown, not merely refuse the insert;
                         //  - aggregate (_inflightTeeBytes): all in-flight tees together may
                         //    never hold more RAM than the cache's own maxSize.
-                        const entryCap = Math.floor(serverCacheConfig.compressedFile.maxSize / 4);
+                        const entryCap = serverCacheConfig.compressedFile.maxEntrySize;
                         // Stops accumulating and releases this tee's share of the aggregate
                         // budget. Safe to call more than once.
                         const abandonAccumulation = () => {
@@ -2363,7 +2483,7 @@ module.exports = function koaClassicServer(
                             }
                         };
                         try {
-                            const compress = createStreamCompressor(encoding);
+                            const compress = createStreamCompressor(encoding, compressionConfig.streaming);
                             const src = rawBuffer
                                 ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
                                 : fs.createReadStream(toOpen);

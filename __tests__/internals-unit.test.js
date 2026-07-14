@@ -85,6 +85,31 @@ describe('LFUCache', () => {
         expect(logger.warns.some(w => w.includes('exceeds maxSize'))).toBe(true);
     });
 
+    test('an entry larger than maxEntrySize is rejected WITHOUT flushing the cache', () => {
+        const logger = silentLogger();
+        const cache = new LFUCache(1024, 0, 'compressedFile', logger, 10);
+        cache.set('small', entry('AAAA'));
+        cache.set('big', entry('X'.repeat(11))); // fits maxSize, exceeds maxEntrySize
+        expect(cache.peek('big')).toBeUndefined();
+        expect(cache.peek('small')).toBeDefined(); // other entries survived
+        expect(logger.warns.some(w => w.includes('exceeds maxEntrySize (10 bytes)'))).toBe(true);
+        cache.set('atCap', entry('X'.repeat(10))); // exactly at the cap → admitted
+        expect(cache.peek('atCap')).toBeDefined();
+    });
+
+    test('an omitted maxEntrySize means no per-entry cap (backward compatible)', () => {
+        const cache = new LFUCache(10, false, 'rawFile', silentLogger());
+        cache.set('a', entry('X'.repeat(10))); // entry as large as the whole cache
+        expect(cache.peek('a')).toBeDefined();
+    });
+
+    test('refresh() returns false when the new buffer exceeds maxEntrySize', () => {
+        const cache = new LFUCache(1024, false, 'compressedFile', silentLogger(), 10);
+        cache.set('a', entry('AAAA'));
+        expect(cache.refresh('a', { buffer: Buffer.from('X'.repeat(11)) })).toBe(false);
+        expect(cache.peek('a').buffer.toString()).toBe('AAAA'); // untouched
+    });
+
     test('delete() releases bytes and forgets the key', () => {
         const cache = new LFUCache(1024, false, 'rawFile', silentLogger());
         cache.set('a', entry('AAAA'));

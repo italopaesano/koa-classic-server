@@ -990,9 +990,29 @@ all'header `Accept-Encoding` del client e il risultato viene messo in cache lato
   contro RAM/CPU illimitate su file comprimibili enormi (log/JSON/CSV multi-GB), non una
   restrizione al serving. `maxFileSize: false` toglie il tetto.
 - Con `serverCache.compressedFile` attiva (default), **l'output compresso dello streaming viene
-  a sua volta cachato** quando pesa al massimo un quarto della `maxSize` di quella cache: dalla
-  seconda richiesta in poi il file è servito dalla RAM, con `Content-Length`. Il tetto protegge
-  dall'*input* grande; l'ammissione in cache è decisa sulla dimensione reale dell'*output*.
+  a sua volta cachato** quando rientra in `serverCache.compressedFile.maxEntrySize` (default:
+  un quarto della `maxSize` di quella cache): dalla seconda richiesta in poi il file è servito
+  dalla RAM, con `Content-Length`. Il tetto protegge dall'*input* grande; l'ammissione in cache
+  è decisa sulla dimensione reale dell'*output*.
+
+**Qualità configurabile (V4.3+):**
+
+Brotli e gzip sono sempre gli stessi algoritmi, ma il middleware li esegue in due modalità con
+modelli di costo opposti — e per questo la qualità si configura per percorso, non globalmente:
+
+| Situazione | Percorso | Gruppo di opzioni | Default |
+|---|---|---|---|
+| Cache compressa attiva, file ≤ `maxFileSize` | **Bufferizzato**: comprimi una volta → cache → RAM hit | `compression.buffered` | brotli Q11, gzip 9 |
+| Cache compressa attiva, file > `maxFileSize` | **Streaming con tee**: output cachato se rientra in `maxEntrySize` | `compression.streaming` | brotli Q4, gzip 6 |
+| Cache compressa disattivata | **Streaming puro**: ricompressione a ogni richiesta | `compression.streaming` | brotli Q4, gzip 6 |
+
+Il percorso bufferizzato paga la CPU **una volta per file** (il single-flight la fa pagare una
+volta anche a richieste concorrenti), quindi di default usa la qualità massima. Il percorso
+streaming la paga **a ogni richiesta non cachata**, quindi di default resta leggero. Su host
+con poca CPU si può abbassare `buffered.brotliQuality` (la prima richiesta fredda costa meno);
+alzare `streaming.*` conviene solo se si accetta più CPU per ogni richiesta fredda. La finestra
+brotli dello streaming resta fissa a 512 KB (è ciò che limita la RAM per stream): non è
+configurabile.
 
 ```javascript
 // tuning
@@ -1003,6 +1023,8 @@ app.use(koaClassicServer(root, {
     minFileSize: 1024,
     maxFileSize: 10485760,       // 10 MB; false = nessun tetto al percorso bufferizzato
     mimeTypes:   [],             // se valorizzato, SOSTITUISCE la lista di tipi comprimibili
+    buffered:  { brotliQuality: 11, gzipLevel: 9 }, // V4.3+: qualità del percorso bufferizzato
+    streaming: { brotliQuality: 4,  gzipLevel: 6 }, // V4.3+: qualità del percorso streaming
   },
 }));
 
@@ -1017,6 +1039,10 @@ app.use(koaClassicServer(root, { compression: false }));
 | `compression.minFileSize` | `Number\|false` | `1024` | Dimensione minima per comprimere; `false` = nessun minimo |
 | `compression.maxFileSize` | `Number\|false` | `10485760` | Oltre questa soglia → streaming a RAM limitata (output riusato dalla cache compressa quando vi entra); `false` = nessun tetto |
 | `compression.mimeTypes` | `String[]` | `[]` | Sostituisce la lista dei MIME comprimibili di default |
+| `compression.buffered.brotliQuality` | `Number` | `11` | Qualità brotli del percorso bufferizzato (intero 0–11) |
+| `compression.buffered.gzipLevel` | `Number` | `9` | Livello gzip del percorso bufferizzato (intero 0–9) |
+| `compression.streaming.brotliQuality` | `Number` | `4` | Qualità brotli del percorso streaming (intero 0–11) |
+| `compression.streaming.gzipLevel` | `Number` | `6` | Livello gzip del percorso streaming (intero 0–9) |
 
 ### Cache lato server (`serverCache`)
 
@@ -1035,6 +1061,7 @@ niente "thundering herd" a cache fredda.
 |---|---|---|---|
 | `serverCache.compressedFile.enabled` | `Boolean` | `true` | Abilita la cache delle risposte compresse |
 | `serverCache.compressedFile.maxSize` | `Number` | `104857600` | RAM massima della cache (byte; 100 MB) |
+| `serverCache.compressedFile.maxEntrySize` | `Number\|false` | `maxSize / 4` | Byte massimi di una **singola** entry, misurati sull'output compresso (V4.3+). Le entry oltre il tetto vengono servite ma mai cachate (warning throttled). `false` = nessun tetto per-entry; un valore > `maxSize` lancia un errore a factory time |
 | `serverCache.compressedFile.maxAge` | `Number` | `0` | ms dopo cui un'entry è considerata stantia (0 = disabilitato) |
 | `serverCache.compressedFile.warnInterval` | `Number\|false` | `60000` | ms tra i warning "maxSize raggiunto" (`0` = a ogni evento; `false` = mai) |
 | `serverCache.rawFile.enabled` | `Boolean` | `false` | Abilita la cache dei buffer grezzi |

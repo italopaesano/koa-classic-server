@@ -5,6 +5,45 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.0] - 2026-07-14
+
+Customization release: the compression qualities and the compressed cache's per-entry
+admission cap — previously hardcoded — become options. Defaults are unchanged on every path.
+
+### ✨ Feature — `compression.buffered` / `compression.streaming`: configurable quality
+- **What**: two new option groups expose the previously hardcoded compression settings,
+  one per execution mode — the modes have opposite cost models, so their quality is
+  configured independently:
+  - `compression.buffered: { brotliQuality: 11, gzipLevel: 9 }` — the buffered path
+    (file ≤ `compression.maxFileSize`, output cached): the CPU cost is paid **once per
+    file** (single-flight), so max quality by default.
+  - `compression.streaming: { brotliQuality: 4, gzipLevel: 6 }` — the streaming path
+    (file > `compression.maxFileSize`, or compressed cache disabled): the CPU cost is
+    paid on **every non-cached request**, so deliberately light by default.
+- **Validation**: integers only, brotli 0–11 / gzip 0–9; out-of-range, non-object groups
+  and **unknown keys** throw at factory time (typo protection on a brand-new namespace).
+- **Not exposed**: the streaming brotli window stays pinned at LGWIN 19 (512 KB) — it is
+  what bounds the per-stream RAM, making it configurable would undermine the safety net.
+- **Use case**: CPU-constrained hosts can lower `buffered.brotliQuality` to make
+  cold-cache first requests cheaper (see `SECURITY_HARDENING.md` §3.10).
+
+### ✨ Feature — `serverCache.compressedFile.maxEntrySize`: configurable per-entry cap
+- **What**: the per-entry admission cap of the compressed cache — hardcoded at ¼ of
+  `maxSize` since the stream-tee work — becomes an option, measured on the compressed
+  OUTPUT. Unset → `maxSize / 4` (unchanged, and it keeps scaling with `maxSize`);
+  explicit integer → bytes; `false` → no per-entry cap (`maxSize` still bounds).
+  Oversized entries are still served, just never cached (throttled warning names the
+  option). A value above `maxSize` throws at factory time (config contradiction — the
+  hint points to `false`).
+- **Where enforced**: inside the LFU cache itself (`set()` and `refresh()`), so the cap
+  now applies to **every** insertion, not just the streamed-tee path; the tee keeps its
+  early-abandon check so an over-budget accumulation stops holding RAM immediately.
+- **Behavior note (non-default configs only)**: the buffered path previously had no
+  per-entry cap. An operator running `compression.maxFileSize: false` with files whose
+  compressed output exceeds ¼ of the cache's `maxSize` will see those entries no longer
+  cached (responses are unchanged; repeat requests recompress). Restore the old behavior
+  with `maxEntrySize: false` or an explicit higher value.
+
 ## [4.2.1] - 2026-07-13
 
 Patch release: two follow-ups from the post-4.2.0 code review of the `errorPages` work.

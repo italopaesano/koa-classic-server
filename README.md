@@ -308,6 +308,8 @@ koaClassicServer(rootDir, {
     minFileSize: 1024,
     maxFileSize: 10485760,               // 10 MB buffered-path cap (false = no cap)
     mimeTypes:   [],                     // override the compressible-type list
+    buffered:  { brotliQuality: 11, gzipLevel: 9 },  // v4.3: quality when compressing once, then caching
+    streaming: { brotliQuality: 4,  gzipLevel: 6 },  // v4.3: quality when compressing per request (above maxFileSize)
   },
 
   serverCache: {                         // in-memory server-side caches
@@ -321,6 +323,9 @@ koaClassicServer(rootDir, {
     compressedFile: {                    // cache br/gzip responses (compress once)
       enabled:      true,
       maxSize:      104857600,           // total RAM cap, bytes (100 MB)
+      maxEntrySize: undefined,           // v4.3: per-entry cap on the compressed output, bytes
+                                         //   default: maxSize / 4; false = no per-entry cap;
+                                         //   oversized entries are served, just never cached
       maxAge:       0,                   // ms before an entry counts as stale (0 = off)
       warnInterval: 60000,               // ms between "maxSize reached" warnings (0 = always, false = never)
     },
@@ -379,7 +384,7 @@ The v2 → v3 notes remain in the **[changelog](./docs/CHANGELOG.md)**.
 ## Testing
 
 ```bash
-npm test                 # full suite (lints first) — 717 tests
+npm test                 # full suite (lints first) — 973 tests
 npm run test:security    # security tests only
 npm run test:performance # benchmarks
 ```

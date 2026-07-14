@@ -1782,13 +1782,19 @@ module.exports = function koaClassicServer(
      * extended form (UTF-8 percent-encoded) for maximum browser compatibility:
      *   inline; filename="ascii-safe"; filename*=UTF-8''percent-encoded
      *
-     * The quoted-string form escapes only double-quotes; the RFC 5987 form
-     * percent-encodes every byte that is not an unreserved URI character.
-     * Browsers that support filename* prefer it over filename (RFC 6266 §4.1).
+     * The quoted-string form must stay within what Node accepts in a header
+     * value (latin1 minus control chars): anything outside — CJK, emoji, \n —
+     * would make ctx.set() throw ERR_INVALID_CHAR and turn the response into a
+     * 500. Those characters are replaced with '?' (same policy as express's
+     * content-disposition package); the real name still round-trips via the
+     * RFC 5987 form, which browsers prefer over filename (RFC 6266 §4.1).
      */
     function buildContentDisposition(filename) {
-        // quoted-string fallback: escape " and \ so the value is always valid ASCII
-        const asciiSafe = filename.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        // quoted-string fallback: printable latin1 only (controls and >0xFF → '?'), then escape \ and "
+        const asciiSafe = filename
+            .replace(/[^\x20-\x7e\xa0-\xff]/g, '?')
+            .replace(/\\/g, '\\\\')
+            .replace(/"/g, '\\"');
 
         // RFC 5987 extended value: UTF-8 percent-encode everything except
         // unreserved chars (ALPHA / DIGIT / "-" / "." / "_" / "~")

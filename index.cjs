@@ -2369,22 +2369,32 @@ module.exports = function koaClassicServer(
                 ctx.set('Last-Modified', fileStat.mtime.toUTCString());
 
                 // If-None-Match: "*" | comma-list, weak comparison (RFC 9110 §13.1.2).
-                if (ifNoneMatchSatisfied(ctx.get('If-None-Match'), fullEtag)) {
-                    ctx.status = 304;
-                    return;
-                }
-
-                // If-Modified-Since (date validation). The mtime is truncated to whole seconds
-                // before comparing: Last-Modified is emitted via toUTCString() (second precision
-                // — HTTP dates have no milliseconds), so a client echoing that header back would
-                // otherwise never match a sub-second mtime (e.g. 22:13:20.500 <= 22:13:20.000).
-                const clientModifiedSince = ctx.get('If-Modified-Since');
-                if (clientModifiedSince) {
-                    const clientDate = new Date(clientModifiedSince);
-                    const mtimeSeconds = Math.floor(fileStat.mtime.getTime() / 1000) * 1000;
-                    if (mtimeSeconds <= clientDate.getTime()) {
+                // When the header is present it is the ONLY precondition evaluated:
+                // RFC 9110 §13.1.3 — "A recipient MUST ignore If-Modified-Since if
+                // the request contains an If-None-Match header field". The ETag is
+                // the strong validator; the date has 1-second resolution and would
+                // otherwise 304 a client whose ETag just said it is stale (e.g. two
+                // same-second edits with a size change, or an encoding-suffix change).
+                const ifNoneMatch = ctx.get('If-None-Match');
+                if (ifNoneMatch) {
+                    if (ifNoneMatchSatisfied(ifNoneMatch, fullEtag)) {
                         ctx.status = 304;
                         return;
+                    }
+                    // present but not satisfied → full response, date NOT consulted
+                } else {
+                    // If-Modified-Since (date validation). The mtime is truncated to whole seconds
+                    // before comparing: Last-Modified is emitted via toUTCString() (second precision
+                    // — HTTP dates have no milliseconds), so a client echoing that header back would
+                    // otherwise never match a sub-second mtime (e.g. 22:13:20.500 <= 22:13:20.000).
+                    const clientModifiedSince = ctx.get('If-Modified-Since');
+                    if (clientModifiedSince) {
+                        const clientDate = new Date(clientModifiedSince);
+                        const mtimeSeconds = Math.floor(fileStat.mtime.getTime() / 1000) * 1000;
+                        if (mtimeSeconds <= clientDate.getTime()) {
+                            ctx.status = 304;
+                            return;
+                        }
                     }
                 }
             }

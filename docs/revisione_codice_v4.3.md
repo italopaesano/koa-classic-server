@@ -19,7 +19,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ### Bug confermati (riprodotti con richieste reali)
 - [x] [1. File con nome non-latin1 (CJK, emoji) → 500 invece di 200](#1-file-con-nome-non-latin1-cjk-emoji--500-invece-di-200) — **RISOLTO** (fallback quoted-string sanitizzato a latin1 stampabile)
 - [x] [2. Link di ordinamento e paginazione del listing perdono `urlPrefix`](#2-link-di-ordinamento-e-paginazione-del-listing-perdono-urlprefix) — **RISOLTO** (`baseUrl` con prefix + slash canonico)
-- [ ] [3. `If-Modified-Since` non ignorato quando `If-None-Match` è presente](#3-if-modified-since-non-ignorato-quando-if-none-match-è-presente)
+- [x] [3. `If-Modified-Since` non ignorato quando `If-None-Match` è presente](#3-if-modified-since-non-ignorato-quando-if-none-match-è-presente) — **RISOLTO** (ramo esclusivo: con INM presente la data non è consultata)
 
 ### Robustezza (da lettura del codice, non riprodotti)
 - [ ] [4. `refreshOrInsert` con snapshot stale può doppio-inserire la stessa chiave (contabilità LFU corrotta)](#4-refreshorinsert-con-snapshot-stale-può-doppio-inserire-la-stessa-chiave-contabilità-lfu-corrotta)
@@ -135,6 +135,18 @@ sopravvive, quindi funziona, ma è un round-trip evitabile su ogni click).
 ---
 
 ### 3. `If-Modified-Since` non ignorato quando `If-None-Match` è presente
+
+**Stato: ✅ RISOLTO** (2026-07-15 — la cascata indipendente è diventata un ramo
+esclusivo, come da struttura della RFC: se l'header `If-None-Match` è presente
+la sua valutazione è l'unica (matcha → 304, non matcha → 200 pieno) e
+`If-Modified-Since` si valuta solo in sua assenza. Micro-decisione documentata:
+"presente" = valore non vuoto (`ctx.get` non distingue header assente da header
+con valore vuoto; un `If-None-Match:` vuoto è patologico e trattarlo come
+assente coincide con `fresh`/express e non può causare stale-content in più).
+Invariato tutto il resto: precedenza validatori-su-Range (#8), `If-Range`,
+ramo `*`. Test: describe "#3" in `__tests__/conditional-precedence.test.js`,
+6 test (2 di conformità che falliscono sul codice pre-fix + 4 di invarianza
+nelle due direzioni); verificato sul pre-fix.)
 
 **Posizione:** `index.cjs:2334-2351` (blocco validatori in `loadFile`).
 

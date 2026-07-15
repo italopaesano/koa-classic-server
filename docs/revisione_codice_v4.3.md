@@ -18,7 +18,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 ### Bug confermati (riprodotti con richieste reali)
 - [x] [1. File con nome non-latin1 (CJK, emoji) → 500 invece di 200](#1-file-con-nome-non-latin1-cjk-emoji--500-invece-di-200) — **RISOLTO** (fallback quoted-string sanitizzato a latin1 stampabile)
-- [ ] [2. Link di ordinamento e paginazione del listing perdono `urlPrefix`](#2-link-di-ordinamento-e-paginazione-del-listing-perdono-urlprefix)
+- [x] [2. Link di ordinamento e paginazione del listing perdono `urlPrefix`](#2-link-di-ordinamento-e-paginazione-del-listing-perdono-urlprefix) — **RISOLTO** (`baseUrl` con prefix + slash canonico)
 - [ ] [3. `If-Modified-Since` non ignorato quando `If-None-Match` è presente](#3-if-modified-since-non-ignorato-quando-if-none-match-è-presente)
 
 ### Robustezza (da lettura del codice, non riprodotti)
@@ -91,6 +91,20 @@ Test: filename CJK, emoji, e con caratteri di controllo; asserire 200 e che
 ---
 
 ### 2. Link di ordinamento e paginazione del listing perdono `urlPrefix`
+
+**Stato: ✅ RISOLTO** (2026-07-15 — `baseUrl` ora deriva da `pageHref.pathname`
+(**con** prefix, coerente con Parent Directory e link alle entry) invece di
+`pageHrefOutPrefix.pathname`, e viene normalizzato allo **slash finale canonico**
+(il pathname era stato slash-stripped per il parsing URL): ogni click su
+sort/paginazione atterra direttamente su `/dir/?...` senza pagare l'hop 301 del
+redirect trailing-slash — miglioria bonus concordata nel brainstorming. Alla
+root senza prefix i link restano byte-identici a prima (`/?sort=...`): nessun
+impatto sul comportamento storico. Test:
+`__tests__/listing-links-urlprefix.test.js`, 8 test (prefix su sottodirectory e
+root del prefix, click-through sort e paginazione, no-hop senza prefix —
+supertest non segue i redirect, quindi il 200 diretto prova l'assenza del 301 —
+preservazione di sort/order nei link di pagina, invarianza alla root);
+verificato che 6/8 falliscono sul codice pre-fix.)
 
 **Posizione:** `index.cjs:2677` (`const baseUrl = pageHrefOutPrefix.pathname`),
 usato da `buildQueryUrl` (`index.cjs:2680-2686`) e `getSortUrl` (`index.cjs:2688-2694`).

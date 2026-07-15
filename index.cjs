@@ -2712,7 +2712,16 @@ module.exports = function koaClassicServer(
             const sortBy = ctx.query.sort || 'name';
             const sortOrder = ctx.query.order || 'asc';
 
-            const baseUrl = pageHrefOutPrefix.pathname;
+            // Base for the listing's self-referencing links (sort headers,
+            // paginator). Built from the WITH-prefix pathname — the out-prefix
+            // one would make these links escape urlPrefix (#2), unlike the
+            // parent/entry links which already use pageHref — and normalized
+            // to exactly one trailing slash: the pathname was slash-stripped
+            // for URL parsing, and linking the canonical /dir/ form spares a
+            // 301 redirect hop on every sort/pagination click.
+            const baseUrl = pageHref.pathname.endsWith('/')
+                ? pageHref.pathname
+                : pageHref.pathname + '/';
 
             // Preserves sort/order while overriding `page`; omits page when 0.
             function buildQueryUrl(targetPage) {

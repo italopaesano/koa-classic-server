@@ -36,8 +36,8 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [ ] [13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`](#13-validazione-incoerente-silenzio-vs-throw-in-servercache--compression)
 
 ### Aggiunte 2026-07-15 (follow-up del #1 — audit "encoder totali")
-- [ ] [14. `encodeURIComponent` non è totale: lone surrogate → 500 (Windows)](#14-encodeuricomponent-non-è-totale-lone-surrogate--500-windows)
-- [ ] [15. Spoofing visivo nel listing con caratteri bidi/invisibili](#15-spoofing-visivo-nel-listing-con-caratteri-bidiinvisibili)
+- [x] [14. `encodeURIComponent` non è totale: lone surrogate → 500 (Windows)](#14-encodeuricomponent-non-è-totale-lone-surrogate--500-windows) — **RISOLTO** (`toWellFormedName` prima di ogni encode)
+- [x] [15. Spoofing visivo nel listing con caratteri bidi/invisibili](#15-spoofing-visivo-nel-listing-con-caratteri-bidiinvisibili) — **RISOLTO** (U+FFFD visibile + `<bdi>` nella sola resa)
 
 ---
 
@@ -372,6 +372,22 @@ sulla creazione delle fixture). L'audit dei confini ha trovato due lacune residu
 
 ### 14. `encodeURIComponent` non è totale: lone surrogate → 500 (Windows)
 
+**Stato: ✅ RISOLTO** (2026-07-15 — helper module-level `toWellFormedName(name)`:
+usa `String.prototype.toWellFormed()` quando disponibile (Node ≥ 20) e altrimenti
+il fallback regex sui surrogate spaiati → U+FFFD (Node 18, `engines: >=18`).
+Applicato ai due encoder raggiungibili dai nomi file: `itemUri` del listing e
+`buildContentDisposition` (hoistata a livello modulo, ora pura e unit-testabile;
+il fallback quoted-string era già totale per costruzione). Il redirect
+hideExtension non è toccato: il suo input passa da `decodeURIComponent`, che
+non può produrre surrogate spaiati (encoding invalido → 400 a monte). Esito su
+Windows per un nome WTF-16: la entry appare nel listing con U+FFFD e il suo
+href risponde 404 — l'unico esito possibile, dato che un lone surrogate non ha
+alcuna rappresentazione percent-encoded valida; prima l'intero listing era un
+500. Test: describe `#14` in `__tests__/adversarial-filenames.test.js` (unit
+level — le fixture POSIX non possono contenere WTF-16 — incluso il ramo
+fallback Node 18 via shadow del metodo nativo); verificato che falliscono sul
+codice pre-fix.)
+
 **Posizione:** listing (`itemUri`, `index.cjs` ~2755), redirect hideExtension
 (re-encode per segmento, `index.cjs` ~2041); stessa famiglia il `filename*` di
 `buildContentDisposition` (`index.cjs` ~1795).
@@ -391,6 +407,19 @@ in `engines`, fallback regex sui surrogate spaiati → U+FFFD).
 
 ### 15. Spoofing visivo nel listing con caratteri bidi/invisibili
 
+**Stato: ✅ RISOLTO** (2026-07-15 — mitigazione **solo di resa**, file/href/`filename*`
+byte-exact invariati (coperto dal corpus avversariale). Due cinture:
+1. `listingDisplayName()`: i controlli bidi espliciti (U+202A–U+202E,
+   U+2066–U+2069) diventano un U+FFFD **visibile** nel nome mostrato —
+   `evil‮txt.exe` si mostra come `evil�txt.exe`, spoofing disinnescato.
+   I direction mark (U+200E/U+200F), legittimi nei nomi RTL, restano intatti.
+2. nome avvolto in `<bdi>` (fuori dall'`<a>`, così l'HTML interno del link resta
+   `>nome</a>` e l'isolamento copre anche l'etichetta symlink): il run
+   direzionale di un nome RTL legittimo non sanguina più sul resto della riga.
+Niente modifiche a CSS/CSP. Test: describe `#15` in
+`__tests__/adversarial-filenames.test.js`; verificato che falliscono sul codice
+pre-fix.)
+
 **Posizione:** righe del listing (`show_dir`, nomi in `escapeHtml`), CSS
 `LISTING_CSS`.
 
@@ -409,8 +438,9 @@ nome in `LISTING_CSS` (l'hash CSP si aggiorna da solo) oppure avvolgere il nome 
 
 Per gli operatori che vogliono davvero un set di nomi ammesso, la capacità esiste
 già senza nuovo codice: `hidden: { alwaysHide: [/[^\x20-\x7E\xA0-\xFF]/] }` nasconde
-(404 + esclusione dal listing) ogni nome fuori dal latin1 stampabile. Da aggiungere
-come ricetta in `SECURITY_HARDENING.md` quando si affrontano #14/#15.
+(404 + esclusione dal listing) ogni nome fuori dal latin1 stampabile.
+**Fatto (2026-07-15):** documentata come §3.12 di `SECURITY_HARDENING.md`
+(verificata end-to-end: nome CJK → 404 e assente dal listing, latin1 → 200).
 
 ---
 

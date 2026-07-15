@@ -161,14 +161,21 @@ function unescapeHtml(s) {
         .replace(/&amp;/g, '&');
 }
 
+// What the listing DISPLAYS for a name (finding #15): explicit bidi control
+// characters are replaced with a visible U+FFFD; everything else unchanged.
+function displayedNameOf(name) {
+    return name.replace(/[\u202A-\u202E\u2066-\u2069]/g, '\uFFFD');
+}
+
 // Finds the href the listing emits for `name`. Matching is done on the
 // DISPLAYED text (unescaped), i.e. exactly what the listing claims the file
 // is called — the href must then actually serve it. The href attribute value
 // is HTML-escaped by the middleware (correctly), so it is unescaped here the
 // same way a browser would before navigating.
 function hrefFor(listingBody, name) {
+    const displayed = displayedNameOf(name);
     for (const m of listingBody.matchAll(/<a href="([^"]*)">([\s\S]*?)<\/a>/g)) {
-        if (unescapeHtml(m[2]) === name) return unescapeHtml(m[1]);
+        if (unescapeHtml(m[2]) === displayed) return unescapeHtml(m[1]);
     }
     return null;
 }
@@ -275,6 +282,65 @@ describe('Adversarial filenames — full-input-space serving contract', () => {
             const r3 = await supertest(server).get(toPath(fileHref));
             expect(r3.status).toBe(200);
             expect(bodyOf(r3)).toBe(contentOf(DIR_FILE_NAME));
+        });
+    });
+
+    // #14 — lone surrogates. POSIX fixtures cannot exercise this class (an
+    // invalid-UTF-8 name becomes U+FFFD at write time; only Windows readdir
+    // returns WTF-16 names), so encoder totality is asserted at unit level.
+    describe('#14 — lone surrogates make every name encoder total', () => {
+        const { toWellFormedName, buildContentDisposition } = koaClassicServer._internals;
+
+        test('toWellFormedName replaces lone surrogates with U+FFFD', () => {
+            expect(toWellFormedName('a\uD800b')).toBe('a�b');
+            expect(toWellFormedName('\uDC00x')).toBe('�x');
+            expect(toWellFormedName('tail\uDBFF')).toBe('tail�');
+        });
+
+        test('well-formed strings — astral pairs included — pass through unchanged', () => {
+            expect(toWellFormedName('👍🏽.txt')).toBe('👍🏽.txt');
+            expect(toWellFormedName('plain.txt')).toBe('plain.txt');
+        });
+
+        test('the Node 18 regex fallback behaves like toWellFormed()', () => {
+            // Shadow the native method with an own property so the replace
+            // path runs; String.prototype.replace still works on the wrapper.
+            const wrap = (s) => Object.assign(Object(s), { toWellFormed: undefined });
+            expect(toWellFormedName(wrap('a\uD800b'))).toBe('a�b');
+            expect(toWellFormedName(wrap('👨‍👩‍👧‍👦.txt'))).toBe('👨‍👩‍👧‍👦.txt');
+            expect(toWellFormedName(wrap('x\uDC00\uD800y'))).toBe('x��y');
+        });
+
+        test('buildContentDisposition never throws on a WTF-16 name', () => {
+            const cd = buildContentDisposition('a\uD800b.txt');
+            expect(cd).toContain('filename="a?b.txt"');
+            expect(cd).toContain("filename*=UTF-8''a%EF%BF%BDb.txt");
+        });
+
+        test('the listing href encoder is total for WTF-16 names', () => {
+            expect(() => encodeURIComponent(toWellFormedName('x\uD800y'))).not.toThrow();
+        });
+    });
+
+    // #15 — bidi spoofing is defused in the DISPLAYED name only: the file, its
+    // href and filename* stay byte-exact (covered by the corpus tests above).
+    describe('#15 — bidi controls are defused in the listing display', () => {
+        const { listingDisplayName } = koaClassicServer._internals;
+
+        test('explicit bidi controls become a visible U+FFFD', () => {
+            expect(listingDisplayName('evil‮txt.exe')).toBe('evil�txt.exe');
+            expect(listingDisplayName('a⁦b⁩c')).toBe('a�b�c');
+        });
+
+        test('legit RTL text and direction marks are untouched', () => {
+            expect(listingDisplayName('ملف عربي.txt')).toBe('ملف عربي.txt');
+            expect(listingDisplayName('l‎rm.txt')).toBe('l‎rm.txt');
+        });
+
+        test('no raw bidi override reaches the listing HTML; names are <bdi>-isolated', () => {
+            expect(listingBody).not.toContain('‮');
+            expect(listingBody).toContain('evil�txt.exe');
+            expect(listingBody).toContain('<bdi>');
         });
     });
 

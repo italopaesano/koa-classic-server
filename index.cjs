@@ -362,6 +362,67 @@ function escapeHtml(unsafe) {
     return unsafe.replace(_HTML_ESCAPE_RE, c => _HTML_ESCAPE_MAP[c]);
 }
 
+// Lone (unpaired) surrogates cannot be percent-encoded: encodeURIComponent
+// throws URIError on them. They cannot arrive from URL-decoded client input
+// (the decode guards already reject invalid encodings with a 400), but Windows
+// filenames are WTF-16 and readdir() can return them — one such name must not
+// turn the whole directory listing (or the file's Content-Disposition) into a
+// 500. Normalizes like String.prototype.toWellFormed() (Node >= 20); the
+// regex fallback covers Node 18 (engines: >=18). Well-formed strings —
+// including astral pairs like emoji — pass through unchanged.
+const _LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+function toWellFormedName(name) {
+    return typeof name.toWellFormed === 'function'
+        ? name.toWellFormed()
+        : name.replace(_LONE_SURROGATE_RE, '\uFFFD');
+}
+
+// Explicit bidi control characters (embedding/override/isolate,
+// U+202A-U+202E and U+2066-U+2069) can make a listing entry DISPLAY as a
+// different name — "evil‮txt.exe" renders roughly as "evilexe.txt"
+// (extension spoofing). In the DISPLAYED name only they are replaced with a
+// visible U+FFFD (the href and the served file are untouched); the caller
+// additionally wraps the name in <bdi> so the directional run of one name
+// (legit RTL included) cannot bleed into the rest of its row. Direction MARKS
+// (U+200E/U+200F) are legitimate in RTL text and are left alone.
+const _BIDI_CONTROLS_RE = /[\u202A-\u202E\u2066-\u2069]/g;
+function listingDisplayName(name) {
+    return escapeHtml(name.replace(_BIDI_CONTROLS_RE, '\uFFFD'));
+}
+
+/**
+ * Build a Content-Disposition header value for inline serving.
+ *
+ * Uses both the legacy quoted-string form (ASCII fallback) and the RFC 5987
+ * extended form (UTF-8 percent-encoded) for maximum browser compatibility:
+ *   inline; filename="ascii-safe"; filename*=UTF-8''percent-encoded
+ *
+ * The quoted-string form must stay within what Node accepts in a header
+ * value (latin1 minus control chars): anything outside — CJK, emoji, \n —
+ * would make ctx.set() throw ERR_INVALID_CHAR and turn the response into a
+ * 500. Those characters are replaced with '?' (same policy as express's
+ * content-disposition package); the real name still round-trips via the
+ * RFC 5987 form, which browsers prefer over filename (RFC 6266 §4.1).
+ * The name is normalized to well-formed UTF-16 first: a lone surrogate (WTF-16
+ * filename on Windows) would otherwise make encodeURIComponent throw.
+ */
+function buildContentDisposition(filename) {
+    filename = toWellFormedName(filename);
+
+    // quoted-string fallback: printable latin1 only (controls and >0xFF → '?'), then escape \ and "
+    const asciiSafe = filename
+        .replace(/[^\x20-\x7e\xa0-\xff]/g, '?')
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"');
+
+    // RFC 5987 extended value: UTF-8 percent-encode everything except
+    // unreserved chars (ALPHA / DIGIT / "-" / "." / "_" / "~")
+    const rfc5987 = encodeURIComponent(filename)
+        .replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
+    return `inline; filename="${asciiSafe}"; filename*=UTF-8''${rfc5987}`;
+}
+
 // Pure helper — depends only on _LOG_1024 (module scope), safe to hoist.
 function formatSize(bytes) {
     if (bytes === 0) return '0 B';
@@ -1775,35 +1836,6 @@ module.exports = function koaClassicServer(
         return _gzipAsync(data, { level: compressionConfig.buffered.gzipLevel });
     }
 
-    /**
-     * Build a Content-Disposition header value for inline serving.
-     *
-     * Uses both the legacy quoted-string form (ASCII fallback) and the RFC 5987
-     * extended form (UTF-8 percent-encoded) for maximum browser compatibility:
-     *   inline; filename="ascii-safe"; filename*=UTF-8''percent-encoded
-     *
-     * The quoted-string form must stay within what Node accepts in a header
-     * value (latin1 minus control chars): anything outside — CJK, emoji, \n —
-     * would make ctx.set() throw ERR_INVALID_CHAR and turn the response into a
-     * 500. Those characters are replaced with '?' (same policy as express's
-     * content-disposition package); the real name still round-trips via the
-     * RFC 5987 form, which browsers prefer over filename (RFC 6266 §4.1).
-     */
-    function buildContentDisposition(filename) {
-        // quoted-string fallback: printable latin1 only (controls and >0xFF → '?'), then escape \ and "
-        const asciiSafe = filename
-            .replace(/[^\x20-\x7e\xa0-\xff]/g, '?')
-            .replace(/\\/g, '\\\\')
-            .replace(/"/g, '\\"');
-
-        // RFC 5987 extended value: UTF-8 percent-encode everything except
-        // unreserved chars (ALPHA / DIGIT / "-" / "." / "_" / "~")
-        const rfc5987 = encodeURIComponent(filename)
-            .replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
-
-        return `inline; filename="${asciiSafe}"; filename*=UTF-8''${rfc5987}`;
-    }
-
     // Find the first matching index file in a directory.
     // Fast-path: string patterns use a direct stat() — no readdir needed.
     // Slow-path: RegExp patterns trigger a single lazy readdir(), shared across
@@ -2758,9 +2790,9 @@ module.exports = function koaClassicServer(
                             // Build item URI without query parameters
                             let itemUri;
                             if (_listingBaseUrl === _listingOriginPrefix + "/" || _listingBaseUrl === _listingOriginPrefix) {
-                                itemUri = `${_listingOriginPrefix}/${encodeURIComponent(s_name)}`;
+                                itemUri = `${_listingOriginPrefix}/${encodeURIComponent(toWellFormedName(s_name))}`;
                             } else {
-                                itemUri = `${_listingBaseUrl}/${encodeURIComponent(s_name)}`;
+                                itemUri = `${_listingBaseUrl}/${encodeURIComponent(toWellFormedName(s_name))}`;
                             }
 
                             // Resolve symlinks and DT_UNKNOWN entries to their effective type.
@@ -2896,12 +2928,12 @@ module.exports = function koaClassicServer(
                                 : '';
 
                     if (item.isReserved) {
-                        parts.push(`${rowStart} ${escapeHtml(item.name)}${symlinkLabel}</td> <td> DIR BUT RESERVED</td><td>${item.sizeStr}</td></tr>`);
+                        parts.push(`${rowStart} <bdi>${listingDisplayName(item.name)}</bdi>${symlinkLabel}</td> <td> DIR BUT RESERVED</td><td>${item.sizeStr}</td></tr>`);
                     } else if (item.isBrokenSymlink || item.isBlockedSymlink) {
                         // Broken or policy-blocked symlink: name visible but not clickable
-                        parts.push(`${rowStart} ${escapeHtml(item.name)}${symlinkLabel}</td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
+                        parts.push(`${rowStart} <bdi>${listingDisplayName(item.name)}</bdi>${symlinkLabel}</td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
                     } else {
-                        parts.push(`${rowStart} <a href="${escapeHtml(item.itemUri)}">${escapeHtml(item.name)}</a>${symlinkLabel} </td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
+                        parts.push(`${rowStart} <bdi><a href="${escapeHtml(item.itemUri)}">${listingDisplayName(item.name)}</a></bdi>${symlinkLabel} </td> <td> ${escapeHtml(item.mimeType)} </td><td>${item.sizeStr}</td></tr>`);
                     }
                 }
             }
@@ -2989,6 +3021,14 @@ module.exports._internals = {
     singleFlight,
     refreshOrInsert,
     escapeHtml,
+    // toWellFormedName / buildContentDisposition / listingDisplayName: the
+    // lone-surrogate class (#14) cannot be exercised through fixtures on
+    // POSIX (invalid UTF-8 names become U+FFFD at write time, and only
+    // Windows readdir can return WTF-16 names), so their totality is
+    // asserted at unit level here.
+    toWellFormedName,
+    buildContentDisposition,
+    listingDisplayName,
     // writeErrorPage is the shared output path for every middleware-generated error
     // response (sendErrorPage / sendErrorPageSync delegate to it). Exposed so its
     // contract — header scrub, no-store on >=500, Content-Type, custom-vs-built-in

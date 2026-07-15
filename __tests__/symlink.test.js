@@ -369,14 +369,14 @@ describeIfSymlinks('koa-classic-server - symlink support', () => {
             expect(res.status).toBe(200);
             // index.ejs is a symlink to a file
             expect(res.text).toContain('index.ejs');
-            expect(res.text).toMatch(/index\.ejs<\/a>\s*\( Symlink \)/);
+            expect(res.text).toMatch(/index\.ejs<\/a><\/bdi>\s*\( Symlink \)/); // <bdi> isolates the name (v4.3 register #15)
         });
 
         test('symlink to directory shows ( Symlink ) indicator', async () => {
             const res = await request.get('/');
             expect(res.status).toBe(200);
             expect(res.text).toContain('linked-subdir');
-            expect(res.text).toMatch(/linked-subdir<\/a>\s*\( Symlink \)/);
+            expect(res.text).toMatch(/linked-subdir<\/a><\/bdi>\s*\( Symlink \)/);
         });
 
         test('broken symlink shows ( Broken Symlink ) indicator without link', async () => {

@@ -22,7 +22,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [x] [3. `If-Modified-Since` non ignorato quando `If-None-Match` è presente](#3-if-modified-since-non-ignorato-quando-if-none-match-è-presente) — **RISOLTO** (ramo esclusivo: con INM presente la data non è consultata)
 
 ### Robustezza (da lettura del codice, non riprodotti)
-- [ ] [4. `refreshOrInsert` con snapshot stale può doppio-inserire la stessa chiave (contabilità LFU corrotta)](#4-refreshorinsert-con-snapshot-stale-può-doppio-inserire-la-stessa-chiave-contabilità-lfu-corrotta)
+- [x] [4. `refreshOrInsert` con snapshot stale può doppio-inserire la stessa chiave (contabilità LFU corrotta)](#4-refreshorinsert-con-snapshot-stale-può-doppio-inserire-la-stessa-chiave-contabilità-lfu-corrotta) — **RISOLTO** (due cinture: delete incondizionato + guardia in `set()`)
 
 ### Minori / hardening / cosmetici
 - [ ] [5. Il listing esce senza alcun `Cache-Control`](#5-il-listing-esce-senza-alcun-cache-control)
@@ -186,6 +186,23 @@ if (inm) {
 ## Robustezza
 
 ### 4. `refreshOrInsert` con snapshot stale può doppio-inserire la stessa chiave (contabilità LFU corrotta)
+
+**Stato: ✅ RISOLTO** (2026-07-15 — entrambe le cinture proposte:
+1. in `refreshOrInsert` il delete è **incondizionato** (`cache.delete(key)` è
+   già un no-op sicuro sulla chiave assente): lo snapshot `cached` non decide
+   più nulla sul percorso delete+set;
+2. guardia difensiva in testa a `LFUCache.set()`
+   (`if (this._keyMap.has(key)) this.delete(key)`): l'invariante "set = chiave
+   nuova" vale per costruzione anche per chiamanti futuri — scelta consapevole:
+   l'alternativa (lasciar esplodere il bug del futuro chiamante) esploderebbe
+   nel callback della pipeline in produzione, il posto peggiore possibile.
+Il ramo `refresh()` non è toccato: opera già sullo stato corrente della mappa
+con contabilità a delta. Semantica del sovrascrivere: frequenza riparte da 1
+(bytes nuovi). Test: due describe "#4" in `__tests__/internals-unit.test.js`,
+5 test deterministici — double-count, chiave-fantasma in due bucket, crash di
+`_evictOne` su ghost (TypeError riprodotto), byte-fantasma dopo ciclo di
+evizione, race tee simulata con snapshot stale, più invarianza del fallback
+con snapshot corrente; verificato che 4/5 falliscono sul codice pre-fix.)
 
 **Posizione:** `index.cjs:644-653` (`refreshOrInsert`); call site critici:
 callback del tee (`index.cjs:2507-2523`), leader raw (`index.cjs:2236-2245`),

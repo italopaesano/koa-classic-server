@@ -509,3 +509,96 @@ describe('escapeHtml', () => {
         expect(escapeHtml(null)).toBe(null);
     });
 });
+
+// ─── #4 (v4.3 register) — set()/refreshOrInsert on a LIVE key ────────────────
+//
+// refreshOrInsert gated its delete on the caller's `cached` snapshot, taken at
+// request start. On the streamed-tee path that snapshot can be minutes old:
+// another request may have inserted the same cacheKey meanwhile, so the
+// callback ran set() over a LIVE key — currentSize double-counted forever
+// (chronic premature evictions) and the key left as a ghost in two frequency
+// buckets, where a later _evictOne() destructures undefined and throws inside
+// a stream callback. Both belts are asserted here: the unconditional delete in
+// refreshOrInsert and the defensive delete inside set() itself.
+
+// Counts how many frequency buckets contain `key` — the ghost detector.
+function bucketMemberships(cache, key) {
+    let n = 0;
+    for (const bucket of cache._freqMap.values()) {
+        if (bucket.has(key)) n++;
+    }
+    return n;
+}
+
+describe('LFUCache.set() over a live key (#4, v4.3 register)', () => {
+    test('accounting stays exact and the key lives in exactly one bucket', () => {
+        const cache = new LFUCache(1024, false, 'compressedFile', silentLogger());
+        cache.set('k', entry('AAAA'));
+        cache.get('k'); // freq 2 → bucket 2
+        cache.set('k', entry('BBBBBB')); // 6 bytes, straight over the live key
+        expect(cache.currentSize).toBe(6);          // pre-fix: 10 (4 + 6)
+        expect(cache.peek('k').freq).toBe(1);       // new bytes, new life
+        expect(bucketMemberships(cache, 'k')).toBe(1); // pre-fix: 2 (ghost)
+    });
+
+    test('a ghost key can no longer crash _evictOne mid-eviction', () => {
+        const cache = new LFUCache(8, false, 'compressedFile', silentLogger());
+        expect(() => {
+            cache.set('k', entry('AAAA'));
+            cache.get('k');                 // 'k' reaches bucket 2
+            cache.set('k', entry('BBBB'));  // pre-fix: ghost 'k' stays in bucket 2
+            cache.delete('k');              // removes the live entry; the ghost survives
+            cache.set('b', entry('DDDD'));
+            cache.get('b');                 // 'b' joins bucket 2, BEHIND the ghost
+            cache.set('c', entry('EEEE'));  // over maxSize → eviction reaches bucket 2
+        }).not.toThrow();                   // pre-fix: TypeError (destructure of undefined)
+        // Post-fix sanity: real entries only, exact accounting.
+        expect(cache.peek('b')).toBeDefined();
+        expect(cache.peek('c')).toBeDefined();
+        expect(cache.currentSize).toBe(8);
+    });
+
+    test('phantom bytes no longer survive an overwrite + full eviction cycle', () => {
+        const cache = new LFUCache(8, false, 'compressedFile', silentLogger());
+        cache.set('k', entry('AAAA'));
+        cache.get('k');
+        cache.set('k', entry('BBBB'));  // pre-fix: currentSize 8 with 4 real bytes
+        cache.get('k');                 // merges the ghost pre-fix, but bytes stay inflated
+        cache.set('x', entry('XXXX')); // pre-fix: forced eviction of 'k' for nothing
+        const realBytes = ['k', 'x']
+            .map((key) => cache.peek(key))
+            .filter(Boolean)
+            .reduce((sum, e) => sum + e.buffer.length, 0);
+        expect(cache.currentSize).toBe(realBytes); // pre-fix: 4 phantom bytes remain
+    });
+});
+
+describe('refreshOrInsert with a stale snapshot (#4, v4.3 register)', () => {
+    test('a concurrent insert between peek and callback cannot corrupt accounting', () => {
+        const cache = new LFUCache(1024, false, 'compressedFile', silentLogger());
+        // Simulates the tee race: this request peeked BEFORE any entry existed
+        // (snapshot: undefined), but another request inserted a newer version
+        // of the same cacheKey while the stream was running.
+        cache.set('k', entry('NEW-VERSION', { mtime: 2000, size: 11 }));
+        cache.get('k'); // the meanwhile-entry even gained frequency
+        refreshOrInsert(cache, 'k',
+            { buffer: Buffer.from('OLDV'), mtime: 1000, size: 4, insertedAt: 0 },
+            undefined /* stale snapshot */, false);
+        expect(cache.currentSize).toBe(4);             // pre-fix: 15 (11 + 4)
+        expect(cache.peek('k').mtime).toBe(1000);      // last writer wins, correctly labeled
+        expect(bucketMemberships(cache, 'k')).toBe(1); // pre-fix: 2 (ghost)
+    });
+
+    test('the delete+set fallback still resets frequency with a CURRENT snapshot', () => {
+        const cache = new LFUCache(1024, false, 'compressedFile', silentLogger());
+        cache.set('k', entry('AAAA', { mtime: 1000 }));
+        cache.get('k');
+        const cached = cache.peek('k'); // fresh, correct snapshot
+        refreshOrInsert(cache, 'k',
+            { buffer: Buffer.from('BBBB'), mtime: 2000, size: 4, insertedAt: 0 },
+            cached, true);
+        expect(cache.currentSize).toBe(4);
+        expect(cache.peek('k').freq).toBe(1);
+        expect(bucketMemberships(cache, 'k')).toBe(1);
+    });
+});

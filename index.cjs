@@ -552,6 +552,15 @@ class LFUCache {
     }
 
     set(key, entry) {
+        // Invariant: set() must never run against a LIVE key — it would add the
+        // new buffer to currentSize without subtracting the overwritten one
+        // (accounting inflated forever → chronic premature evictions) and leave
+        // the key in two frequency buckets (a ghost that later makes
+        // _evictOne() destructure undefined — a throw inside a stream callback,
+        // outside any request try). Callers are expected to delete first
+        // (refreshOrInsert does, unconditionally); this guard makes the
+        // invariant hold by construction for any future caller too.
+        if (this._keyMap.has(key)) this.delete(key);
         // An entry larger than the whole cache can never fit: bail out BEFORE the
         // eviction loop, otherwise it would flush every other entry for nothing.
         // Warn (throttled) so the operator learns the cache is undersized for
@@ -708,7 +717,13 @@ function refreshOrInsert(cache, key, newEntry, cached, staleByAge) {
         && cached.mtime === newEntry.mtime
         && cached.size === newEntry.size;
     if (!canRefreshInPlace || !cache.refresh(key, newEntry)) {
-        if (cached) cache.delete(key);
+        // Unconditional delete: `cached` is the caller's snapshot from request
+        // start and may be STALE — on the streamed-tee path by minutes. Another
+        // request can have inserted this key meanwhile (a new file version via
+        // a second tee leader, or the buffered path after the file shrank), so
+        // gating the delete on the snapshot would set() over a live key and
+        // corrupt the LFU accounting. delete() is a safe no-op when absent.
+        cache.delete(key);
         cache.set(key, newEntry);
     }
 }

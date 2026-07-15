@@ -35,6 +35,10 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [ ] [12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio](#12-parametri-query-ripetuti-sortasortb-degradano-in-silenzio)
 - [ ] [13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`](#13-validazione-incoerente-silenzio-vs-throw-in-servercache--compression)
 
+### Aggiunte 2026-07-15 (follow-up del #1 — audit "encoder totali")
+- [ ] [14. `encodeURIComponent` non è totale: lone surrogate → 500 (Windows)](#14-encodeuricomponent-non-è-totale-lone-surrogate--500-windows)
+- [ ] [15. Spoofing visivo nel listing con caratteri bidi/invisibili](#15-spoofing-visivo-nel-listing-con-caratteri-bidiinvisibili)
+
 ---
 
 ## Bug confermati
@@ -353,6 +357,60 @@ va segnalato.
 (warn ora, throw nella prossima major), come già fatto per `browserCacheMaxAge`.
 
 **Priorità:** Bassa (coerenza DX).
+
+---
+
+## Aggiunte 2026-07-15 (follow-up del #1 — audit "encoder totali")
+
+Dal brainstorming successivo alla chiusura del #1 (approccio globale: a ogni confine
+di output un encoder **totale** — definito e sicuro per qualunque nome il filesystem
+consenta — invece di un set di caratteri ammesso, che sarebbe una *restriction* per
+la design philosophy). La rete di regressione è la nuova suite
+`__tests__/adversarial-filenames.test.js` (~50 nomi × GET diretto + round-trip
+`filename*` + click-through dal listing, gate NTFS dichiarativi e test-sentinella
+sulla creazione delle fixture). L'audit dei confini ha trovato due lacune residue:
+
+### 14. `encodeURIComponent` non è totale: lone surrogate → 500 (Windows)
+
+**Posizione:** listing (`itemUri`, `index.cjs` ~2755), redirect hideExtension
+(re-encode per segmento, `index.cjs` ~2041); stessa famiglia il `filename*` di
+`buildContentDisposition` (`index.cjs` ~1795).
+
+**Problema:** `encodeURIComponent` lancia `URIError` sui surrogate spaiati
+(verificato). Su Linux non possono arrivare dai nomi file (Node decodifica i byte
+UTF-8 invalidi in U+FFFD), ma su **Windows i filename sono WTF-16** e possono
+contenere surrogate spaiati: un file così rende il listing della sua directory un
+500 e il file non servibile — stessa classe del #1, un livello più in basso.
+Non riproducibile da fixture su Linux/macOS: va coperto con unit test sull'helper.
+
+**Fix proposto:** normalizzare i nomi con `String.prototype.toWellFormed()` prima
+di ogni `encodeURIComponent` (helper condiviso; Node ≥ 20 — per Node 18, dichiarato
+in `engines`, fallback regex sui surrogate spaiati → U+FFFD).
+
+**Priorità:** Bassa (solo Windows, nomi rarissimi) ma fix piccolo e strutturale.
+
+### 15. Spoofing visivo nel listing con caratteri bidi/invisibili
+
+**Posizione:** righe del listing (`show_dir`, nomi in `escapeHtml`), CSS
+`LISTING_CSS`.
+
+**Problema:** un nome con override bidi (es. U+202E RLO: `evil‮txt.exe` viene
+**visualizzato** come `evilexe.txt` circa) o zero-width può ingannare l'utente del
+listing sul vero nome/estensione del file. Nessun problema tecnico (serving e
+href corretti — coperti dalla suite avversariale), solo resa visiva.
+
+**Fix proposto:** isolare la resa del nome: `unicode-bidi: isolate` sulla cella
+nome in `LISTING_CSS` (l'hash CSP si aggiorna da solo) oppure avvolgere il nome in
+`<bdi>`. Valutare se estendere l'isolamento anche alla riga "Parent Directory".
+
+**Priorità:** Bassa (UI-only).
+
+### Ricetta hardening opt-in (documentazione, non default)
+
+Per gli operatori che vogliono davvero un set di nomi ammesso, la capacità esiste
+già senza nuovo codice: `hidden: { alwaysHide: [/[^\x20-\x7E\xA0-\xFF]/] }` nasconde
+(404 + esclusione dal listing) ogni nome fuori dal latin1 stampabile. Da aggiungere
+come ricetta in `SECURITY_HARDENING.md` quando si affrontano #14/#15.
 
 ---
 

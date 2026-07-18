@@ -156,3 +156,70 @@ describe('If-None-Match parsing (#9)', () => {
         expect(res.status).toBe(200);
     });
 });
+
+// ─── #3 (v4.3 register) — If-None-Match presence disables If-Modified-Since ────
+//
+// RFC 9110 §13.1.3: "A recipient MUST ignore If-Modified-Since if the request
+// contains an If-None-Match header field". The ETag is the strong validator;
+// the date has 1-second resolution: honoring it after a FAILED ETag match
+// would 304 a client whose cached copy is provably stale (two same-second
+// edits with a size change, or an encoding-suffix change).
+
+describe('If-None-Match presence disables If-Modified-Since (#3, v4.3 register)', () => {
+    let server;
+    let etag;
+    let lastModified;
+    beforeAll(async () => {
+        server = createApp(rangeRoot, { browserCacheEnabled: true });
+        const res = await supertest(server).get('/sample.txt');
+        etag = res.headers['etag'];
+        lastModified = res.headers['last-modified'];
+    });
+    afterAll(() => server.close());
+
+    test('stale ETag + matching date → 200 (date MUST be ignored)', async () => {
+        const res = await supertest(server)
+            .get('/sample.txt')
+            .set('If-None-Match', '"stale-etag-from-old-version"')
+            .set('If-Modified-Since', lastModified);
+        expect(res.status).toBe(200);
+    });
+
+    test('stale ETag + far-future date → 200 (date MUST be ignored)', async () => {
+        const res = await supertest(server)
+            .get('/sample.txt')
+            .set('If-None-Match', '"stale-etag-from-old-version"')
+            .set('If-Modified-Since', new Date(Date.now() + 86400000).toUTCString());
+        expect(res.status).toBe(200);
+    });
+
+    test('matching ETag + stale date → 304 (the ETag verdict wins both ways)', async () => {
+        const res = await supertest(server)
+            .get('/sample.txt')
+            .set('If-None-Match', etag)
+            .set('If-Modified-Since', new Date(0).toUTCString());
+        expect(res.status).toBe(304);
+    });
+
+    test('If-None-Match: * + any date → 304 (unchanged)', async () => {
+        const res = await supertest(server)
+            .get('/sample.txt')
+            .set('If-None-Match', '*')
+            .set('If-Modified-Since', new Date(0).toUTCString());
+        expect(res.status).toBe(304);
+    });
+
+    test('If-Modified-Since alone still produces 304 (unchanged)', async () => {
+        const res = await supertest(server)
+            .get('/sample.txt')
+            .set('If-Modified-Since', lastModified);
+        expect(res.status).toBe(304);
+    });
+
+    test('If-Modified-Since alone with a stale date still produces 200 (unchanged)', async () => {
+        const res = await supertest(server)
+            .get('/sample.txt')
+            .set('If-Modified-Since', new Date(0).toUTCString());
+        expect(res.status).toBe(200);
+    });
+});

@@ -18,22 +18,26 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 ### Bug confermati (riprodotti con richieste reali)
 - [x] [1. File con nome non-latin1 (CJK, emoji) → 500 invece di 200](#1-file-con-nome-non-latin1-cjk-emoji--500-invece-di-200) — **RISOLTO** (fallback quoted-string sanitizzato a latin1 stampabile)
-- [ ] [2. Link di ordinamento e paginazione del listing perdono `urlPrefix`](#2-link-di-ordinamento-e-paginazione-del-listing-perdono-urlprefix)
-- [ ] [3. `If-Modified-Since` non ignorato quando `If-None-Match` è presente](#3-if-modified-since-non-ignorato-quando-if-none-match-è-presente)
+- [x] [2. Link di ordinamento e paginazione del listing perdono `urlPrefix`](#2-link-di-ordinamento-e-paginazione-del-listing-perdono-urlprefix) — **RISOLTO** (`baseUrl` con prefix + slash canonico)
+- [x] [3. `If-Modified-Since` non ignorato quando `If-None-Match` è presente](#3-if-modified-since-non-ignorato-quando-if-none-match-è-presente) — **RISOLTO** (ramo esclusivo: con INM presente la data non è consultata)
 
 ### Robustezza (da lettura del codice, non riprodotti)
-- [ ] [4. `refreshOrInsert` con snapshot stale può doppio-inserire la stessa chiave (contabilità LFU corrotta)](#4-refreshorinsert-con-snapshot-stale-può-doppio-inserire-la-stessa-chiave-contabilità-lfu-corrotta)
+- [x] [4. `refreshOrInsert` con snapshot stale può doppio-inserire la stessa chiave (contabilità LFU corrotta)](#4-refreshorinsert-con-snapshot-stale-può-doppio-inserire-la-stessa-chiave-contabilità-lfu-corrotta) — **RISOLTO** (due cinture: delete incondizionato + guardia in `set()`)
 
 ### Minori / hardening / cosmetici
-- [ ] [5. Il listing esce senza alcun `Cache-Control`](#5-il-listing-esce-senza-alcun-cache-control)
+- [x] [5. Il listing esce senza alcun `Cache-Control`](#5-il-listing-esce-senza-alcun-cache-control) — **RISOLTO** (no-cache esplicito, sempre)
 - [ ] [6. Link assoluti del listing costruiti dall'header `Host` del client](#6-link-assoluti-del-listing-costruiti-dallheader-host-del-client)
-- [ ] [7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente](#7-ctxsetvary--sovrascrive-un-vary-preesistente)
-- [ ] [8. `formatSize` oltre il TB produce "N undefined"](#8-formatsize-oltre-il-tb-produce-n-undefined)
+- [x] [7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente](#7-ctxsetvary--sovrascrive-un-vary-preesistente) — **RISOLTO** (`ctx.vary()`)
+- [x] [8. `formatSize` oltre il TB produce "N undefined"](#8-formatsize-oltre-il-tb-produce-n-undefined) — **RISOLTO** (PB/EB + clamp)
 - [ ] [9. `hideExtension.redirect` accetta qualsiasi numero](#9-hideextensionredirect-accetta-qualsiasi-numero)
 - [ ] [10. `template.ext` con punto iniziale non matcha mai, in silenzio](#10-templateext-con-punto-iniziale-non-matcha-mai-in-silenzio)
-- [ ] [11. `parseRangeHeader`: `parseInt` lassista su spec malformate](#11-parserangeheader-parseint-lassista-su-spec-malformate)
-- [ ] [12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio](#12-parametri-query-ripetuti-sortasortb-degradano-in-silenzio)
-- [ ] [13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`](#13-validazione-incoerente-silenzio-vs-throw-in-servercache--compression)
+- [x] [11. `parseRangeHeader`: `parseInt` lassista su spec malformate](#11-parserangeheader-parseint-lassista-su-spec-malformate) — **RISOLTO** (validazione digit-strict)
+- [x] [12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio](#12-parametri-query-ripetuti-sortasortb-degradano-in-silenzio) — **RISOLTO** (primo valore vince)
+- [x] [13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`](#13-validazione-incoerente-silenzio-vs-throw-in-servercache--compression) — **RISOLTO** (warn-ora / throw-in-major)
+
+### Aggiunte 2026-07-15 (follow-up del #1 — audit "encoder totali")
+- [x] [14. `encodeURIComponent` non è totale: lone surrogate → 500 (Windows)](#14-encodeuricomponent-non-è-totale-lone-surrogate--500-windows) — **RISOLTO** (`toWellFormedName` prima di ogni encode)
+- [x] [15. Spoofing visivo nel listing con caratteri bidi/invisibili](#15-spoofing-visivo-nel-listing-con-caratteri-bidiinvisibili) — **RISOLTO** (U+FFFD visibile + `<bdi>` nella sola resa)
 
 ---
 
@@ -88,6 +92,20 @@ Test: filename CJK, emoji, e con caratteri di controllo; asserire 200 e che
 
 ### 2. Link di ordinamento e paginazione del listing perdono `urlPrefix`
 
+**Stato: ✅ RISOLTO** (2026-07-15 — `baseUrl` ora deriva da `pageHref.pathname`
+(**con** prefix, coerente con Parent Directory e link alle entry) invece di
+`pageHrefOutPrefix.pathname`, e viene normalizzato allo **slash finale canonico**
+(il pathname era stato slash-stripped per il parsing URL): ogni click su
+sort/paginazione atterra direttamente su `/dir/?...` senza pagare l'hop 301 del
+redirect trailing-slash — miglioria bonus concordata nel brainstorming. Alla
+root senza prefix i link restano byte-identici a prima (`/?sort=...`): nessun
+impatto sul comportamento storico. Test:
+`__tests__/listing-links-urlprefix.test.js`, 8 test (prefix su sottodirectory e
+root del prefix, click-through sort e paginazione, no-hop senza prefix —
+supertest non segue i redirect, quindi il 200 diretto prova l'assenza del 301 —
+preservazione di sort/order nei link di pagina, invarianza alla root);
+verificato che 6/8 falliscono sul codice pre-fix.)
+
 **Posizione:** `index.cjs:2677` (`const baseUrl = pageHrefOutPrefix.pathname`),
 usato da `buildQueryUrl` (`index.cjs:2680-2686`) e `getSortUrl` (`index.cjs:2688-2694`).
 
@@ -117,6 +135,18 @@ sopravvive, quindi funziona, ma è un round-trip evitabile su ogni click).
 ---
 
 ### 3. `If-Modified-Since` non ignorato quando `If-None-Match` è presente
+
+**Stato: ✅ RISOLTO** (2026-07-15 — la cascata indipendente è diventata un ramo
+esclusivo, come da struttura della RFC: se l'header `If-None-Match` è presente
+la sua valutazione è l'unica (matcha → 304, non matcha → 200 pieno) e
+`If-Modified-Since` si valuta solo in sua assenza. Micro-decisione documentata:
+"presente" = valore non vuoto (`ctx.get` non distingue header assente da header
+con valore vuoto; un `If-None-Match:` vuoto è patologico e trattarlo come
+assente coincide con `fresh`/express e non può causare stale-content in più).
+Invariato tutto il resto: precedenza validatori-su-Range (#8), `If-Range`,
+ramo `*`. Test: describe "#3" in `__tests__/conditional-precedence.test.js`,
+6 test (2 di conformità che falliscono sul codice pre-fix + 4 di invarianza
+nelle due direzioni); verificato sul pre-fix.)
 
 **Posizione:** `index.cjs:2334-2351` (blocco validatori in `loadFile`).
 
@@ -156,6 +186,23 @@ if (inm) {
 ## Robustezza
 
 ### 4. `refreshOrInsert` con snapshot stale può doppio-inserire la stessa chiave (contabilità LFU corrotta)
+
+**Stato: ✅ RISOLTO** (2026-07-15 — entrambe le cinture proposte:
+1. in `refreshOrInsert` il delete è **incondizionato** (`cache.delete(key)` è
+   già un no-op sicuro sulla chiave assente): lo snapshot `cached` non decide
+   più nulla sul percorso delete+set;
+2. guardia difensiva in testa a `LFUCache.set()`
+   (`if (this._keyMap.has(key)) this.delete(key)`): l'invariante "set = chiave
+   nuova" vale per costruzione anche per chiamanti futuri — scelta consapevole:
+   l'alternativa (lasciar esplodere il bug del futuro chiamante) esploderebbe
+   nel callback della pipeline in produzione, il posto peggiore possibile.
+Il ramo `refresh()` non è toccato: opera già sullo stato corrente della mappa
+con contabilità a delta. Semantica del sovrascrivere: frequenza riparte da 1
+(bytes nuovi). Test: due describe "#4" in `__tests__/internals-unit.test.js`,
+5 test deterministici — double-count, chiave-fantasma in due bucket, crash di
+`_evictOne` su ghost (TypeError riprodotto), byte-fantasma dopo ciclo di
+evizione, race tee simulata con snapshot stale, più invarianza del fallback
+con snapshot corrente; verificato che 4/5 falliscono sul codice pre-fix.)
 
 **Posizione:** `index.cjs:644-653` (`refreshOrInsert`); call site critici:
 callback del tee (`index.cjs:2507-2523`), leader raw (`index.cjs:2236-2245`),
@@ -204,6 +251,13 @@ corrotta e crash potenziale; fix a bassissimo rischio).
 
 ### 5. Il listing esce senza alcun `Cache-Control`
 
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — il listing emette sempre la
+tripla esplicita `Cache-Control: no-cache, no-store, must-revalidate` +
+`Pragma` + `Expires`, **indipendentemente** da `browserCacheEnabled` (decisione
+concordata: il listing è una pagina dinamica — cambia con directory, sort,
+pagina — e un listing stale è solo confusione; le risposte file mantengono la
+loro policy). Test: describe #5 in `__tests__/minor-findings-batch.test.js`.)
+
 **Posizione:** `show_dir` (`index.cjs:2642+`) / `setGeneratedPageHeaders` (`index.cjs:128-134`).
 
 **Problema:** le risposte file impostano sempre una policy esplicita (pubblica con
@@ -248,6 +302,11 @@ mal configurata).
 
 ### 7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente
 
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — `ctx.vary('Accept-Encoding')`,
+l'API Koa che appende deduplicando: un `Vary: Origin` impostato da middleware
+a monte ora sopravvive. Test: describe #7 in
+`__tests__/minor-findings-batch.test.js`.)
+
 **Posizione:** `index.cjs:2320-2322`.
 
 **Problema:** un middleware a monte che avesse già impostato `Vary` (es.
@@ -261,6 +320,10 @@ mal configurata).
 ---
 
 ### 8. `formatSize` oltre il TB produce "N undefined"
+
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — aggiunte le unità `PB`/`EB` e
+indice clampato all'ultima unità: gli input fuori scala degradano a "tanti EB",
+mai a `undefined`. Test: describe #8 in `__tests__/minor-findings-batch.test.js`.)
 
 **Posizione:** `index.cjs:366-375`.
 
@@ -310,6 +373,14 @@ una-tantum, speculare al warn di `hideExtension.ext`).
 
 ### 11. `parseRangeHeader`: `parseInt` lassista su spec malformate
 
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — validazione digit-strict
+(`/^\d+$/`) su start/end/suffix prima del `parseInt`: `bytes=1x-5y`, spazi,
+`+`, `--` → `invalid` → 200 full come da RFC 9110 §14.2. Le spec valide sono
+invariate; i check `isNaN`/negativo, resi impossibili dalla regex, sono stati
+rimossi. Flippato il test che documentava la leniency (la sua nota lo
+prevedeva). Test: describe #11 in `__tests__/minor-findings-batch.test.js`
+(unit + HTTP) e `internals-unit.test.js`.)
+
 **Posizione:** `index.cjs:395-437`.
 
 **Problema:** `parseInt` accetta prefissi numerici: `Range: bytes=1x-5y` viene
@@ -324,6 +395,12 @@ non-conformità sugli input garbage.
 ---
 
 ### 12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio
+
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — helper `firstQueryValue` in
+`show_dir`: `sort`/`order`/`page` ripetuti prendono la **prima** occorrenza
+(convenzione comune); i link rigenerati usano il valore normalizzato, quindi
+niente più `sort=a%2Cb`. Test: describe #12 in
+`__tests__/minor-findings-batch.test.js`.)
 
 **Posizione:** `index.cjs:2674-2675` (`ctx.query.sort` può essere un array),
 `index.cjs:2682-2683` (`encodeURIComponent(array)` → valori uniti da virgola nei link).
@@ -340,6 +417,15 @@ confronti falliscono e il sort è un no-op), ma i link rigenerati contengono
 
 ### 13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`
 
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — i cinque fallback silenziosi
+(`rawFile.maxSize`, `rawFile.maxFileSize`, `compressedFile.maxSize`,
+`compression.minFileSize`, `compression.maxFileSize`) ora passano da
+`warnConfigDeprecation`: warn una-tantum col valore ricevuto, **comportamento
+runtime invariato** (stesso fallback di prima), throw nella prossima major —
+stessa convenzione dei vecchi #11/#12 (registro v3.1). `false` resta valido
+dove previsto e non warna. Test: describe #13 in
+`__tests__/minor-findings-batch.test.js`.)
+
 **Posizione:** `index.cjs:1463-1483` (`rawFile.maxSize`/`maxFileSize`,
 `compressedFile.maxSize`), `index.cjs:1387-1394` (`compression.minFileSize`/`maxFileSize`).
 
@@ -353,6 +439,90 @@ va segnalato.
 (warn ora, throw nella prossima major), come già fatto per `browserCacheMaxAge`.
 
 **Priorità:** Bassa (coerenza DX).
+
+---
+
+## Aggiunte 2026-07-15 (follow-up del #1 — audit "encoder totali")
+
+Dal brainstorming successivo alla chiusura del #1 (approccio globale: a ogni confine
+di output un encoder **totale** — definito e sicuro per qualunque nome il filesystem
+consenta — invece di un set di caratteri ammesso, che sarebbe una *restriction* per
+la design philosophy). La rete di regressione è la nuova suite
+`__tests__/adversarial-filenames.test.js` (~50 nomi × GET diretto + round-trip
+`filename*` + click-through dal listing, gate NTFS dichiarativi e test-sentinella
+sulla creazione delle fixture). L'audit dei confini ha trovato due lacune residue:
+
+### 14. `encodeURIComponent` non è totale: lone surrogate → 500 (Windows)
+
+**Stato: ✅ RISOLTO** (2026-07-15 — helper module-level `toWellFormedName(name)`:
+usa `String.prototype.toWellFormed()` quando disponibile (Node ≥ 20) e altrimenti
+il fallback regex sui surrogate spaiati → U+FFFD (Node 18, `engines: >=18`).
+Applicato ai due encoder raggiungibili dai nomi file: `itemUri` del listing e
+`buildContentDisposition` (hoistata a livello modulo, ora pura e unit-testabile;
+il fallback quoted-string era già totale per costruzione). Il redirect
+hideExtension non è toccato: il suo input passa da `decodeURIComponent`, che
+non può produrre surrogate spaiati (encoding invalido → 400 a monte). Esito su
+Windows per un nome WTF-16: la entry appare nel listing con U+FFFD e il suo
+href risponde 404 — l'unico esito possibile, dato che un lone surrogate non ha
+alcuna rappresentazione percent-encoded valida; prima l'intero listing era un
+500. Test: describe `#14` in `__tests__/adversarial-filenames.test.js` (unit
+level — le fixture POSIX non possono contenere WTF-16 — incluso il ramo
+fallback Node 18 via shadow del metodo nativo); verificato che falliscono sul
+codice pre-fix.)
+
+**Posizione:** listing (`itemUri`, `index.cjs` ~2755), redirect hideExtension
+(re-encode per segmento, `index.cjs` ~2041); stessa famiglia il `filename*` di
+`buildContentDisposition` (`index.cjs` ~1795).
+
+**Problema:** `encodeURIComponent` lancia `URIError` sui surrogate spaiati
+(verificato). Su Linux non possono arrivare dai nomi file (Node decodifica i byte
+UTF-8 invalidi in U+FFFD), ma su **Windows i filename sono WTF-16** e possono
+contenere surrogate spaiati: un file così rende il listing della sua directory un
+500 e il file non servibile — stessa classe del #1, un livello più in basso.
+Non riproducibile da fixture su Linux/macOS: va coperto con unit test sull'helper.
+
+**Fix proposto:** normalizzare i nomi con `String.prototype.toWellFormed()` prima
+di ogni `encodeURIComponent` (helper condiviso; Node ≥ 20 — per Node 18, dichiarato
+in `engines`, fallback regex sui surrogate spaiati → U+FFFD).
+
+**Priorità:** Bassa (solo Windows, nomi rarissimi) ma fix piccolo e strutturale.
+
+### 15. Spoofing visivo nel listing con caratteri bidi/invisibili
+
+**Stato: ✅ RISOLTO** (2026-07-15 — mitigazione **solo di resa**, file/href/`filename*`
+byte-exact invariati (coperto dal corpus avversariale). Due cinture:
+1. `listingDisplayName()`: i controlli bidi espliciti (U+202A–U+202E,
+   U+2066–U+2069) diventano un U+FFFD **visibile** nel nome mostrato —
+   `evil‮txt.exe` si mostra come `evil�txt.exe`, spoofing disinnescato.
+   I direction mark (U+200E/U+200F), legittimi nei nomi RTL, restano intatti.
+2. nome avvolto in `<bdi>` (fuori dall'`<a>`, così l'HTML interno del link resta
+   `>nome</a>` e l'isolamento copre anche l'etichetta symlink): il run
+   direzionale di un nome RTL legittimo non sanguina più sul resto della riga.
+Niente modifiche a CSS/CSP. Test: describe `#15` in
+`__tests__/adversarial-filenames.test.js`; verificato che falliscono sul codice
+pre-fix.)
+
+**Posizione:** righe del listing (`show_dir`, nomi in `escapeHtml`), CSS
+`LISTING_CSS`.
+
+**Problema:** un nome con override bidi (es. U+202E RLO: `evil‮txt.exe` viene
+**visualizzato** come `evilexe.txt` circa) o zero-width può ingannare l'utente del
+listing sul vero nome/estensione del file. Nessun problema tecnico (serving e
+href corretti — coperti dalla suite avversariale), solo resa visiva.
+
+**Fix proposto:** isolare la resa del nome: `unicode-bidi: isolate` sulla cella
+nome in `LISTING_CSS` (l'hash CSP si aggiorna da solo) oppure avvolgere il nome in
+`<bdi>`. Valutare se estendere l'isolamento anche alla riga "Parent Directory".
+
+**Priorità:** Bassa (UI-only).
+
+### Ricetta hardening opt-in (documentazione, non default)
+
+Per gli operatori che vogliono davvero un set di nomi ammesso, la capacità esiste
+già senza nuovo codice: `hidden: { alwaysHide: [/[^\x20-\x7E\xA0-\xFF]/] }` nasconde
+(404 + esclusione dal listing) ogni nome fuori dal latin1 stampabile.
+**Fatto (2026-07-15):** documentata come §3.12 di `SECURITY_HARDENING.md`
+(verificata end-to-end: nome CJK → 404 e assente dal listing, latin1 → 200).
 
 ---
 

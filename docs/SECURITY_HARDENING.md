@@ -247,6 +247,31 @@ return 400 **without** logging (client-controlled input → avoids log-spam / Do
 logger: require('pino')()
 ```
 
+### 3.12 Filename character allowlist (opt-in)
+
+By default the middleware serves **every** name the filesystem allows — international
+scripts, emoji, control characters — and keeps its output boundaries safe for all of
+them (headers are latin1-sanitized, listing HTML is escaped, hrefs are percent-encoded,
+bidi override characters are defused in the *displayed* listing name). That is the
+design philosophy: the operator's directory is the source of truth.
+
+If your threat model calls for the opposite — e.g. an upload directory where unusual
+names are suspicious by definition (Profile C) — you don't need a new option: hide
+everything outside an explicit character set with a `RegExp` in `alwaysHide`
+(hidden entries 404 and disappear from listings):
+
+```js
+hidden: {
+    // Serve only names made of printable latin1 characters:
+    alwaysHide: [/[^\x20-\x7E\xA0-\xFF]/],
+    // Stricter variant — ASCII letters/digits plus a few separators:
+    // alwaysHide: [/[^A-Za-z0-9._ ()-]/],
+}
+```
+
+Note this is a **visibility** policy (per-name), evaluated on every path segment for
+directories and on the leaf for files; it does not change how allowed names are encoded.
+
 ---
 
 ## 4. Dependency hygiene

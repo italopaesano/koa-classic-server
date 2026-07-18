@@ -179,6 +179,10 @@ is still `evil.com`, the Same-Origin Policy does not protect. The middleware doe
 > allowlist / firewall / auth). A half-correct check (trusting `X-Forwarded-Host`, missing
 > normalization) gives false security — which is why this is delegated to the proxy.
 
+> Related surface, already closed middleware-side: directory-listing links are **path-absolute**
+> (no scheme/host — v4.3 register #6), so the request `Host` is never reflected into the
+> generated HTML and links inherit the page's scheme behind a TLS-terminating proxy.
+
 ### 3.7 HTTP methods
 
 The default `method: ['GET']` already rejects everything else. Add `HEAD` only if you need it:

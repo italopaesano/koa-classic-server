@@ -634,3 +634,47 @@ describe('hideExtension option tests', () => {
         });
     });
 });
+
+// ==========================================
+// #9 (v4.3 register) — redirect code strict validation (V5 breaking change)
+// ==========================================
+describe('hideExtension.redirect strict validation (#9, v5.0.0)', () => {
+    test.each([
+        ['non-redirect 200', 200],
+        ['non-redirect 404', 404],
+        ['304 (not a redirect for ctx.redirect)', 304],
+        ['out-of-set 999', 999],
+        ['exotic 300', 300],
+        ['deprecated 305', 305],
+        ['float 3.14', 3.14],
+        ['NaN', NaN],
+        ['Infinity', Infinity],
+        ['out-of-range 50', 50],
+    ])('%s → throws at factory time with the valid list', (_label, code) => {
+        expect(() => {
+            koaClassicServer(rootDir, { hideExtension: { ext: '.ejs', redirect: code } });
+        }).toThrow(/must be one of: 301, 302, 303, 307, 308/);
+    });
+
+    test.each([[301], [302], [303], [307], [308]])('%d is accepted', (code) => {
+        expect(() => {
+            koaClassicServer(rootDir, { hideExtension: { ext: '.ejs', redirect: code } });
+        }).not.toThrow();
+    });
+
+    describe('runtime: an accepted non-default code is emitted as-is', () => {
+        let server;
+        beforeAll(() => {
+            const app = new Koa();
+            app.use(koaClassicServer(rootDir, { hideExtension: { ext: '.ejs', redirect: 307 } }));
+            server = app.listen();
+        });
+        afterAll(() => server.close());
+
+        test('/about.ejs → 307 to /about', async () => {
+            const response = await supertest(server).get('/about.ejs');
+            expect(response.status).toBe(307);
+            expect(response.headers.location).toBe('/about');
+        });
+    });
+});

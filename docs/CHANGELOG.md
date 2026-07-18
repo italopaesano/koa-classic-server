@@ -5,6 +5,21 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - Unreleased
+
+### ⚠️ Breaking Changes
+
+- **`hideExtension.redirect` now throws at factory time unless it is one of `301, 302, 303, 307, 308`**
+  (`docs/revisione_codice_v4.3.md` #9 — maintainer decision: hard validation in a major, option C).
+  Until v4.x any number was accepted, with two silent failure modes at request time: an integer
+  that is not a redirect status (`200`, `404`, `999`, ...) was silently replaced with `302` by
+  `ctx.redirect()`, and a non-integer (or out-of-range) value made Koa's status setter throw —
+  a **500 on every hideExtension redirect** plus a log line per request. Both were configuration
+  bugs that could only be noticed in production; they now fail at startup with the valid list in
+  the error message. **Migration**: if your config uses one of the five valid codes, nothing
+  changes. Otherwise replace the value with the redirect you actually intended (the silent
+  pre-v5 behavior of e.g. `redirect: 200` was a `302` anyway).
+
 ## [4.3.0] - 2026-07-14
 
 Customization release: the compression qualities and the compressed cache's per-entry

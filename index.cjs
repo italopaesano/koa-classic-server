@@ -14,6 +14,10 @@ const _gzipAsync           = util.promisify(zlib.gzip);
 // Pre-computed module-level constants
 const _LOG_1024 = Math.log(1024);
 
+// Redirect statuses accepted for hideExtension.redirect (V5 — anything else
+// throws at factory time; see the validation block for the rationale).
+const _VALID_REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
+
 // Emitted at most once per process lifetime when the caller passes the v2-era
 // `showDirContents` option instead of the v3 `dirListing.enabled`. The old
 // name is accepted as a backward-compatibility alias and may be removed in a
@@ -820,7 +824,10 @@ module.exports = function koaClassicServer(
                               // Set false for URL rewriting middleware (i18n, routing)
         hideExtension: {     // Hide file extension from URLs (clean URLs like mod_rewrite)
             ext: '.ejs',     // Extension to hide (required, string, case-sensitive, must start with '.')
-            redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301)
+            redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301).
+                             //   Must be one of 301 | 302 | 303 | 307 | 308 — anything else throws
+                             //   at factory time (V5; previously other numbers were tolerated and
+                             //   either became 302 silently or failed every redirect with a 500).
         },
         errorPages: {        // Custom error pages (V4.2+). Opt-in — omitted statuses keep the built-in pages.
             // Keys: the statuses the middleware generates error pages for: 404, 500, 504.
@@ -1198,10 +1205,21 @@ module.exports = function koaClassicServer(
             ));
             options.hideExtension.ext = '.' + options.hideExtension.ext;
         }
-        // Validate redirect code
+        // Validate redirect code (V5 breaking change — v4.3 register #9).
+        // Only real redirect statuses are accepted. Anything else was a
+        // configuration bug with two silent failure modes: a non-integer (or
+        // out-of-range) value made Koa's status setter throw at request time —
+        // a 500 on EVERY hideExtension redirect — while an integer that is not
+        // a redirect status (200, 404, 999, ...) was silently replaced with
+        // 302 by ctx.redirect(). Both now surface at startup instead.
         if (options.hideExtension.redirect !== undefined) {
-            if (typeof options.hideExtension.redirect !== 'number') {
-                throw new Error('[koa-classic-server] hideExtension.redirect must be a number (e.g. 301, 302). Got: ' + typeof options.hideExtension.redirect);
+            if (!_VALID_REDIRECT_CODES.has(options.hideExtension.redirect)) {
+                throw new Error(
+                    '[koa-classic-server] hideExtension.redirect must be one of: 301, 302, 303, 307, 308. ' +
+                    'Got: ' + String(options.hideExtension.redirect) + '\n' +
+                    '  Before v5.0.0 other values were tolerated: non-redirect codes were silently sent\n' +
+                    '  as 302, and non-integer values failed every redirect with a 500.'
+                );
             }
         } else {
             options.hideExtension.redirect = 301;

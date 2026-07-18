@@ -29,7 +29,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [x] [6. Link assoluti del listing costruiti dall'header `Host` del client](#6-link-assoluti-del-listing-costruiti-dallheader-host-del-client) — **RISOLTO** (href path-absolute, niente origin)
 - [x] [7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente](#7-ctxsetvary--sovrascrive-un-vary-preesistente) — **RISOLTO** (`ctx.vary()`)
 - [x] [8. `formatSize` oltre il TB produce "N undefined"](#8-formatsize-oltre-il-tb-produce-n-undefined) — **RISOLTO** (PB/EB + clamp)
-- [ ] [9. `hideExtension.redirect` accetta qualsiasi numero](#9-hideextensionredirect-accetta-qualsiasi-numero)
+- [x] [9. `hideExtension.redirect` accetta qualsiasi numero](#9-hideextensionredirect-accetta-qualsiasi-numero) — **RISOLTO** (opzione C: throw a factory, breaking v5.0.0)
 - [ ] [10. `template.ext` con punto iniziale non matcha mai, in silenzio](#10-templateext-con-punto-iniziale-non-matcha-mai-in-silenzio)
 - [x] [11. `parseRangeHeader`: `parseInt` lassista su spec malformate](#11-parserangeheader-parseint-lassista-su-spec-malformate) — **RISOLTO** (validazione digit-strict)
 - [x] [12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio](#12-parametri-query-ripetuti-sortasortb-degradano-in-silenzio) — **RISOLTO** (primo valore vince)
@@ -355,6 +355,21 @@ dall'array → `"2 undefined"` nel listing. Verificato via `_internals.formatSiz
 ---
 
 ### 9. `hideExtension.redirect` accetta qualsiasi numero
+
+**Stato: ✅ RISOLTO** (2026-07-18 — **opzione C decisa dal manutentore: throw a
+factory time, breaking change della major 5.0.0** (package.json → 5.0.0,
+sezione ⚠️ Breaking Changes nel CHANGELOG con guida di migrazione). Set valido:
+`{301, 302, 303, 307, 308}`; qualunque altro valore lancia con la lista nel
+messaggio. Il contesto che ha reso il throw preferibile al warn: l'analisi
+runtime (verificata con Koa reale) aveva mostrato due modi di rottura
+silenziosa — interi non-redirect rimpiazzati con 302 da `ctx.redirect()`, e
+non-interi/fuori-range che facevano lanciare il setter di status di Koa →
+**500 su ogni redirect hideExtension**. `300` e `305` (nel set di Koa ma
+esotico l'uno, deprecato RFC 7231 l'altro) sono esclusi dal set valido.
+Test: describe "#9" in `__tests__/hideExtension.test.js` — 10 valori invalidi
+→ throw (tutti e 10 falliscono sul codice pre-fix), i 5 validi accettati,
+runtime 307 emesso as-is; il vecchio test `redirect: 'abc'` resta verde col
+nuovo messaggio.)
 
 **Posizione:** `index.cjs:1116-1122`.
 

@@ -26,7 +26,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 ### Minori / hardening / cosmetici
 - [x] [5. Il listing esce senza alcun `Cache-Control`](#5-il-listing-esce-senza-alcun-cache-control) — **RISOLTO** (no-cache esplicito, sempre)
-- [ ] [6. Link assoluti del listing costruiti dall'header `Host` del client](#6-link-assoluti-del-listing-costruiti-dallheader-host-del-client)
+- [x] [6. Link assoluti del listing costruiti dall'header `Host` del client](#6-link-assoluti-del-listing-costruiti-dallheader-host-del-client) — **RISOLTO** (href path-absolute, niente origin)
 - [x] [7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente](#7-ctxsetvary--sovrascrive-un-vary-preesistente) — **RISOLTO** (`ctx.vary()`)
 - [x] [8. `formatSize` oltre il TB produce "N undefined"](#8-formatsize-oltre-il-tb-produce-n-undefined) — **RISOLTO** (PB/EB + clamp)
 - [ ] [9. `hideExtension.redirect` accetta qualsiasi numero](#9-hideextensionredirect-accetta-qualsiasi-numero)
@@ -38,6 +38,9 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 ### Aggiunte 2026-07-15 (follow-up del #1 — audit "encoder totali")
 - [x] [14. `encodeURIComponent` non è totale: lone surrogate → 500 (Windows)](#14-encodeuricomponent-non-è-totale-lone-surrogate--500-windows) — **RISOLTO** (`toWellFormedName` prima di ogni encode)
 - [x] [15. Spoofing visivo nel listing con caratteri bidi/invisibili](#15-spoofing-visivo-nel-listing-con-caratteri-bidiinvisibili) — **RISOLTO** (U+FFFD visibile + `<bdi>` nella sola resa)
+
+### Aggiunte 2026-07-18 (revisione del manutentore sul #6)
+- [x] [16. Directory e Parent linkati senza slash finale nel listing](#16-directory-e-parent-linkati-senza-slash-finale-nel-listing) — **RISOLTO** (forma canonica `/dir/`, insieme al #6)
 
 ---
 
@@ -277,6 +280,20 @@ rottura diretta).
 ---
 
 ### 6. Link assoluti del listing costruiti dall'header `Host` del client
+
+**Stato: ✅ RISOLTO** (2026-07-18 — **opzione A** decisa dal manutentore, release
+**minor**: tutti gli href del listing (Parent Directory, entry, e già
+sort/paginazione dal #2) sono ora **path-absolute** — niente `pageHref.origin`
+nell'HTML. Duplice beneficio: (1) l'header `Host` del client non è più riflesso
+da nessuna parte (verificato: `Host: evil.example` non compare nel body);
+(2) sparisce il downgrade di schema dietro proxy TLS-terminating senza
+`app.proxy` — un href path-absolute eredita lo schema della pagina. Sul semver:
+nessuno status/header cambia, solo il testo degli href; l'HTML del listing non
+è mai stato contratto documentato ed è già cambiato in release non-major
+(#2, #15) — precedente confermato. Risolto insieme al #16 (stesso commit,
+stesse righe). Test: `__tests__/listing-link-canonicalization.test.js`;
+aggiornati i due test che codificavano la vecchia forma
+(`listing-parent-empty` origin-only, round-trip avversariale col 301).)
 
 **Posizione:** `index.cjs:2724` (`currentPath = pageHref.origin + ...`),
 `index.cjs:2738-2739` (`_listingBaseUrl`/`_listingOriginPrefix`), item URI
@@ -523,6 +540,35 @@ già senza nuovo codice: `hidden: { alwaysHide: [/[^\x20-\x7E\xA0-\xFF]/] }` nas
 (404 + esclusione dal listing) ogni nome fuori dal latin1 stampabile.
 **Fatto (2026-07-15):** documentata come §3.12 di `SECURITY_HARDENING.md`
 (verificata end-to-end: nome CJK → 404 e assente dal listing, latin1 → 200).
+
+---
+
+## Aggiunte 2026-07-18 (revisione del manutentore sul #6)
+
+### 16. Directory e Parent linkati senza slash finale nel listing
+
+**Stato: ✅ RISOLTO** (2026-07-18, insieme al #6 — stesso commit, stesse righe.)
+
+**Origine:** revisione del manutentore sull'analisi del #6: le directory nel
+listing erano referenziate **senza** lo slash finale, in contraddizione con la
+forma canonica scelta dal design V4 (`dirListing.trailingSlash`, v3.1 #3:
+"slash finale = intento-directory").
+
+**Problema (verificato a runtime):** ogni navigazione tra cartelle nel listing
+pagava un hop `301` (`/sub/inner` → `301 → /sub/inner/`) — la stessa classe di
+inefficienza eliminata per i link sort/paginazione dal #2. Il link Parent era
+messo peggio: costruito con `pop()` sull'URL **assoluto**, dal primo livello
+puntava all'**origin nudo** (`http://host`, nemmeno `/`) e da profondità ≥ 2
+pagava anch'esso il 301.
+
+**Fix applicato:** le entry con `effectiveType === 2` (directory e
+symlink-a-directory, coerente col resto del listing) hanno l'href con `/`
+finale; il Parent è ricostruito dal pathname (path-absolute, #6) con slash
+canonico — `/sub/` → Parent `/`, `/a/b/` → Parent `/a/`, con `urlPrefix`:
+`/static/sub/` → Parent `/static/`. I file restano senza slash. Con
+`trailingSlash: false` la forma `/dir/` continua a servire (verificato).
+Test: `__tests__/listing-link-canonicalization.test.js`, 9 test (tutti
+falliscono sul codice pre-fix).
 
 ---
 

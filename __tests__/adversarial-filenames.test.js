@@ -187,9 +187,10 @@ function bodyOf(res) {
     return Buffer.isBuffer(res.body) ? res.body.toString('utf8') : res.text;
 }
 
-// Listing hrefs are absolute URLs — reduce to path + query for supertest.
+// Listing hrefs are path-absolute since #6 (v4.3 register); the base makes
+// new URL() accept them (and still handles any absolute form).
 function toPath(href) {
-    const u = new URL(href);
+    const u = new URL(href, 'http://listing.local');
     return u.pathname + u.search;
 }
 
@@ -265,16 +266,14 @@ describe('Adversarial filenames — full-input-space serving contract', () => {
     });
 
     describe('directory with an emoji name — full navigation round-trip', () => {
-        test('listing link → 301 canonical slash → inner listing → file', async () => {
+        test('listing link (canonical /dir/ form, #16) → inner listing → file', async () => {
             const dirHref = hrefFor(listingBody, DIR_NAME);
             expect(dirHref).not.toBeNull();
 
-            // The listing links the directory without a trailing slash — the
-            // canonical redirect must bring us to the slashed URL.
-            const r1 = await supertest(server).get(toPath(dirHref));
-            expect(r1.status).toBe(301);
-
-            const r2 = await supertest(server).get(toPath(new URL(r1.headers.location, 'http://x').href));
+            // Since #16 the listing links directories WITH the canonical
+            // trailing slash — navigation lands directly, no 301 hop.
+            expect(dirHref.endsWith('/')).toBe(true);
+            const r2 = await supertest(server).get(toPath(dirHref));
             expect(r2.status).toBe(200);
 
             const fileHref = hrefFor(r2.text, DIR_FILE_NAME);

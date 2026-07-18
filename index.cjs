@@ -2849,12 +2849,18 @@ module.exports = function koaClassicServer(
             // (pageHrefOutPrefix.pathname === '/'), not only at the absolute root: with
             // urlPrefix '/static', the listing of /static/ must not link to '/', which is
             // outside the served tree (#13).
-            const currentPath = pageHref.origin + pageHref.pathname;
+            // PATH-ABSOLUTE (#6): no origin — an absolute URL would embed the
+            // client-controlled Host header (cache-poisoning surface) and pin
+            // http:// behind a TLS-terminating proxy without app.proxy. And
+            // CANONICAL SLASH (#16): the parent is a directory, so link the
+            // /dir/ form directly instead of paying the 301 hop per click
+            // (previously the parent of /sub/ was even the bare origin).
             if (pageHrefOutPrefix.pathname !== "/") {
                 // Build parent directory URL without query parameters
-                const a_pD = currentPath.split("/");
+                const a_pD = pageHref.pathname.split("/");
                 a_pD.pop();
-                const parentDirectory = a_pD.join("/");
+                const joined = a_pD.join("/");
+                const parentDirectory = joined === "" ? "/" : joined + "/";
                 // Escape HTML to prevent XSS
                 parts.push(`<tr><td><a href="${escapeHtml(parentDirectory)}"><b>.. Parent Directory</b></a></td><td>DIR</td><td>-</td></tr>`);
             }
@@ -2863,8 +2869,10 @@ module.exports = function koaClassicServer(
             if (dir.length === 0) {
                 parts.push(emptyFolderRow);
             } else {
-                const _listingBaseUrl = pageHref.origin + pageHref.pathname;
-                const _listingOriginPrefix = pageHref.origin + options.urlPrefix;
+                // PATH-ABSOLUTE (#6): entry hrefs carry no origin either — the
+                // browser resolves them against the page's real origin/scheme.
+                const _listingBasePath = pageHref.pathname;
+                const _listingPrefixPath = options.urlPrefix; // "" without a prefix
 
                 // Collect item data with stat I/O in parallel (batched to avoid
                 // overwhelming the filesystem on very large directories).
@@ -2877,12 +2885,12 @@ module.exports = function koaClassicServer(
                             const type = getDirentType(item);
                             const itemPath = path.join(toOpen, s_name);
 
-                            // Build item URI without query parameters
+                            // Build item URI (path-absolute, no query parameters)
                             let itemUri;
-                            if (_listingBaseUrl === _listingOriginPrefix + "/" || _listingBaseUrl === _listingOriginPrefix) {
-                                itemUri = `${_listingOriginPrefix}/${encodeURIComponent(toWellFormedName(s_name))}`;
+                            if (_listingBasePath === _listingPrefixPath + "/" || _listingBasePath === _listingPrefixPath) {
+                                itemUri = `${_listingPrefixPath}/${encodeURIComponent(toWellFormedName(s_name))}`;
                             } else {
-                                itemUri = `${_listingBaseUrl}/${encodeURIComponent(toWellFormedName(s_name))}`;
+                                itemUri = `${_listingBasePath}/${encodeURIComponent(toWellFormedName(s_name))}`;
                             }
 
                             // Resolve symlinks and DT_UNKNOWN entries to their effective type.
@@ -2904,6 +2912,14 @@ module.exports = function koaClassicServer(
                                     }
                                 }
                             }
+
+                            // Canonical trailing slash for directories (#16): link
+                            // the /dir/ form the trailing-slash redirect would
+                            // enforce anyway, so navigating the listing costs no
+                            // 301 hop per click. effectiveType 2 covers plain
+                            // directories and dir-resolved symlinks, consistent
+                            // with the rest of the listing logic.
+                            if (effectiveType === 2) itemUri += '/';
 
                             // Hidden check: skip entries that should not appear in directory listing
                             const itemIsDir = effectiveType === 2;

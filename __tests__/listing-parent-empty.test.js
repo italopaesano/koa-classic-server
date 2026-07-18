@@ -44,13 +44,12 @@ describe('Parent Directory link and urlPrefix (#13)', () => {
         expect(res.text).not.toContain('Parent Directory');
     });
 
-    test('no prefix: /sub/ links parent to the origin root', async () => {
+    test('no prefix: /sub/ links parent to "/" (path-absolute since #6/#16 of the v4.3 register)', async () => {
         const s = makeApp(root);
         const res = await supertest(s).get('/sub/');
         s.close();
         const href = parentHref(res.text);
-        expect(href).not.toBeNull();
-        expect(href).toMatch(/^https?:\/\/[^/]+$/); // origin only, no path → the root
+        expect(href).toBe('/'); // no origin (Host not reflected), canonical form
     });
 
     test('prefix /static: logical root /static/ has NO Parent Directory link', async () => {
@@ -65,9 +64,7 @@ describe('Parent Directory link and urlPrefix (#13)', () => {
         const res = await supertest(s).get('/static/sub/');
         s.close();
         const href = parentHref(res.text);
-        expect(href).not.toBeNull();
-        expect(href.endsWith('/static')).toBe(true);      // parent is the prefix root, not '/'
-        expect(href.endsWith('/static/sub')).toBe(false);
+        expect(href).toBe('/static/'); // path-absolute + canonical slash (#6/#16), inside the served tree
     });
 });
 

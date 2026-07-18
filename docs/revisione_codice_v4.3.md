@@ -25,15 +25,15 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [x] [4. `refreshOrInsert` con snapshot stale può doppio-inserire la stessa chiave (contabilità LFU corrotta)](#4-refreshorinsert-con-snapshot-stale-può-doppio-inserire-la-stessa-chiave-contabilità-lfu-corrotta) — **RISOLTO** (due cinture: delete incondizionato + guardia in `set()`)
 
 ### Minori / hardening / cosmetici
-- [ ] [5. Il listing esce senza alcun `Cache-Control`](#5-il-listing-esce-senza-alcun-cache-control)
+- [x] [5. Il listing esce senza alcun `Cache-Control`](#5-il-listing-esce-senza-alcun-cache-control) — **RISOLTO** (no-cache esplicito, sempre)
 - [ ] [6. Link assoluti del listing costruiti dall'header `Host` del client](#6-link-assoluti-del-listing-costruiti-dallheader-host-del-client)
-- [ ] [7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente](#7-ctxsetvary--sovrascrive-un-vary-preesistente)
-- [ ] [8. `formatSize` oltre il TB produce "N undefined"](#8-formatsize-oltre-il-tb-produce-n-undefined)
+- [x] [7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente](#7-ctxsetvary--sovrascrive-un-vary-preesistente) — **RISOLTO** (`ctx.vary()`)
+- [x] [8. `formatSize` oltre il TB produce "N undefined"](#8-formatsize-oltre-il-tb-produce-n-undefined) — **RISOLTO** (PB/EB + clamp)
 - [ ] [9. `hideExtension.redirect` accetta qualsiasi numero](#9-hideextensionredirect-accetta-qualsiasi-numero)
 - [ ] [10. `template.ext` con punto iniziale non matcha mai, in silenzio](#10-templateext-con-punto-iniziale-non-matcha-mai-in-silenzio)
-- [ ] [11. `parseRangeHeader`: `parseInt` lassista su spec malformate](#11-parserangeheader-parseint-lassista-su-spec-malformate)
-- [ ] [12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio](#12-parametri-query-ripetuti-sortasortb-degradano-in-silenzio)
-- [ ] [13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`](#13-validazione-incoerente-silenzio-vs-throw-in-servercache--compression)
+- [x] [11. `parseRangeHeader`: `parseInt` lassista su spec malformate](#11-parserangeheader-parseint-lassista-su-spec-malformate) — **RISOLTO** (validazione digit-strict)
+- [x] [12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio](#12-parametri-query-ripetuti-sortasortb-degradano-in-silenzio) — **RISOLTO** (primo valore vince)
+- [x] [13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`](#13-validazione-incoerente-silenzio-vs-throw-in-servercache--compression) — **RISOLTO** (warn-ora / throw-in-major)
 
 ### Aggiunte 2026-07-15 (follow-up del #1 — audit "encoder totali")
 - [x] [14. `encodeURIComponent` non è totale: lone surrogate → 500 (Windows)](#14-encodeuricomponent-non-è-totale-lone-surrogate--500-windows) — **RISOLTO** (`toWellFormedName` prima di ogni encode)
@@ -251,6 +251,13 @@ corrotta e crash potenziale; fix a bassissimo rischio).
 
 ### 5. Il listing esce senza alcun `Cache-Control`
 
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — il listing emette sempre la
+tripla esplicita `Cache-Control: no-cache, no-store, must-revalidate` +
+`Pragma` + `Expires`, **indipendentemente** da `browserCacheEnabled` (decisione
+concordata: il listing è una pagina dinamica — cambia con directory, sort,
+pagina — e un listing stale è solo confusione; le risposte file mantengono la
+loro policy). Test: describe #5 in `__tests__/minor-findings-batch.test.js`.)
+
 **Posizione:** `show_dir` (`index.cjs:2642+`) / `setGeneratedPageHeaders` (`index.cjs:128-134`).
 
 **Problema:** le risposte file impostano sempre una policy esplicita (pubblica con
@@ -295,6 +302,11 @@ mal configurata).
 
 ### 7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente
 
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — `ctx.vary('Accept-Encoding')`,
+l'API Koa che appende deduplicando: un `Vary: Origin` impostato da middleware
+a monte ora sopravvive. Test: describe #7 in
+`__tests__/minor-findings-batch.test.js`.)
+
 **Posizione:** `index.cjs:2320-2322`.
 
 **Problema:** un middleware a monte che avesse già impostato `Vary` (es.
@@ -308,6 +320,10 @@ mal configurata).
 ---
 
 ### 8. `formatSize` oltre il TB produce "N undefined"
+
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — aggiunte le unità `PB`/`EB` e
+indice clampato all'ultima unità: gli input fuori scala degradano a "tanti EB",
+mai a `undefined`. Test: describe #8 in `__tests__/minor-findings-batch.test.js`.)
 
 **Posizione:** `index.cjs:366-375`.
 
@@ -357,6 +373,14 @@ una-tantum, speculare al warn di `hideExtension.ext`).
 
 ### 11. `parseRangeHeader`: `parseInt` lassista su spec malformate
 
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — validazione digit-strict
+(`/^\d+$/`) su start/end/suffix prima del `parseInt`: `bytes=1x-5y`, spazi,
+`+`, `--` → `invalid` → 200 full come da RFC 9110 §14.2. Le spec valide sono
+invariate; i check `isNaN`/negativo, resi impossibili dalla regex, sono stati
+rimossi. Flippato il test che documentava la leniency (la sua nota lo
+prevedeva). Test: describe #11 in `__tests__/minor-findings-batch.test.js`
+(unit + HTTP) e `internals-unit.test.js`.)
+
 **Posizione:** `index.cjs:395-437`.
 
 **Problema:** `parseInt` accetta prefissi numerici: `Range: bytes=1x-5y` viene
@@ -372,6 +396,12 @@ non-conformità sugli input garbage.
 
 ### 12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio
 
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — helper `firstQueryValue` in
+`show_dir`: `sort`/`order`/`page` ripetuti prendono la **prima** occorrenza
+(convenzione comune); i link rigenerati usano il valore normalizzato, quindi
+niente più `sort=a%2Cb`. Test: describe #12 in
+`__tests__/minor-findings-batch.test.js`.)
+
 **Posizione:** `index.cjs:2674-2675` (`ctx.query.sort` può essere un array),
 `index.cjs:2682-2683` (`encodeURIComponent(array)` → valori uniti da virgola nei link).
 
@@ -386,6 +416,15 @@ confronti falliscono e il sort è un no-op), ma i link rigenerati contengono
 ---
 
 ### 13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`
+
+**Stato: ✅ RISOLTO** (2026-07-15, batch minori — i cinque fallback silenziosi
+(`rawFile.maxSize`, `rawFile.maxFileSize`, `compressedFile.maxSize`,
+`compression.minFileSize`, `compression.maxFileSize`) ora passano da
+`warnConfigDeprecation`: warn una-tantum col valore ricevuto, **comportamento
+runtime invariato** (stesso fallback di prima), throw nella prossima major —
+stessa convenzione dei vecchi #11/#12 (registro v3.1). `false` resta valido
+dove previsto e non warna. Test: describe #13 in
+`__tests__/minor-findings-batch.test.js`.)
 
 **Posizione:** `index.cjs:1463-1483` (`rawFile.maxSize`/`maxFileSize`,
 `compressedFile.maxSize`), `index.cjs:1387-1394` (`compression.minFileSize`/`maxFileSize`).

@@ -311,13 +311,11 @@ describe('parseRangeHeader', () => {
         expect(parseRangeHeader('bytes=0-0', SIZE)).toEqual({ start: 0, end: 0 });
     });
 
-    // Documented lenience, not an endorsement: parseInt() ignores trailing
-    // garbage, so "bytes=-5-10" parses as the suffix "-5" (last 5 bytes)
-    // instead of being rejected as malformed. Serving a 206 for it is harmless
-    // (the client sent a Range it shouldn't have), but if the parser is ever
-    // tightened this test should flip to expecting 'invalid'.
-    test('trailing garbage after a suffix is tolerated by parseInt (current behavior)', () => {
-        expect(parseRangeHeader('bytes=-5-10', SIZE)).toEqual({ start: 95, end: 99 });
+    // Flipped by #11 (v4.3 register), as this test's original note predicted:
+    // the parser is now strict (digit-run validation), so trailing garbage
+    // makes the whole spec malformed → 'invalid' → full 200, per RFC 9110 §14.2.
+    test('trailing garbage after a suffix is now rejected as malformed (#11)', () => {
+        expect(parseRangeHeader('bytes=-5-10', SIZE)).toBe('invalid');
     });
 });
 

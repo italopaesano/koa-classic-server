@@ -429,8 +429,10 @@ function formatSize(bytes) {
     if (bytes === undefined || bytes === null) return '-';
 
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / _LOG_1024);
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
+    // Clamped to the last unit: an off-scale size must degrade to "huge number
+    // of EB", never to "N undefined" (#8).
+    const i = Math.min(Math.floor(Math.log(bytes) / _LOG_1024), sizes.length - 1);
 
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
@@ -443,6 +445,10 @@ function getDirentType(dirent) {
     if (dirent.isSymbolicLink()) return 3;
     return 0;
 }
+
+// Range start/end/suffix must be pure digit runs: parseInt alone would accept
+// "1x" as 1 (see the strict-validation note inside parseRangeHeader).
+const _RANGE_DIGITS_RE = /^\d+$/;
 
 /**
  * Parse a "Range: bytes=..." header against a known file size.
@@ -469,25 +475,29 @@ function parseRangeHeader(rangeHeader, fileSize) {
 
     let start, end;
 
+    // Strict digit validation (#11): parseInt() would accept garbage prefixes
+    // ("bytes=1x-5y" as 1-5) and serve a 206 for a spec that RFC 9110 §14.2
+    // says must be ignored (→ full 200 via 'invalid'). Bounds were never at
+    // risk — this is pure conformance on malformed input.
     if (startStr === '') {
         // Suffix range: bytes=-N (last N bytes)
-        if (endStr === '') return 'invalid';
+        if (!_RANGE_DIGITS_RE.test(endStr)) return 'invalid'; // also rejects ''
         const suffix = parseInt(endStr, 10);
-        if (isNaN(suffix) || suffix <= 0) return 'invalid';
+        if (suffix <= 0) return 'invalid';
         if (fileSize === 0) return 'unsatisfiable';
         start = suffix >= fileSize ? 0 : fileSize - suffix;
         end   = fileSize - 1;
     } else {
+        if (!_RANGE_DIGITS_RE.test(startStr)) return 'invalid';
         start = parseInt(startStr, 10);
-        if (isNaN(start) || start < 0) return 'invalid';
         if (fileSize === 0 || start >= fileSize) return 'unsatisfiable';
 
         if (endStr === '') {
             // Open range: bytes=N-
             end = fileSize - 1;
         } else {
+            if (!_RANGE_DIGITS_RE.test(endStr)) return 'invalid';
             end = parseInt(endStr, 10);
-            if (isNaN(end) || end < 0) return 'invalid';
             if (start > end) return 'invalid';
             // Clamp end to file size - 1
             if (end >= fileSize) end = fileSize - 1;
@@ -1460,14 +1470,38 @@ module.exports = function koaClassicServer(
             ? compression.encodings.filter(e => e === 'br' || e === 'gzip')
             : ['br', 'gzip'];
 
-        const minFileSize = compression.minFileSize === false ? false
-            : (typeof compression.minFileSize === 'number' && compression.minFileSize >= 0 ? compression.minFileSize : 1024);
+        // minFileSize / maxFileSize: an invalid value used to fall back to the
+        // default SILENTLY (#13) — inconsistent with maxAge / maxEntrySize /
+        // quality, which throw. These are v2-stable options, so the fallback
+        // stays (behavior unchanged) but now warns; the next major will throw.
+        let minFileSize;
+        if (compression.minFileSize === undefined) {
+            minFileSize = 1024;
+        } else if (compression.minFileSize === false
+            || (typeof compression.minFileSize === 'number' && compression.minFileSize >= 0)) {
+            minFileSize = compression.minFileSize;
+        } else {
+            warnConfigDeprecation(_logger,
+                'compression.minFileSize must be a number >= 0 (bytes) or false; got ' +
+                String(compression.minFileSize) + ' — falling back to the default 1024 for now.');
+            minFileSize = 1024;
+        }
 
         // Cap for the buffered (whole-file-in-RAM, max-quality, cached) compression
         // path. false = no cap. Files above the cap still get compressed via the
         // bounded-RAM streaming mode — safety net, not a serving restriction.
-        const maxFileSize = compression.maxFileSize === false ? false
-            : (typeof compression.maxFileSize === 'number' && compression.maxFileSize > 0 ? compression.maxFileSize : 10485760);
+        let maxFileSize;
+        if (compression.maxFileSize === undefined) {
+            maxFileSize = 10485760;
+        } else if (compression.maxFileSize === false
+            || (typeof compression.maxFileSize === 'number' && compression.maxFileSize > 0)) {
+            maxFileSize = compression.maxFileSize;
+        } else {
+            warnConfigDeprecation(_logger,
+                'compression.maxFileSize must be a positive number (bytes) or false; got ' +
+                String(compression.maxFileSize) + ' — falling back to the default 10485760 for now.');
+            maxFileSize = 10485760;
+        }
 
         const mimeTypes = Array.isArray(compression.mimeTypes) && compression.mimeTypes.length > 0
             ? compression.mimeTypes
@@ -1535,11 +1569,24 @@ module.exports = function koaClassicServer(
             return { rawFile: defaultRawFile, compressedFile: defaultCompressedFile };
         }
 
+        // Positive-bytes fields whose invalid values used to fall back to the
+        // default SILENTLY (#13): warn now, behavior unchanged (the fallback is
+        // identical); the next major will throw — same deprecation path as the
+        // other config warnings.
+        function sizeOrWarn(value, fieldName, defaultValue) {
+            if (value === undefined) return defaultValue;
+            if (typeof value === 'number' && value > 0) return value;
+            warnConfigDeprecation(_logger,
+                `serverCache.${fieldName} must be a positive number (bytes); got ` +
+                String(value) + ` — falling back to the default ${defaultValue} for now.`);
+            return defaultValue;
+        }
+
         const rf = serverCache.rawFile;
         const rawFile = (!rf || typeof rf !== 'object' || Array.isArray(rf)) ? defaultRawFile : {
             enabled: typeof rf.enabled === 'boolean' ? rf.enabled : false,
-            maxSize: typeof rf.maxSize === 'number' && rf.maxSize > 0 ? rf.maxSize : 52428800,
-            maxFileSize: typeof rf.maxFileSize === 'number' && rf.maxFileSize > 0 ? rf.maxFileSize : 1048576,
+            maxSize: sizeOrWarn(rf.maxSize, 'rawFile.maxSize', 52428800),
+            maxFileSize: sizeOrWarn(rf.maxFileSize, 'rawFile.maxFileSize', 1048576),
             maxAge: validateMaxAge(rf.maxAge, 'rawFile'),
             warnInterval: rf.warnInterval === false ? false : (typeof rf.warnInterval === 'number' ? rf.warnInterval : 60000),
         };
@@ -1549,7 +1596,7 @@ module.exports = function koaClassicServer(
         if (!cf || typeof cf !== 'object' || Array.isArray(cf)) {
             compressedFile = defaultCompressedFile;
         } else {
-            const cfMaxSize = typeof cf.maxSize === 'number' && cf.maxSize > 0 ? cf.maxSize : 104857600;
+            const cfMaxSize = sizeOrWarn(cf.maxSize, 'compressedFile.maxSize', 104857600);
             compressedFile = {
                 enabled: typeof cf.enabled === 'boolean' ? cf.enabled : true,
                 maxSize: cfMaxSize,
@@ -2371,7 +2418,10 @@ module.exports = function koaClassicServer(
             // Vary the 200 would; and a shared proxy must not serve the identity variant to
             // a client that would have received the compressed one (#7).
             if (potentiallyCompressible) {
-                ctx.set('Vary', 'Accept-Encoding');
+                // ctx.vary() appends (deduplicating) instead of overwriting: a
+                // Vary set by upstream middleware (e.g. "Origin" from a CORS
+                // layer) must survive (#7).
+                ctx.vary('Accept-Encoding');
             }
 
             // Preconditions are evaluated BEFORE the Range branch: RFC 9110 §13.2.2 gives the
@@ -2733,9 +2783,15 @@ module.exports = function koaClassicServer(
             const rawDirRel = path.relative(normalizedRootDir, toOpen);
             const dirRelPath = (rawDirRel === '' || rawDirRel === '.') ? '' : rawDirRel.split(path.sep).join('/');
 
-            // Get sorting parameters from query string
-            const sortBy = ctx.query.sort || 'name';
-            const sortOrder = ctx.query.order || 'asc';
+            // Get sorting parameters from query string. Repeated parameters
+            // (?sort=a&sort=b) arrive as arrays from the query parser: take the
+            // first occurrence so sorting stays deterministic and regenerated
+            // links never embed "a,b" (#12).
+            const firstQueryValue = (v) => Array.isArray(v) ? v[0] : v;
+            const sortParam  = firstQueryValue(ctx.query.sort);
+            const orderParam = firstQueryValue(ctx.query.order);
+            const sortBy = sortParam || 'name';
+            const sortOrder = orderParam || 'asc';
 
             // Base for the listing's self-referencing links (sort headers,
             // paginator). Built from the WITH-prefix pathname — the out-prefix
@@ -2751,8 +2807,8 @@ module.exports = function koaClassicServer(
             // Preserves sort/order while overriding `page`; omits page when 0.
             function buildQueryUrl(targetPage) {
                 const params = [];
-                if (ctx.query.sort)  params.push(`sort=${encodeURIComponent(ctx.query.sort)}`);
-                if (ctx.query.order) params.push(`order=${encodeURIComponent(ctx.query.order)}`);
+                if (sortParam)  params.push(`sort=${encodeURIComponent(sortParam)}`);
+                if (orderParam) params.push(`order=${encodeURIComponent(orderParam)}`);
                 if (targetPage > 0)  params.push(`page=${targetPage}`);
                 return params.length ? `${baseUrl}?${params.join('&')}` : baseUrl;
             }
@@ -2933,7 +2989,7 @@ module.exports = function koaClassicServer(
                 // Pagination — slice the sorted items into the requested page (0-based).
                 const pageSize = options.dirListing.entriesPerPage; // 0 disables pagination
                 totalPages = pageSize > 0 ? Math.max(1, Math.ceil(items.length / pageSize)) : 1;
-                const rawPage = parseInt(ctx.query.page, 10);
+                const rawPage = parseInt(firstQueryValue(ctx.query.page), 10);
                 const requestedPage = Number.isFinite(rawPage) && rawPage >= 0 ? rawPage : 0;
                 currentPage = Math.min(requestedPage, totalPages - 1); // silent clamp
                 const visibleItems = (pageSize > 0 && items.length > pageSize)
@@ -3035,6 +3091,14 @@ module.exports = function koaClassicServer(
                     </html>
                 `;
 
+            // Listings are dynamic pages — they change with directory content,
+            // sort and page — so an EXPLICIT no-cache policy is sent regardless
+            // of browserCacheEnabled: without it, browsers and shared proxies
+            // may heuristically cache a stale listing (#5). Same header trio the
+            // file path uses when browser caching is disabled.
+            ctx.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+            ctx.set('Pragma', 'no-cache');
+            ctx.set('Expires', '0');
             setGeneratedPageHeaders(ctx, LISTING_CSP);
             return html;
         }

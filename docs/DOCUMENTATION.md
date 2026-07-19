@@ -223,7 +223,7 @@ const options = {
     // Array di estensioni file da processare con template.render
     // Se un file ha una di queste estensioni, viene chiamato render()
     // Default: []
-    ext: ['ejs', 'EJS', 'pug', 'html']
+    ext: ['.ejs', '.EJS', '.pug', '.html']  // forma preferita col punto; senza punto è equivalente
   },
 
   // Pagine di errore personalizzate (V4.2+)
@@ -432,17 +432,26 @@ async function render(ctx, next, filePath) {
 
 #### `template.ext` (Array)
 
-Array di estensioni file che devono essere processate con `template.render`.
+Array di suffissi di estensione che devono essere processati con `template.render`.
+
+**Il punto iniziale è opzionale** (dalla v5.0.0): `'.ejs'` e `'ejs'` sono **equivalenti**;
+la forma preferita e documentata è quella **col punto** (`'.ejs'`). Il confronto avviene
+per **suffisso** del nome file (case-sensitive), quindi sono supportate anche le
+estensioni composte: `'.html.ejs'` matcha solo i file `*.html.ejs`. Un file il cui nome
+è *esattamente* il suffisso (es. un dotfile chiamato `.ejs`) non matcha mai.
 
 ```javascript
-// Solo file .ejs
-ext: ['ejs']
+// Solo file .ejs — forma preferita col punto ('ejs' è equivalente)
+ext: ['.ejs']
 
 // File .ejs e .EJS (case-sensitive)
-ext: ['ejs', 'EJS']
+ext: ['.ejs', '.EJS']
 
 // Multipli template engine
-ext: ['ejs', 'pug', 'html', 'hbs']
+ext: ['.ejs', '.pug', '.html', '.hbs']
+
+// Estensioni composte (v5+): solo i file *.html.ejs
+ext: ['.html.ejs']
 ```
 
 **Comportamento:**
@@ -553,7 +562,7 @@ app.use(koaClassicServer(__dirname + '/views', {
         user: ctx.state.user || 'Guest'
       });
     },
-    ext: ['ejs', 'EJS']
+    ext: ['.ejs', '.EJS']
   }
 }));
 
@@ -644,7 +653,7 @@ app.use(koaClassicServer(path.join(__dirname, 'public'), {
   urlsReserved: ['/admin', '/private', '/config', '/.env'],
   template: {
     render: templateRender,
-    ext: ['ejs', 'html']
+    ext: ['.ejs', '.html']
   }
 }));
 
@@ -1229,13 +1238,13 @@ GET /public/file.txt → 200
 // ❌ Estensione mancante
 template: {
   render: renderFunction,
-  ext: ['html']  // manca 'ejs'
+  ext: ['.html']  // manca '.ejs'
 }
 
 // ✅ Estensione presente
 template: {
   render: renderFunction,
-  ext: ['ejs', 'EJS']
+  ext: ['.ejs', '.EJS']
 }
 ```
 
@@ -1243,7 +1252,7 @@ template: {
 ```javascript
 // ❌ render non definito
 template: {
-  ext: ['ejs']
+  ext: ['.ejs']
   // render mancante!
 }
 
@@ -1252,7 +1261,7 @@ template: {
   render: async (ctx, next, filePath) => {
     ctx.body = await ejs.renderFile(filePath, {});
   },
-  ext: ['ejs']
+  ext: ['.ejs']
 }
 ```
 
@@ -1556,7 +1565,7 @@ const templateRenderer = require('./lib/templateRenderer');
 app.use(koaClassicServer(rootDir, {
   template: {
     render: templateRenderer,
-    ext: ['ejs', 'html']
+    ext: ['.ejs', '.html']
   }
 }));
 ```
@@ -1590,7 +1599,7 @@ template: {
       ctx.body = 'Template Error';
     }
   },
-  ext: ['ejs']
+  ext: ['.ejs']
 }
 ```
 
@@ -1656,7 +1665,7 @@ app.use(koaClassicServer(path.join(__dirname, 'public'), {
   urlsReserved: ['/admin', '/config', '/.env'],
   template: {
     render: isDev ? devTemplateRender : prodTemplateRender,
-    ext: ['ejs']
+    ext: ['.ejs']
   }
 }));
 
@@ -1722,7 +1731,7 @@ app.use(koaClassicServer(__dirname + '/public', {
   // Rendering con dati utente e query params
   template: {
     render: ejsRenderer,
-    ext: ['ejs']
+    ext: ['.ejs']
   }
 }));
 ```

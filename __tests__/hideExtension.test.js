@@ -527,7 +527,7 @@ describe('hideExtension option tests', () => {
             }).toThrow();
         });
 
-        test('hideExtension: { ext: "ejs" } → warning + normalizes to ".ejs"', () => {
+        test('hideExtension: { ext: "ejs" } → EQUIVALENT to ".ejs", no warning (V5, #10)', () => {
             const originalWarn = console.warn;
             const warnings = [];
             console.warn = (...args) => { warnings.push(args); };
@@ -536,11 +536,10 @@ describe('hideExtension option tests', () => {
                 const middleware = koaClassicServer(rootDir, {
                     hideExtension: { ext: 'ejs' }
                 });
-                // Should not throw
                 expect(middleware).toBeDefined();
-                // Should have issued a warning
-                expect(warnings.length).toBeGreaterThan(0);
-                expect(warnings[0][1]).toContain('hideExtension.ext should start with a dot');
+                // The leading dot is optional decoration since V5: both forms
+                // are legal, so the old "should start with a dot" nag is gone.
+                expect(warnings.length).toBe(0);
             } finally {
                 console.warn = originalWarn;
             }

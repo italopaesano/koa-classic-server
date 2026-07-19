@@ -30,7 +30,7 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [x] [7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente](#7-ctxsetvary--sovrascrive-un-vary-preesistente) — **RISOLTO** (`ctx.vary()`)
 - [x] [8. `formatSize` oltre il TB produce "N undefined"](#8-formatsize-oltre-il-tb-produce-n-undefined) — **RISOLTO** (PB/EB + clamp)
 - [x] [9. `hideExtension.redirect` accetta qualsiasi numero](#9-hideextensionredirect-accetta-qualsiasi-numero) — **RISOLTO** (opzione C: throw a factory, breaking v5.0.0)
-- [ ] [10. `template.ext` con punto iniziale non matcha mai, in silenzio](#10-templateext-con-punto-iniziale-non-matcha-mai-in-silenzio)
+- [x] [10. `template.ext` con punto iniziale non matcha mai, in silenzio](#10-templateext-con-punto-iniziale-non-matcha-mai-in-silenzio) — **RISOLTO** (opzione E: equivalenza del punto + motore a suffisso unificato)
 - [x] [11. `parseRangeHeader`: `parseInt` lassista su spec malformate](#11-parserangeheader-parseint-lassista-su-spec-malformate) — **RISOLTO** (validazione digit-strict)
 - [x] [12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio](#12-parametri-query-ripetuti-sortasortb-degradano-in-silenzio) — **RISOLTO** (primo valore vince)
 - [x] [13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`](#13-validazione-incoerente-silenzio-vs-throw-in-servercache--compression) — **RISOLTO** (warn-ora / throw-in-major)
@@ -386,6 +386,32 @@ avere un 200/404 e ottiene un 302 senza alcun avviso.
 ---
 
 ### 10. `template.ext` con punto iniziale non matcha mai, in silenzio
+
+**Stato: ✅ RISOLTO** (2026-07-18 — **opzione E proposta dal manutentore:
+equivalenza tollerante + unificazione multi-dot**, non-breaking, in v5.0.0
+sotto *Changed*.
+1. Helper condiviso `normalizeExtSuffix()`: il punto iniziale è **opzionale**
+   su entrambe le opzioni sorelle (`'.ejs'` ≡ `'ejs'`; forma preferita e
+   documentata: **col punto**). Sparito il vecchio nag di `hideExtension.ext`
+   per il punto mancante — entrambe le forme sono legali.
+2. Il match di `template.ext` passa da `path.extname()` al **suffisso** (come
+   `hideExtension` da sempre): le estensioni composte (`'.html.ejs'`,
+   `'.tar.gz'`) sono supportate ovunque — l'asimmetria multi-dot è eliminata,
+   su proposta del manutentore. Guard di lunghezza sul basename: un dotfile
+   chiamato esattamente `.ejs` non matcha (comportamento storico preservato).
+3. Entry non-suffisso in `template.ext` (vuote, `'.'`, non-stringhe) → warn
+   una-tantum + scarto (non potevano matchare nulla); `hideExtension.ext`
+   vuota/`'.'`/non-stringa → throw come sempre.
+4. Scope adiacente: `template.render` **non-funzione** → warn una-tantum
+   (prima: scarto silenzioso → sorgenti serviti grezzi senza segnale),
+   comportamento invariato; throw pianificato in 6.0.0 con gli altri debiti
+   di deprecazione (decisione del manutentore: i debiti warn restano warn per
+   tutta la 5.x).
+Documentazione: frase normativa + esempi in forma `'.ejs'` in
+DOCUMENTATION.md/README/JSDoc (versione calibrata concordata). Test:
+`__tests__/ext-suffix-equivalence.test.js`, 14 test (fiore all'occhiello:
+`['.ejs']` che pre-fix serviva il sorgente grezzo); aggiornato il test del
+vecchio nag; 7 test falliscono sul codice pre-fix.)
 
 **Posizione:** `index.cjs:293-294` (match: `path.extname(...).slice(1)` → senza
 punto), `index.cjs:1050` (normalizzazione: nessun trattamento del punto).

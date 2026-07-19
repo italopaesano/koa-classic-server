@@ -18,6 +18,19 @@ const _LOG_1024 = Math.log(1024);
 // throws at factory time; see the validation block for the rationale).
 const _VALID_REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 
+// Shared extension-suffix normalizer (V5 — v4.3 register #10), used by BOTH
+// hideExtension.ext and template.ext entries: the leading dot is optional
+// decoration ('.ejs' and 'ejs' are equivalent; '.ejs' is the preferred,
+// documented form) and compound suffixes ('.tar.gz', '.html.ejs') are
+// first-class — both options match by SUFFIX. Returns the canonical dotted
+// form, or null when the value cannot name a suffix (non-string, empty, '.').
+function normalizeExtSuffix(value) {
+    if (typeof value !== 'string') return null;
+    const stripped = value.startsWith('.') ? value.slice(1) : value;
+    if (stripped === '') return null;
+    return '.' + stripped;
+}
+
 // Emitted at most once per process lifetime when the caller passes the v2-era
 // `showDirContents` option instead of the v3 `dirListing.enabled`. The old
 // name is accepted as a backward-compatibility alias and may be removed in a
@@ -234,8 +247,9 @@ function warnPayload(logger, message) {
 // multiple messages. These options (urlPrefix, urlsReserved, ...) are v2-stable,
 // so a malformed value is TOLERATED with a warning for now rather than thrown:
 // throwing on a stable option would be a breaking change on a minor upgrade.
-// The next major will flip `warnConfigDeprecation` into a hard throw (the call
-// sites already carry the final message) — see docs/revisione_codice_v3.1.md #11.
+// A FUTURE major (maintainer decision 2026-07-18: target 6.0.0, not 5.0.0)
+// will flip `warnConfigDeprecation` into a hard throw (the call sites already
+// carry the final message) — see docs/revisione_codice_v3.1.md #11.
 const _configDeprecationsWarned = new Set();
 function warnConfigDeprecation(logger, message) {
     if (_configDeprecationsWarned.has(message)) return;
@@ -294,8 +308,12 @@ function stripBodyForHead(ctx) {
 async function tryRenderTemplate(ctx, next, filePath, rawBuffer, templateOpts, logger, sendErrorPage) {
     if (templateOpts.ext.length === 0 || !templateOpts.render) return false;
 
-    const fileExt = path.extname(filePath).slice(1);
-    if (!fileExt || !templateOpts.ext.includes(fileExt)) return false;
+    // Suffix match (V5 — v4.3 register #10): ext entries are canonical dotted
+    // suffixes ('.ejs'; compound forms like '.html.ejs' match too). The length
+    // guard preserves the historical dotfile behavior: a file named exactly
+    // '.ejs' has no extension and never matches.
+    const baseName = path.basename(filePath);
+    if (!templateOpts.ext.some((ext) => baseName.length > ext.length && baseName.endsWith(ext))) return false;
 
     // RFC 9110 §9.3.2: HEAD must mirror GET (same status + headers, no body). The
     // user's render is run exactly as for GET — by presenting ctx.method as GET for
@@ -796,19 +814,23 @@ module.exports = function koaClassicServer(
         urlPrefix: "", // URL path prefix. Should start with "/" and NOT end with "/"
                        //   (e.g. "/static"); "" disables the prefix. A malformed value
                        //   is tolerated with a deprecation warning for now (behavior
-                       //   unchanged) and WILL throw in the next major version.
+                       //   unchanged) and WILL throw in a future major (target: 6.0.0).
         urlsReserved: [], // Reserved first-level paths passed through to next().
                           //   Each entry should be a single first-level path: a leading
                           //   "/" plus one segment, no further "/" (e.g. "/admin").
                           //   Malformed entries are tolerated with a deprecation warning
-                          //   for now and WILL throw in the next major version (a
+                          //   for now and WILL throw in a future major, target 6.0.0 (a
                           //   non-string entry is dropped to avoid a per-request 500).
         template: {
             render: undefined, // Template rendering function: async (ctx, next, filePath, rawBuffer, signal) => {}
                                // rawBuffer (4th arg, may be null) is READ-ONLY: the same Buffer
                                // instance is shared with the server cache and with concurrent
                                // requests — mutating it corrupts other responses.
-            ext: [], // File extensions to process with template.render
+            ext: [], // Extension suffixes handled by template.render, e.g. ['.ejs'].
+                     // Preferred form WITH the leading dot; 'ejs' is equivalent (V5).
+                     // Matched as a SUFFIX of the file name (case-sensitive), so
+                     // compound extensions work too: ['.html.ejs'] targets only
+                     // page.html.ejs-style files.
             renderTimeout: 30000, // Max ms allowed for template.render (number ≥ 0; 0 = disabled).
                                   // On timeout responds 504 Gateway Timeout. The render receives an
                                   // AbortSignal as 5th argument; propagate it to fetch/db/fs to free
@@ -823,7 +845,9 @@ module.exports = function koaClassicServer(
         useOriginalUrl: true, // Use ctx.originalUrl (default) or ctx.url
                               // Set false for URL rewriting middleware (i18n, routing)
         hideExtension: {     // Hide file extension from URLs (clean URLs like mod_rewrite)
-            ext: '.ejs',     // Extension to hide (required, string, case-sensitive, must start with '.')
+            ext: '.ejs',     // Suffix to hide (required, case-sensitive). Preferred form
+                             //   WITH the leading dot; 'ejs' is equivalent (V5). Compound
+                             //   suffixes ('.tar.gz') are supported.
             redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301).
                              //   Must be one of 301 | 302 | 303 | 307 | 308 — anything else throws
                              //   at factory time (V5; previously other numbers were tolerated and
@@ -1086,7 +1110,7 @@ module.exports = function koaClassicServer(
     // Both are v2-stable options, so instead of throwing (a breaking change on a
     // minor upgrade — a mis-slashed value that "worked" only by falling through
     // to a downstream handler would suddenly change behavior), we WARN and leave
-    // the runtime behavior exactly as it is today. The next major turns these
+    // the runtime behavior exactly as it is today. A future major (6.0.0) turns these
     // warnings into throws. The one exception is a non-string urlsReserved entry:
     // it would 500 on every request (value.substring is not a function), which is
     // not working behavior, so it is dropped defensively (still warned).
@@ -1139,8 +1163,36 @@ module.exports = function koaClassicServer(
         }
         options.urlsReserved = cleaned;
     }
-    options.template.render = (options.template.render === undefined || typeof options.template.render === 'function') ? options.template.render : undefined;
-    options.template.ext = Array.isArray(options.template.ext) ? options.template.ext : [];
+    if (options.template.render !== undefined && typeof options.template.render !== 'function') {
+        // Dropped SILENTLY before V5 (#10): a non-function render means templates
+        // never run and template SOURCES are served as plain static files.
+        warnConfigDeprecation(_logger,
+            'template.render must be a function; got ' +
+            (options.template.render === null ? 'null' : typeof options.template.render) +
+            ' — template rendering is DISABLED (template sources are served as static files).');
+        options.template.render = undefined;
+    }
+    // template.ext entries go through the shared suffix normalizer: leading
+    // dot optional ('.ejs' preferred), compound suffixes supported. Entries
+    // that cannot name a suffix are dropped with a warning — they could never
+    // match a file, so dropping them cannot break working behavior.
+    if (Array.isArray(options.template.ext)) {
+        const normalizedExts = [];
+        for (const value of options.template.ext) {
+            const suffix = normalizeExtSuffix(value);
+            if (suffix === null) {
+                warnConfigDeprecation(_logger,
+                    'template.ext entries must be non-empty extension suffixes like ".ejs" (leading dot optional); dropping ' +
+                    (typeof value === 'string' ? JSON.stringify(value) : 'a non-string (' + (value === null ? 'null' : typeof value) + ')') +
+                    ' — it can never match a file.');
+                continue;
+            }
+            normalizedExts.push(suffix);
+        }
+        options.template.ext = normalizedExts;
+    } else {
+        options.template.ext = [];
+    }
 
     if (options.template.renderTimeout === undefined) {
         options.template.renderTimeout = 30000;
@@ -1192,19 +1244,19 @@ module.exports = function koaClassicServer(
         if (typeof options.hideExtension !== 'object' || Array.isArray(options.hideExtension)) {
             throw new Error('[koa-classic-server] hideExtension must be an object with an "ext" property. Example: { ext: ".ejs" }');
         }
-        if (!options.hideExtension.ext || typeof options.hideExtension.ext !== 'string') {
-            throw new Error('[koa-classic-server] hideExtension.ext is required and must be a non-empty string. Example: { ext: ".ejs" }');
+        // Shared suffix normalizer (V5, #10): '.ejs' and 'ejs' are EQUIVALENT
+        // (the old missing-dot warning is gone — both forms are legal; '.ejs'
+        // is the preferred, documented one). Compound suffixes ('.tar.gz')
+        // keep working as before. Values that cannot name a suffix ('', '.',
+        // non-string) throw, as the empty/non-string forms always did.
+        const normalizedHideExt = normalizeExtSuffix(options.hideExtension.ext);
+        if (normalizedHideExt === null) {
+            throw new Error(
+                '[koa-classic-server] hideExtension.ext is required and must be a non-empty extension suffix. ' +
+                'Example: { ext: ".ejs" } (the leading dot is optional: "ejs" is equivalent).'
+            );
         }
-        // Normalize ext: add leading dot if missing
-        if (!options.hideExtension.ext.startsWith('.')) {
-            _logger.warn(...warnPayload(_logger,
-                '[koa-classic-server] WARNING: hideExtension.ext should start with a dot.\n' +
-                `  Current usage: ext: "${options.hideExtension.ext}"\n` +
-                `  Corrected to:  ext: ".${options.hideExtension.ext}"\n` +
-                '  Please update your configuration.'
-            ));
-            options.hideExtension.ext = '.' + options.hideExtension.ext;
-        }
+        options.hideExtension.ext = normalizedHideExt;
         // Validate redirect code (V5 breaking change — v4.3 register #9).
         // Only real redirect statuses are accepted. Anything else was a
         // configuration bug with two silent failure modes: a non-integer (or
@@ -1491,7 +1543,7 @@ module.exports = function koaClassicServer(
         // minFileSize / maxFileSize: an invalid value used to fall back to the
         // default SILENTLY (#13) — inconsistent with maxAge / maxEntrySize /
         // quality, which throw. These are v2-stable options, so the fallback
-        // stays (behavior unchanged) but now warns; the next major will throw.
+        // stays (behavior unchanged) but now warns; a future major (6.0.0) will throw.
         let minFileSize;
         if (compression.minFileSize === undefined) {
             minFileSize = 1024;

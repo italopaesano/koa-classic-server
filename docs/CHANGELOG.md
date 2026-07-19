@@ -5,6 +5,40 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - Unreleased
+
+### ⚠️ Breaking Changes
+
+- **`hideExtension.redirect` now throws at factory time unless it is one of `300, 301, 302, 303, 305, 307, 308`** (the codes Koa emits as-is; `300`/`305` are exotic/deprecated but valid)
+  (`docs/revisione_codice_v4.3.md` #9 — maintainer decision: hard validation in a major, option C).
+  Until v4.x any number was accepted, with two silent failure modes at request time: an integer
+  that is not a redirect status (`200`, `404`, `999`, ...) was silently replaced with `302` by
+  `ctx.redirect()`, and a non-integer (or out-of-range) value made Koa's status setter throw —
+  a **500 on every hideExtension redirect** plus a log line per request. Both were configuration
+  bugs that could only be noticed in production; they now fail at startup with the valid list in
+  the error message. **Migration**: if your config uses one of the five valid codes, nothing
+  changes. Otherwise replace the value with the redirect you actually intended (the silent
+  pre-v5 behavior of e.g. `redirect: 200` was a `302` anyway).
+
+### ✨ Changed — extension options: leading dot optional, unified suffix semantics
+
+- **`template.ext` and `hideExtension.ext` now treat the leading dot as optional**
+  (`docs/revisione_codice_v4.3.md` #10 — "tolerant equivalence"): `'.ejs'` and `'ejs'` are
+  equivalent everywhere; the preferred, documented form is **`'.ejs'`**. The old
+  `hideExtension.ext` missing-dot warning is gone (both forms are simply legal), and the old
+  `template.ext` trap is fixed: a dotted entry (`['.ejs']`) used to never match — the render
+  never ran and the **template source was served raw**. It now works as intended.
+- **`template.ext` matches by suffix** (like `hideExtension.ext` always did), through one
+  shared normalizer: compound extensions are now supported (`['.html.ejs']` targets only
+  `*.html.ejs` files). Single-extension behavior is unchanged, including the dotfile edge
+  (a file named exactly `.ejs` has no extension and never matches). Entries that cannot
+  name a suffix (empty, `'.'`, non-string) are dropped with a one-time deprecation warning.
+- **`template.render` with a non-function value now warns** (one-time, deprecation) instead
+  of being dropped silently — the silent drop meant "templates configured but sources served
+  raw" with no signal. Behavior is unchanged (rendering disabled); a future major (target:
+  6.0.0) will make it a startup error, together with the other pending config deprecations
+  (maintainer decision: existing warn-level deprecations are kept as warnings through 5.x).
+
 ## [4.3.0] - 2026-07-14
 
 Customization release: the compression qualities and the compressed cache's per-entry

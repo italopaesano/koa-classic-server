@@ -29,8 +29,8 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 - [x] [6. Link assoluti del listing costruiti dall'header `Host` del client](#6-link-assoluti-del-listing-costruiti-dallheader-host-del-client) — **RISOLTO** (href path-absolute, niente origin)
 - [x] [7. `ctx.set('Vary', ...)` sovrascrive un `Vary` preesistente](#7-ctxsetvary--sovrascrive-un-vary-preesistente) — **RISOLTO** (`ctx.vary()`)
 - [x] [8. `formatSize` oltre il TB produce "N undefined"](#8-formatsize-oltre-il-tb-produce-n-undefined) — **RISOLTO** (PB/EB + clamp)
-- [ ] [9. `hideExtension.redirect` accetta qualsiasi numero](#9-hideextensionredirect-accetta-qualsiasi-numero)
-- [ ] [10. `template.ext` con punto iniziale non matcha mai, in silenzio](#10-templateext-con-punto-iniziale-non-matcha-mai-in-silenzio)
+- [x] [9. `hideExtension.redirect` accetta qualsiasi numero](#9-hideextensionredirect-accetta-qualsiasi-numero) — **RISOLTO** (opzione C: throw a factory, breaking v5.0.0)
+- [x] [10. `template.ext` con punto iniziale non matcha mai, in silenzio](#10-templateext-con-punto-iniziale-non-matcha-mai-in-silenzio) — **RISOLTO** (opzione E: equivalenza del punto + motore a suffisso unificato)
 - [x] [11. `parseRangeHeader`: `parseInt` lassista su spec malformate](#11-parserangeheader-parseint-lassista-su-spec-malformate) — **RISOLTO** (validazione digit-strict)
 - [x] [12. Parametri query ripetuti (`?sort=a&sort=b`) degradano in silenzio](#12-parametri-query-ripetuti-sortasortb-degradano-in-silenzio) — **RISOLTO** (primo valore vince)
 - [x] [13. Validazione incoerente (silenzio vs throw) in `serverCache` / `compression`](#13-validazione-incoerente-silenzio-vs-throw-in-servercache--compression) — **RISOLTO** (warn-ora / throw-in-major)
@@ -356,6 +356,25 @@ dall'array → `"2 undefined"` nel listing. Verificato via `_internals.formatSiz
 
 ### 9. `hideExtension.redirect` accetta qualsiasi numero
 
+**Stato: ✅ RISOLTO** (2026-07-18 — **opzione C decisa dal manutentore: throw a
+factory time, breaking change della major 5.0.0** (package.json → 5.0.0,
+sezione ⚠️ Breaking Changes nel CHANGELOG con guida di migrazione). Set valido —
+**emendato dal manutentore il 2026-07-18**: `{300, 301, 302, 303, 305, 307, 308}`,
+cioè esattamente i codici che `ctx.redirect()` di Koa emette as-is; `300` e
+`305` sono esotico/deprecato ma validi e onorati (il `304` resta fuori: Koa
+non lo tratta come redirect e lo riscriverebbe in 302). Qualunque altro
+valore lancia con la lista nel messaggio. Il contesto che ha reso il throw preferibile al warn: l'analisi
+runtime (verificata con Koa reale) aveva mostrato due modi di rottura
+silenziosa — interi non-redirect rimpiazzati con 302 da `ctx.redirect()`, e
+non-interi/fuori-range che facevano lanciare il setter di status di Koa →
+**500 su ogni redirect hideExtension**. `300` e `305` erano inizialmente
+esclusi; riammessi con l'emendamento di cui sopra (test runtime: 305 emesso
+as-is).
+Test: describe "#9" in `__tests__/hideExtension.test.js` — 10 valori invalidi
+→ throw (tutti e 10 falliscono sul codice pre-fix), i 5 validi accettati,
+runtime 307 emesso as-is; il vecchio test `redirect: 'abc'` resta verde col
+nuovo messaggio.)
+
 **Posizione:** `index.cjs:1116-1122`.
 
 **Problema:** la validazione controlla solo `typeof === 'number'`: `redirect: 200`,
@@ -371,6 +390,32 @@ avere un 200/404 e ottiene un 302 senza alcun avviso.
 ---
 
 ### 10. `template.ext` con punto iniziale non matcha mai, in silenzio
+
+**Stato: ✅ RISOLTO** (2026-07-18 — **opzione E proposta dal manutentore:
+equivalenza tollerante + unificazione multi-dot**, non-breaking, in v5.0.0
+sotto *Changed*.
+1. Helper condiviso `normalizeExtSuffix()`: il punto iniziale è **opzionale**
+   su entrambe le opzioni sorelle (`'.ejs'` ≡ `'ejs'`; forma preferita e
+   documentata: **col punto**). Sparito il vecchio nag di `hideExtension.ext`
+   per il punto mancante — entrambe le forme sono legali.
+2. Il match di `template.ext` passa da `path.extname()` al **suffisso** (come
+   `hideExtension` da sempre): le estensioni composte (`'.html.ejs'`,
+   `'.tar.gz'`) sono supportate ovunque — l'asimmetria multi-dot è eliminata,
+   su proposta del manutentore. Guard di lunghezza sul basename: un dotfile
+   chiamato esattamente `.ejs` non matcha (comportamento storico preservato).
+3. Entry non-suffisso in `template.ext` (vuote, `'.'`, non-stringhe) → warn
+   una-tantum + scarto (non potevano matchare nulla); `hideExtension.ext`
+   vuota/`'.'`/non-stringa → throw come sempre.
+4. Scope adiacente: `template.render` **non-funzione** → warn una-tantum
+   (prima: scarto silenzioso → sorgenti serviti grezzi senza segnale),
+   comportamento invariato; throw pianificato in 6.0.0 con gli altri debiti
+   di deprecazione (decisione del manutentore: i debiti warn restano warn per
+   tutta la 5.x).
+Documentazione: frase normativa + esempi in forma `'.ejs'` in
+DOCUMENTATION.md/README/JSDoc (versione calibrata concordata). Test:
+`__tests__/ext-suffix-equivalence.test.js`, 14 test (fiore all'occhiello:
+`['.ejs']` che pre-fix serviva il sorgente grezzo); aggiornato il test del
+vecchio nag; 7 test falliscono sul codice pre-fix.)
 
 **Posizione:** `index.cjs:293-294` (match: `path.extname(...).slice(1)` → senza
 punto), `index.cjs:1050` (normalizzazione: nessun trattamento del punto).

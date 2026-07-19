@@ -117,17 +117,20 @@ describe('options.logger', () => {
             }
         });
 
-        test('hideExtension misuse warning routes to logger.warn', () => {
+        // The old vehicle (hideExtension.ext missing-dot nag) no longer exists:
+        // since V5 (#10) '.ejs' and 'ejs' are equivalent. The new vehicle is the
+        // template.render deprecation warn — same warnConfigDeprecation channel.
+        test('config deprecation warning routes to logger.warn', () => {
             const logger = makeLogger();
             koaClassicServer(fixturesDir, {
                 logger,
                 hidden: { dotFiles: { default: 'hidden' }, dotDirs: { default: 'visible' } },
-                hideExtension: { ext: 'ejs' } // missing leading dot → warn
+                template: { render: 'not-a-function', ext: ['.ejs'] } // non-function render → warn
             });
             expect(logger.warn).toHaveBeenCalledTimes(1);
             // Custom logger receives the plain message, no ANSI escape wrapper.
             expect(logger.warn.mock.calls[0]).toHaveLength(1);
-            expect(logger.warn.mock.calls[0][0]).toMatch(/hideExtension\.ext should start with a dot/);
+            expect(logger.warn.mock.calls[0][0]).toMatch(/template\.render must be a function/);
         });
 
         // Note: prior to v3.0.0 there was an "implicit hidden default" warning
@@ -175,14 +178,16 @@ describe('options.logger', () => {
             const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
             try {
                 koaClassicServer(fixturesDir, {
-                    hideExtension: { ext: 'ejs' } // missing leading dot
+                    // Distinct invalid TYPE from the routing test above: the
+                    // deprecation dedup is per distinct message (once per process).
+                    template: { render: 42, ext: ['.ejs'] } // non-function render → warn
                 });
                 // First call args: ['%s with ANSI', 'WARNING message']
                 const args = consoleWarnSpy.mock.calls.find(call =>
                     typeof call[0] === 'string' && call[0].includes('\x1b[33m')
                 );
                 expect(args).toBeDefined();
-                expect(args[1]).toMatch(/hideExtension\.ext should start with a dot/);
+                expect(args[1]).toMatch(/template\.render must be a function/);
             } finally {
                 consoleWarnSpy.mockRestore();
             }

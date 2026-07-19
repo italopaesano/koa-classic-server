@@ -92,7 +92,7 @@ const ejs = require('ejs');
 app.use(koaClassicServer(path.join(__dirname, 'views'), {
   hideExtension: { ext: '.ejs' },   // GET /about → views/about.ejs ; GET /about.ejs → 301 /about
   template: {
-    ext: ['ejs'],
+    ext: ['.ejs'],   // leading dot optional since v5: '.ejs' (preferred) ≡ 'ejs'
     // signature: (ctx, next, filePath, rawBuffer, signal)
     render: async (ctx, next, filePath, rawBuffer, signal) => {
       ctx.type = 'html';

@@ -134,6 +134,11 @@ app.use(koaClassicServer(root, {
 app.use(koaClassicServer(root, { compression: false }));
 ```
 
+To size compression quality and the server-side caches to your host's RAM and CPU
+(small VPS, weak CPU, big dedicated box, behind a CDN), see the
+**[Performance Tuning Guide](./docs/PERFORMANCE_TUNING.md)** — it includes
+copy-paste profiles.
+
 ### Hide sensitive files
 
 Dot-files are **served by default** (the operator's directory is the source of truth). For a
@@ -417,6 +422,7 @@ npm run test:performance # benchmarks
 
 - **[DOCUMENTATION.md](./docs/DOCUMENTATION.md)** — full API reference
 - **[SECURITY_HARDENING.md](./docs/SECURITY_HARDENING.md)** — hardening guide (canonical)
+- **[PERFORMANCE_TUNING.md](./docs/PERFORMANCE_TUNING.md)** — sizing caches & compression for your host's RAM/CPU
 - **[CHANGELOG.md](./docs/CHANGELOG.md)** — version history
 - **[TEMPLATE_ENGINE_GUIDE.md](./docs/template-engine/TEMPLATE_ENGINE_GUIDE.md)** — EJS/Pug/Handlebars/Nunjucks
 

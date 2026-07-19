@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ Breaking Changes
 
-- **`hideExtension.redirect` now throws at factory time unless it is one of `301, 302, 303, 307, 308`**
+- **`hideExtension.redirect` now throws at factory time unless it is one of `300, 301, 302, 303, 305, 307, 308`** (the codes Koa emits as-is; `300`/`305` are exotic/deprecated but valid)
   (`docs/revisione_codice_v4.3.md` #9 — maintainer decision: hard validation in a major, option C).
   Until v4.x any number was accepted, with two silent failure modes at request time: an integer
   that is not a redirect status (`200`, `404`, `999`, ...) was silently replaced with `302` by

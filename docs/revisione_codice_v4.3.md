@@ -358,14 +358,18 @@ dall'array → `"2 undefined"` nel listing. Verificato via `_internals.formatSiz
 
 **Stato: ✅ RISOLTO** (2026-07-18 — **opzione C decisa dal manutentore: throw a
 factory time, breaking change della major 5.0.0** (package.json → 5.0.0,
-sezione ⚠️ Breaking Changes nel CHANGELOG con guida di migrazione). Set valido:
-`{301, 302, 303, 307, 308}`; qualunque altro valore lancia con la lista nel
-messaggio. Il contesto che ha reso il throw preferibile al warn: l'analisi
+sezione ⚠️ Breaking Changes nel CHANGELOG con guida di migrazione). Set valido —
+**emendato dal manutentore il 2026-07-18**: `{300, 301, 302, 303, 305, 307, 308}`,
+cioè esattamente i codici che `ctx.redirect()` di Koa emette as-is; `300` e
+`305` sono esotico/deprecato ma validi e onorati (il `304` resta fuori: Koa
+non lo tratta come redirect e lo riscriverebbe in 302). Qualunque altro
+valore lancia con la lista nel messaggio. Il contesto che ha reso il throw preferibile al warn: l'analisi
 runtime (verificata con Koa reale) aveva mostrato due modi di rottura
 silenziosa — interi non-redirect rimpiazzati con 302 da `ctx.redirect()`, e
 non-interi/fuori-range che facevano lanciare il setter di status di Koa →
-**500 su ogni redirect hideExtension**. `300` e `305` (nel set di Koa ma
-esotico l'uno, deprecato RFC 7231 l'altro) sono esclusi dal set valido.
+**500 su ogni redirect hideExtension**. `300` e `305` erano inizialmente
+esclusi; riammessi con l'emendamento di cui sopra (test runtime: 305 emesso
+as-is).
 Test: describe "#9" in `__tests__/hideExtension.test.js` — 10 valori invalidi
 → throw (tutti e 10 falliscono sul codice pre-fix), i 5 validi accettati,
 runtime 307 emesso as-is; il vecchio test `redirect: 'abc'` resta verde col

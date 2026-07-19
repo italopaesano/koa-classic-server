@@ -15,8 +15,11 @@ const _gzipAsync           = util.promisify(zlib.gzip);
 const _LOG_1024 = Math.log(1024);
 
 // Redirect statuses accepted for hideExtension.redirect (V5 — anything else
-// throws at factory time; see the validation block for the rationale).
-const _VALID_REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
+// throws at factory time; see the validation block for the rationale). The
+// set is exactly what Koa's ctx.redirect() emits AS-IS (statuses.redirect):
+// 300 and 305 are exotic/deprecated but valid and honored; 304 is NOT here
+// because Koa does not treat it as a redirect (it would be rewritten to 302).
+const _VALID_REDIRECT_CODES = new Set([300, 301, 302, 303, 305, 307, 308]);
 
 // Shared extension-suffix normalizer (V5 — v4.3 register #10), used by BOTH
 // hideExtension.ext and template.ext entries: the leading dot is optional
@@ -849,9 +852,11 @@ module.exports = function koaClassicServer(
                              //   WITH the leading dot; 'ejs' is equivalent (V5). Compound
                              //   suffixes ('.tar.gz') are supported.
             redirect: 301    // HTTP redirect code for URLs with extension (optional, default: 301).
-                             //   Must be one of 301 | 302 | 303 | 307 | 308 — anything else throws
-                             //   at factory time (V5; previously other numbers were tolerated and
-                             //   either became 302 silently or failed every redirect with a 500).
+                             //   Must be one of 300 | 301 | 302 | 303 | 305 | 307 | 308 (the codes
+                             //   Koa emits as-is; 300/305 are exotic/deprecated but valid) — anything
+                             //   else throws at factory time (V5; previously other numbers were
+                             //   tolerated and either became 302 silently or failed every redirect
+                             //   with a 500).
         },
         errorPages: {        // Custom error pages (V4.2+). Opt-in — omitted statuses keep the built-in pages.
             // Keys: the statuses the middleware generates error pages for: 404, 500, 504.
@@ -1267,7 +1272,7 @@ module.exports = function koaClassicServer(
         if (options.hideExtension.redirect !== undefined) {
             if (!_VALID_REDIRECT_CODES.has(options.hideExtension.redirect)) {
                 throw new Error(
-                    '[koa-classic-server] hideExtension.redirect must be one of: 301, 302, 303, 307, 308. ' +
+                    '[koa-classic-server] hideExtension.redirect must be one of: 300, 301, 302, 303, 305, 307, 308. ' +
                     'Got: ' + String(options.hideExtension.redirect) + '\n' +
                     '  Before v5.0.0 other values were tolerated: non-redirect codes were silently sent\n' +
                     '  as 302, and non-integer values failed every redirect with a 500.'

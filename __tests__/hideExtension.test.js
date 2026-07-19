@@ -643,8 +643,6 @@ describe('hideExtension.redirect strict validation (#9, v5.0.0)', () => {
         ['non-redirect 404', 404],
         ['304 (not a redirect for ctx.redirect)', 304],
         ['out-of-set 999', 999],
-        ['exotic 300', 300],
-        ['deprecated 305', 305],
         ['float 3.14', 3.14],
         ['NaN', NaN],
         ['Infinity', Infinity],
@@ -652,10 +650,12 @@ describe('hideExtension.redirect strict validation (#9, v5.0.0)', () => {
     ])('%s → throws at factory time with the valid list', (_label, code) => {
         expect(() => {
             koaClassicServer(rootDir, { hideExtension: { ext: '.ejs', redirect: code } });
-        }).toThrow(/must be one of: 301, 302, 303, 307, 308/);
+        }).toThrow(/must be one of: 300, 301, 302, 303, 305, 307, 308/);
     });
 
-    test.each([[301], [302], [303], [307], [308]])('%d is accepted', (code) => {
+    // 300 and 305 are exotic/deprecated but valid: Koa emits them as-is
+    // (maintainer decision — amended after the first cut of #9).
+    test.each([[300], [301], [302], [303], [305], [307], [308]])('%d is accepted', (code) => {
         expect(() => {
             koaClassicServer(rootDir, { hideExtension: { ext: '.ejs', redirect: code } });
         }).not.toThrow();
@@ -673,6 +673,22 @@ describe('hideExtension.redirect strict validation (#9, v5.0.0)', () => {
         test('/about.ejs → 307 to /about', async () => {
             const response = await supertest(server).get('/about.ejs');
             expect(response.status).toBe(307);
+            expect(response.headers.location).toBe('/about');
+        });
+    });
+
+    describe('runtime: deprecated-but-valid 305 is emitted as-is (not rewritten to 302)', () => {
+        let server;
+        beforeAll(() => {
+            const app = new Koa();
+            app.use(koaClassicServer(rootDir, { hideExtension: { ext: '.ejs', redirect: 305 } }));
+            server = app.listen();
+        });
+        afterAll(() => server.close());
+
+        test('/about.ejs → 305 to /about', async () => {
+            const response = await supertest(server).get('/about.ejs');
+            expect(response.status).toBe(305);
             expect(response.headers.location).toBe('/about');
         });
     });

@@ -6,7 +6,7 @@ traditional web server, but intentionally its own thing.
 
 [![npm version](https://img.shields.io/npm/v/koa-classic-server.svg)](https://www.npmjs.com/package/koa-classic-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-717%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1239%20passing-brightgreen.svg)]()
 [![Node](https://img.shields.io/badge/node-%3E%3D18-blue.svg)]()
 
 One rule drives every default:
@@ -134,6 +134,11 @@ app.use(koaClassicServer(root, {
 app.use(koaClassicServer(root, { compression: false }));
 ```
 
+To size compression quality and the server-side caches to your host's RAM and CPU
+(small VPS, weak CPU, big dedicated box, behind a CDN), see the
+**[Performance Tuning Guide](./docs/PERFORMANCE_TUNING.md)** — it includes
+copy-paste profiles.
+
 ### Hide sensitive files
 
 Dot-files are **served by default** (the operator's directory is the source of truth). For a
@@ -252,21 +257,32 @@ app.use(koaClassicServer(path.join(__dirname, 'public'), {
 
 ---
 
-## What's new in v4
+## What's new in v5
 
-**v4.0.0** is the robustness release. One behavior change made it a major:
+**v5.0.0** is the configuration-correctness release: config mistakes that used to
+misbehave silently at request time now fail fast at startup, and the two extension
+options finally share one coherent, forgiving syntax.
 
-- **Canonical trailing slash** (default on): `GET /dir` → `301 /dir/`, and `GET /file/` → `404`,
-  so relative links in an index page resolve correctly. Restore the old behavior with
-  `dirListing: { trailingSlash: false }`.
-- **Bounded compression** — `compression.maxFileSize` (10 MB) caps the buffered high-quality path;
-  larger files still compress, via bounded-RAM streaming. Opt out with `maxFileSize: false`.
-- **Stricter option validation** — a non-object `options` argument now throws instead of coercing.
+- **`hideExtension.redirect` is validated at startup.** Accepted values are the real
+  redirect codes — `300, 301, 302, 303, 305, 307, 308` — and anything else **throws at
+  factory time** with the valid list in the message. Until v4 a wrong value failed
+  silently in production: a non-redirect integer (`200`, `404`, `999`, …) was quietly
+  sent as `302`, and a non-integer value produced a **500 on every redirect**.
+- **The leading dot is optional in `template.ext` and `hideExtension.ext`** — `'.ejs'`
+  and `'ejs'` are equivalent everywhere; the preferred, documented form is **`'.ejs'`**.
+  This also fixes a long-standing trap: a dotted `template.ext` entry (`['.ejs']`) used
+  to never match, so the render never ran and the **template source was served raw**.
+  It now works as intended.
+- **`template.ext` matches by suffix** (as `hideExtension.ext` always did), so compound
+  extensions are supported: `['.html.ejs']` targets only `*.html.ejs` files. Entries
+  that cannot name a suffix (empty, `'.'`, non-string) are dropped with a one-time
+  warning.
+- **A non-function `template.render` now warns** (one-time) instead of silently
+  disabling template rendering.
 
-Plus HTTP-conformance fixes across content negotiation (`Accept-Encoding` q-values, `Vary`),
-conditional requests (`If-None-Match` lists/`*`/weak, precedence over `Range`), and safer
-config validation (malformed `urlPrefix` / `urlsReserved` / `browserCacheMaxAge` now warn, and
-will throw in the next major). Full details in the **[changelog](./docs/CHANGELOG.md)**.
+The v4 highlights — canonical trailing slash, bounded compression with streamed-output
+caching, configurable compression quality, custom error pages — are all still here.
+Full details in the **[changelog](./docs/CHANGELOG.md)**.
 
 ---
 
@@ -291,7 +307,10 @@ koaClassicServer(rootDir, {
   urlsReserved: [],                      // e.g. ['/api'] — first-level, passed to next()
   useOriginalUrl: true,                  // false when an upstream middleware rewrites ctx.url
 
-  hideExtension: { ext: '.ejs', redirect: 301 },   // clean URLs
+  hideExtension: {                       // clean URLs
+    ext:      '.ejs',                    // suffix to hide — leading dot optional (v5), compound ('.tar.gz') ok
+    redirect: 301,                       // v5: must be 300|301|302|303|305|307|308, else throws at startup
+  },
 
   hidden: {                              // everything visible by default
     dotFiles: { default: 'visible', whitelist: [], blacklist: [] },
@@ -341,7 +360,8 @@ koaClassicServer(rootDir, {
   },
 
   template: {
-    ext: [],                             // e.g. ['ejs']
+    ext: [],                             // e.g. ['.ejs'] — dot optional (v5); suffix match, so
+                                         //   compound entries ('.html.ejs') target *.html.ejs only
     renderTimeout: 30000,                // ms; on timeout the request fails closed (0 = off)
     render: async (ctx, next, filePath, rawBuffer, signal) => { /* ... */ },
   },
@@ -367,24 +387,31 @@ are intentionally left to a reverse proxy or an upstream middleware.
 
 ---
 
-## Migrating from v3
+## Migrating from v4
 
-| What | v3 | v4 |
+If your `hideExtension.redirect` is already a real redirect code (or unset) and your
+`template.ext` entries are dot-less, **v5 changes nothing** — everything below is either a
+config bug surfacing earlier or a previously broken form starting to work.
+
+| What | v4 | v5 |
 |---|---|---|
-| `GET /dir` (directory) | serves the index/listing | **301 → `/dir/`** (set `dirListing.trailingSlash: false` to keep v3) |
-| `GET /file/` (file + slash) | serves the file | **404** |
-| Huge compressible file | buffered whole into RAM | streamed above `compression.maxFileSize` (10 MB) |
-| `options` not an object | coerced / crashed | **throws** at construction |
-| Malformed `urlPrefix` / `urlsReserved` / negative `browserCacheMaxAge` | silent | **deprecation warning** (throws next major) |
+| `hideExtension.redirect: 200` (any non-redirect integer) | silently sent as `302` | **throws at startup** — valid: `300, 301, 302, 303, 305, 307, 308` |
+| `hideExtension.redirect: '301'` (non-integer) | **500 on every redirect** | **throws at startup** |
+| `template.ext: ['.ejs']` (with dot) | never matched — template source served raw | **renders** — `'.ejs'` ≡ `'ejs'`, dotted form preferred |
+| `template.ext: ['.html.ejs']` (compound) | never matched | targets `*.html.ejs` files only |
+| `hideExtension.ext: 'ejs'` (no dot) | worked, with a warning | works — warning gone, both forms legal |
+| `template.render: <non-function>` | silently dropped (sources served raw) | one-time warning (startup error planned for v6) |
 
-The v2 → v3 notes remain in the **[changelog](./docs/CHANGELOG.md)**.
+The v3 → v4 notes (trailing slash, `compression.maxFileSize`, strict `options` validation)
+remain in the **[changelog](./docs/CHANGELOG.md)**.
 
 ---
 
 ## Testing
 
 ```bash
-npm test                 # full suite (lints first) — 973 tests
+npm test                 # full suite (lints first)
+npm run test:ci          # suite without benchmarks — 1239 tests
 npm run test:security    # security tests only
 npm run test:performance # benchmarks
 ```
@@ -395,6 +422,7 @@ npm run test:performance # benchmarks
 
 - **[DOCUMENTATION.md](./docs/DOCUMENTATION.md)** — full API reference
 - **[SECURITY_HARDENING.md](./docs/SECURITY_HARDENING.md)** — hardening guide (canonical)
+- **[PERFORMANCE_TUNING.md](./docs/PERFORMANCE_TUNING.md)** — sizing caches & compression for your host's RAM/CPU
 - **[CHANGELOG.md](./docs/CHANGELOG.md)** — version history
 - **[TEMPLATE_ENGINE_GUIDE.md](./docs/template-engine/TEMPLATE_ENGINE_GUIDE.md)** — EJS/Pug/Handlebars/Nunjucks
 

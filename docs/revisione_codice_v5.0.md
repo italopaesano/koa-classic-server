@@ -14,12 +14,18 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 **Esito complessivo:** il codice è in ottimo stato. Le 16 voci del registro v4.3 e
 le 20 del registro v3.1 risultano effettivamente implementate come descritto
-(verificato leggendo il codice, non solo le checkbox). I due punti emersi sono
-**minori** — nessuno dei due è un bug di correttezza: il comportamento servito non
-è mai *sbagliato*, solo sub-ottimale o non uniforme rispetto a una decisione già
-presa altrove nel codice. Entrambi sono ora chiusi: il **#1** risolto (opzione A —
+(verificato leggendo il codice, non solo le checkbox). I primi due punti emersi
+sono **minori** — nessuno dei due è un bug di correttezza: il comportamento servito
+non è mai *sbagliato*, solo sub-ottimale o non uniforme rispetto a una decisione già
+presa altrove nel codice. Entrambi sono chiusi: il **#1** risolto (opzione A —
 `no-store` su ogni error page), il **#2** chiuso come **wontfix documentato**
 (opzione A — solo validatore forte per `If-Range`, degrado sicuro al 200).
+
+Un terzo punto (**#3**) è emerso in seguito, indagando perché un test di
+robustezza andava in timeout: un body-stream che fallisce **dopo** l'invio degli
+header lascia il socket aperto (client appeso fino a `requestTimeout`, 5 min). È
+l'unico dei tre con impatto non trascurabile (disponibilità / resource-leak, non
+integrità); **confermato a runtime**, aperto, in attesa di decisione sul fix.
 
 ---
 
@@ -28,6 +34,9 @@ presa altrove nel codice. Entrambi sono ora chiusi: il **#1** risolto (opzione A
 ### Minori / conformità / coerenza
 - [x] [1. Le pagine d'errore 404 escono senza alcun `Cache-Control` (heuristic caching di un 404)](#1-le-pagine-derrore-404-escono-senza-alcun-cache-control-heuristic-caching-di-un-404) — **RISOLTO** (opzione A: `no-store` su ogni error page, non solo ≥ 500)
 - [x] [2. `If-Range` in forma data non onorato → 200 pieno invece di 206](#2-if-range-in-forma-data-non-onorato--200-pieno-invece-di-206) — **CHIUSO / WONTFIX** (opzione A: solo validatore forte per `If-Range`; degrado sicuro al 200; documentato)
+
+### Robustezza / disponibilità
+- [ ] [3. Errore di un body-stream dopo l'invio degli header → socket mai chiuso, client appeso fino a `requestTimeout` (5 min)](#3-errore-di-un-body-stream-dopo-linvio-degli-header--socket-mai-chiuso-client-appeso-fino-a-requesttimeout-5-min)
 
 ---
 
@@ -169,6 +178,100 @@ messa a registro come lacuna nota (non una regressione).
 
 **Priorità:** Bassa (conformità/ottimizzazione; nessuno scenario in cui la
 risposta sia scorretta).
+
+---
+
+## Robustezza / disponibilità
+
+### 3. Errore di un body-stream dopo l'invio degli header → socket mai chiuso, client appeso fino a `requestTimeout` (5 min)
+
+**Stato: 🔍 APERTO — CONFERMATO A RUNTIME** — decisione del manutentore sul fix
+(vedi "Opzioni" sotto).
+
+**Provenienza:** emerso indagando (opzione B della discussione sul #1/#2) perché
+il test `__tests__/robustness-misc.test.js:202` *("readFile rejection →
+uncompressed fallback; its stream dying mid-flight is logged, response torn
+down")* si appende fino al `testTimeout` di 120 s di Jest. Il test si appende
+perché **il prodotto lascia davvero il socket aperto** — non è un artefatto del
+mock: il mock sostituisce solo la sorgente di byte, l'intera catena Koa→socket
+è reale.
+
+**Posizione (tutti i rami che assegnano uno stream a `ctx.body`):**
+- `streamCompressedBody` — callback di `pipeline` (`index.cjs:1938`);
+- ramo **206 Range** identity (`index.cjs:2586-2587`);
+- **tee leader** compresso — callback di `pipeline` (`index.cjs:2717`);
+- fallback **identity post-errore-compressione** (`index.cjs:2771-2772`);
+- ramo **identity non compresso** (`index.cjs:2823-2824`).
+
+Tutti condividono lo stesso gestore: `_logger.error('Stream error:', err);
+if (!ctx.headerSent) sendErrorPageSync(ctx, 500);`.
+
+**Problema:** quando lo stream del body fallisce **dopo** che gli header sono
+già stati flushati (caso tipico: il `Content-Length` è annunciato, alcuni byte
+sono già partiti, poi il read fallisce a metà — EIO su disco che cede, blip
+NFS/SMB), la guardia `if (!ctx.headerSent)` è **falsa** e il gestore **non fa
+nulla**. Koa serve gli stream con un bare `body.pipe(res)` (koa 2.16.4,
+`application.js:303`): sull'errore della **sorgente**, `.pipe()` di Node fa
+`unpipe` ma **non** chiude `res`. Risultato: la risposta resta half-open con un
+`Content-Length` che non sarà mai soddisfatto, e **il client resta appeso** in
+attesa dei byte mancanti. L'unico backstop è `server.requestTimeout` (default
+**300 000 ms = 5 min** su Node ≥ 18); `server.timeout` è 0 (disabilitato). Sotto
+errori ripetuti (storage che cede, mount di rete instabile) le connessioni
+appese si accumulano per 5 minuti ciascuna → pressione su socket/fd, superficie
+di esaurimento risorse.
+
+Non è un problema di **integrità** dei dati (il client non riceve mai byte
+sbagliati — riceve una risposta *incompleta*); è un problema di **disponibilità
+/ resource-leak**.
+
+**Riproduzione (verificata a runtime, socket raw):** file servito via ramo
+identity non compresso; `fs.createReadStream` che emette `partial` (7 byte) e
+poi `destroy(EIO)`. Osservato sul socket client:
+- header + `Content-Length: 4096` + 7 byte inviati, poi `Stream error: EIO`
+  loggato;
+- **socket ancora aperto dopo 12 s** (nessun FIN dal server), `writable=true` —
+  chiuso solo dal guard di test;
+- `server.requestTimeout = 300000ms`, `server.timeout = 0`.
+Stessa evidenza sui rami 206 Range e compresso-in-streaming (tutti e tre
+"STILL OPEN after 5s"). Il ramo fallback-identity condivide il codice del ramo
+identity, quindi è coperto per costruzione.
+
+**Contesto (perché il caso `!ctx.headerSent` funziona ma questo no):** se lo
+stream fallisce **prima** di flushare gli header, `sendErrorPageSync` produce un
+500 pulito — corretto. Il buco è solo il ramo header-già-inviati, dove non è più
+possibile cambiare status/body ma **si può e si deve** chiudere il socket: è
+esattamente ciò che il middleware fa già altrove nella stessa situazione — il
+catch di ultima istanza e `sendTemplateError` chiamano `ctx.res.destroy()` quando
+`ctx.headerSent || ctx.res.writableEnded`.
+
+**Fix proposto:** allineare i gestori di stream-error al pattern già usato dal
+resto del codice — quando gli header sono partiti, **distruggere il socket**
+invece di non far nulla, così il client riceve subito una premature-close (segnale
+onesto: la risposta è troncata) invece di appendersi. Helper condiviso (i 5 siti
+sono identici):
+
+```js
+// Body stream fallito: se gli header non sono ancora partiti servi un 500 pulito;
+// altrimenti la risposta è già a metà sul filo con un Content-Length che non sarà
+// mai soddisfatto → distruggi il socket, così il client vede una premature-close
+// immediata invece di appendersi fino a server.requestTimeout.
+function onBodyStreamError(ctx, err) {
+    _logger.error('Stream error:', err);
+    if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
+    else ctx.res.destroy();
+}
+```
+
+Applicato ai tre `src.on('error', …)` diretti; per le due callback di `pipeline`
+la stessa logica va innestata dopo l'early-return su `ERR_STREAM_PREMATURE_CLOSE`
+(un abort del client non è un errore da segnalare). Rete di regressione: oltre a
+far passare (in fretta) il test esistente `robustness-misc:202`, un test a socket
+raw che asserisca la chiusura entro pochi secondi (non l'attesa dei 5 min).
+
+**Priorità:** Media (disponibilità / resource-leak, non integrità; richiede un
+errore di lettura a metà stream — non comune ma reale su storage che cede o FS di
+rete; l'impatto è limitato dal `requestTimeout` di 5 min ma 5 min × connessioni è
+significativo. Fix a basso rischio, ricalca un pattern già presente nel codice).
 
 ---
 

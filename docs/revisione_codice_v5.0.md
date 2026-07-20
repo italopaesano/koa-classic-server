@@ -25,7 +25,10 @@ Un terzo punto (**#3**) è emerso in seguito, indagando perché un test di
 robustezza andava in timeout: un body-stream che fallisce **dopo** l'invio degli
 header lascia il socket aperto (client appeso fino a `requestTimeout`, 5 min). È
 l'unico dei tre con impatto non trascurabile (disponibilità / resource-leak, non
-integrità); **confermato a runtime**, aperto, in attesa di decisione sul fix.
+integrità), ma è **specifico di Koa 2** — verificato a runtime che **Koa 3 non è
+affetto** (il suo `respond()` usa `Stream.pipeline`, che chiude il socket). Poiché
+il pacchetto supporta ufficialmente anche Koa 2.16.4+, resta un difetto reale per
+quegli utenti; confermato a runtime, aperto, in attesa di decisione sul fix.
 
 ---
 
@@ -36,7 +39,7 @@ integrità); **confermato a runtime**, aperto, in attesa di decisione sul fix.
 - [x] [2. `If-Range` in forma data non onorato → 200 pieno invece di 206](#2-if-range-in-forma-data-non-onorato--200-pieno-invece-di-206) — **CHIUSO / WONTFIX** (opzione A: solo validatore forte per `If-Range`; degrado sicuro al 200; documentato)
 
 ### Robustezza / disponibilità
-- [ ] [3. Errore di un body-stream dopo l'invio degli header → socket mai chiuso, client appeso fino a `requestTimeout` (5 min)](#3-errore-di-un-body-stream-dopo-linvio-degli-header--socket-mai-chiuso-client-appeso-fino-a-requesttimeout-5-min)
+- [ ] [3. Errore di un body-stream dopo l'invio degli header → socket mai chiuso, client appeso fino a `requestTimeout` (5 min)](#3-errore-di-un-body-stream-dopo-linvio-degli-header--socket-mai-chiuso-client-appeso-fino-a-requesttimeout-5-min) — **CONFERMATO, solo Koa 2** (Koa 3 chiude il socket via `Stream.pipeline`); fix in attesa di decisione
 
 ---
 
@@ -236,6 +239,29 @@ Stessa evidenza sui rami 206 Range e compresso-in-streaming (tutti e tre
 "STILL OPEN after 5s"). Il ramo fallback-identity condivide il codice del ramo
 identity, quindi è coperto per costruzione.
 
+**⚠️ Specifico di Koa 2 — Koa 3 non è affetto (verificato a runtime).** Il
+`peerDependencies` dichiara `koa: "^2.16.4 || >=3.1.2"`. La differenza è nel
+`respond()` del framework:
+- **Koa 2.16.4** serve gli stream con `body.pipe(res)` (`application.js:303`):
+  sull'errore della sorgente `res` **non** viene chiuso → hang (socket ancora
+  aperto dopo 12 s nel repro).
+- **Koa 3.2.1** usa `Stream.pipeline(stream, res, …)` (`application.js:326`):
+  `pipeline` **distrugge la destinazione** sull'errore della sorgente → il socket
+  è chiuso subito (**59 ms** nel repro, il server manda FIN).
+
+Conseguenza sulla suite di test: lo stesso `robustness-misc.test.js:202`
+**passa in ~2 s su Koa 3** e **si appende 120 s su Koa 2** — il "timeout" osservato
+dipende dalla versione di Koa con cui si esegue la suite (koa è una peerDependency
+e **non** viene installata da `npm ci`: va scelta a mano). Chi esegue i test su
+Koa 2 vede il timeout; su Koa 3 no.
+
+Il finding resta **valido e da correggere**: il pacchetto **supporta
+esplicitamente Koa 2.16.4+**, e molti deployment sono ancora su Koa 2 — un hang su
+una configurazione ufficialmente supportata è un difetto reale per quegli utenti.
+Il fix proposto sotto è a beneficio di Koa 2 ed è un **no-op innocuo su Koa 3**
+(`res.destroy()` è idempotente: quando `pipeline` ha già distrutto `res`, una
+seconda `destroy()` non fa nulla).
+
 **Contesto (perché il caso `!ctx.headerSent` funziona ma questo no):** se lo
 stream fallisce **prima** di flushare gli header, `sendErrorPageSync` produce un
 500 pulito — corretto. Il buco è solo il ramo header-già-inviati, dove non è più
@@ -268,10 +294,11 @@ la stessa logica va innestata dopo l'early-return su `ERR_STREAM_PREMATURE_CLOSE
 far passare (in fretta) il test esistente `robustness-misc:202`, un test a socket
 raw che asserisca la chiusura entro pochi secondi (non l'attesa dei 5 min).
 
-**Priorità:** Media (disponibilità / resource-leak, non integrità; richiede un
-errore di lettura a metà stream — non comune ma reale su storage che cede o FS di
-rete; l'impatto è limitato dal `requestTimeout` di 5 min ma 5 min × connessioni è
-significativo. Fix a basso rischio, ricalca un pattern già presente nel codice).
+**Priorità:** Media **solo su Koa 2** / non-applicabile su Koa 3 (disponibilità /
+resource-leak, non integrità; richiede un errore di lettura a metà stream — non
+comune ma reale su storage che cede o FS di rete; l'impatto è limitato dal
+`requestTimeout` di 5 min ma 5 min × connessioni è significativo. Fix a basso
+rischio, ricalca un pattern già presente nel codice, e innocuo su Koa 3).
 
 ---
 

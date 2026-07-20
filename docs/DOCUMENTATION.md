@@ -1077,6 +1077,20 @@ un download e ricevono l'`ETag` (cioè con `browserCacheEnabled: true`) usano gi
 entity-tag, che è pienamente supportata; la forma data è un semplice fallback che qui si traduce
 in un re-download completo, mai in dati incoerenti.
 
+**`Accept-Ranges` sulle risposte compresse.** Quando una risposta è compressa
+(`Content-Encoding: br`/`gzip`), il suo `Content-Length` è quello del corpo *compresso*, ma il
+middleware annuncia comunque `Accept-Ranges: bytes` e serve gli eventuali `Range` successivi
+dalla rappresentazione **identity** (denominatore del `Content-Range` = dimensione del file non
+compresso, `206` **senza** `Content-Encoding`). Un client che riprende il download della
+*rappresentazione compressa* via byte-range **senza `If-Range`** riceve quindi byte identity: è
+sicuro per qualunque client che onori `Content-Encoding` — la `206` è chiaramente identity
+(nessun `Content-Encoding`, e il denominatore del `Content-Range` non coincide con il
+`Content-Length` compresso della `200`) — e i client di ripresa ben educati inviano `If-Range`,
+ottenendo un `200` pieno. È una scelta **deliberata** (registro `revisione_codice_v5.0.md` #6): a
+differenza di nginx — che quando comprime al volo non annuncia `Accept-Ranges` — qui
+`Accept-Ranges` resta sempre disponibile per la rappresentazione identity, la sola su cui i Range
+sono effettivamente serviti. Nessuno scenario produce dati incoerenti per un client conforme.
+
 ### Cache lato server (`serverCache`)
 
 Cache in RAM **indipendenti** dalla cache HTTP del browser (`browserCacheEnabled`):

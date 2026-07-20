@@ -1,30 +1,28 @@
 # Continuous integration: runs the full test suite on every push to main and
 # on every pull request.
 #
-# Matrix: Node 18 / 20 / 22 / 24 (everything `engines: >=18` declares, plus
-# the next LTS) on ubuntu; Node 22 / 24 on windows; Node 20 / 22 / 24 on macOS.
+# Matrix: Node 20 / 22 / 24 (everything `engines: >=20` declares, plus the
+# next LTS) on ubuntu; Node 22 / 24 on windows; Node 20 / 22 / 24 on macOS.
 # All legs are blocking (macOS was informational for one run, seen green, then
 # promoted).
 #
-# Why Node 18/20 are excluded on WINDOWS: the product code passes there (the
-# Windows Node 22/24 legs are green), but on Node 18/20 the test suite's
+# Why Node 20 is excluded on WINDOWS: the product code passes there (the
+# Windows Node 22/24 legs are green), but on Node 20 the test suite's
 # afterEach/afterAll `fs.rmSync(dir, { recursive: true })` teardown flakes with
 # EPERM/ENOTEMPTY — a lingering file handle (keep-alive socket holding a served
-# ReadStream) that Node 22+ releases in time and Node 18/20 do not. That is a
-# test-teardown quirk of old Node on Windows, not a middleware bug. Node 18/20
-# stay fully covered on Linux; Windows is covered on the two current stable
-# lines. Revisit if Node 18/20 Windows teardown is ever made deterministic.
+# ReadStream) that Node 22+ releases in time and Node 20 does not. That is a
+# test-teardown quirk of old Node on Windows, not a middleware bug. Node 20
+# stays fully covered on Linux; Windows is covered on the two current stable
+# lines. Revisit if Node 20 Windows teardown is ever made deterministic.
 #
 # Why macOS is worth adding: it exercises the `darwin` half of the
 # case-insensitive-FS boundary logic (index.cjs) — today only `win32` hits it —
 # and it runs the symlink-policy suites natively (Windows skips them for lack of
-# privileges). Node 18 is excluded on macOS too (covered on Linux); the macOS
-# rmSync teardown uses POSIX unlink semantics, so the Windows flakiness does not
-# apply.
+# privileges). The macOS rmSync teardown uses POSIX unlink semantics, so the
+# Windows flakiness does not apply.
 #
-# Lint runs in its own job (once, on Node 22): eslint 10 requires Node
-# >=20.19, so it cannot run inside the Node 18 leg of the matrix — and
-# linting the same code many times would be wasted work anyway.
+# Lint runs in its own job (once, on Node 22): linting the same code on every
+# matrix leg would be wasted work.
 #
 # performance.test.js is excluded from the matrix (its timing assertions —
 # avg < 50/100/500 ms — are flaky on shared runners) and runs in a separate
@@ -78,16 +76,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [18, 20, 22, 24]
+        node: [20, 22, 24]
         os: [ubuntu-latest, windows-latest, macos-latest]
         exclude:
           # Test-teardown flakiness on old Node + Windows (see header comment);
           # product coverage on Windows is provided by the Node 22/24 legs.
-          - { os: windows-latest, node: 18 }
           - { os: windows-latest, node: 20 }
-          # Node 18 on macOS: covered on Linux; keep the macOS matrix to the
-          # active/maintenance LTS lines plus current.
-          - { os: macos-latest, node: 18 }
 
     steps:
       - name: Checkout code

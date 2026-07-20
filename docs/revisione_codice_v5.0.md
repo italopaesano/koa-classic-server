@@ -54,6 +54,20 @@ stream produce ECONNRESET, mai la pagina 500). **Entrambe risolte il
 descriptor — dettagli nelle rispettive voci). Le verifiche senza azione
 sono registrate in fondo, sotto *Verifiche della seconda passata*.
 
+**Terza passata (2026-07-20) — revisione completa da sessione separata.**
+Rilettura integrale di `index.cjs` (3287 righe) con verifica sul codice di tutti
+i registri precedenti (v3.1 / v4.3 / v5.0 #1–#5): tutti confermati implementati
+come descritto. Baseline verde (60 suite / 1249 test, lint pulito, coverage
+98.46% stmts / 98.34% branch / 99% funcs / 98.49% lines, sopra soglia). Emerge
+**una sola voce nuova, #6** (minore, conformità): `Accept-Ranges: bytes` è
+annunciato anche sulle risposte compresse, ma un Range su quella URL è servito
+dalla rappresentazione identity — sicuro per i client conformi e per chi usa
+`If-Range`, ma divergente da nginx. **Chiusa come wontfix documentato (opzione A)**
+il 2026-07-20: nessuna modifica al codice; comportamento documentato in
+`docs/DOCUMENTATION.md` (sottosezione *"Richieste Range e `If-Range`"*), coerente
+con la chiusura del #2. Nessun altro problema di correttezza, disponibilità o
+integrità rilevato.
+
 ---
 
 ## Indice / Checklist
@@ -68,6 +82,9 @@ sono registrate in fondo, sotto *Verifiche della seconda passata*.
 ### Seconda passata (2026-07-20) — focus Koa ≥ 3 / Node ≥ 20
 - [x] [4. `package-lock.json` non rigenerato dopo il bump dei requisiti V5 (dichiara ancora `node >=18` e `koa ^2.16.4 || >=3.1.2`)](#4-package-lockjson-non-rigenerato-dopo-il-bump-dei-requisiti-v5-dichiara-ancora-node-18-e-koa-2164--312) — **RISOLTO** (lock rigenerato con `npm install --package-lock-only`; solo i due campi root, nessuna nuova entry; allineata anche la tabella in `security_improvement_for_V3.md`)
 - [x] [5. Su Koa 3 la pagina 500 dei gestori stream-error è irraggiungibile: errore in apertura dello stream → ECONNRESET al client, log duplicato su stderr](#5-su-koa-3-la-pagina-500-dei-gestori-stream-error-è-irraggiungibile-errore-in-apertura-dello-stream--econnreset-al-client-log-duplicato-su-stderr) — **RISOLTO** (opzione A: pre-open via `fs.promises.open` + `fs.createReadStream(path, { fd })`; errore di apertura → 404 pulita con `errorPages` onorate; ramo morto `sendErrorPageSync` rimosso)
+
+### Terza passata (2026-07-20) — revisione completa (sessione separata)
+- [x] [6. `Accept-Ranges: bytes` annunciato sulle risposte compresse, mentre il Range è servito dalla rappresentazione identity](#6-accept-ranges-bytes-annunciato-sulle-risposte-compresse-mentre-il-range-è-servito-dalla-rappresentazione-identity) — **CHIUSO / WONTFIX** (opzione A: comportamento sicuro per i client conformi; nessuna modifica al codice; documentato in `docs/DOCUMENTATION.md`)
 
 ---
 
@@ -518,6 +535,81 @@ chiude: è un TOCTOU per costruzione.
 **Priorità:** Bassa-Media (coerenza + qualità dell'errore lato client in una
 race rara; nessun problema di integrità né di disponibilità — il socket viene
 chiuso subito).
+
+---
+
+## Terza passata (2026-07-20) — revisione completa (sessione separata)
+
+Rilettura integrale di `index.cjs` (3287 righe) da sessione pulita, con la lente
+della correttezza HTTP e del contenimento errori. Baseline: `test:ci` verde su
+Koa 3.2.1 / Node 22 (60 suite / 1249 test), lint pulito, coverage 98.46% stmts /
+98.34% branch / 99% funcs / 98.49% lines (sopra soglia). Confermate sul codice
+(non solo dalle checkbox) tutte le voci dei registri v3.1 (20), v4.3 (16) e v5.0
+(#1–#5): implementate come descritto. Nessun bug di correttezza, nessun residuo
+Koa-2 / Node-18, nessun marcatore `TODO/FIXME` pendente (l'unico `TODO` è il noto
+`[F-1]` sulla `readdir` non limitata, già tracciato). Emerge **una sola voce
+nuova**, minore.
+
+### 6. `Accept-Ranges: bytes` annunciato sulle risposte compresse, mentre il Range è servito dalla rappresentazione identity
+
+**Stato: 🚫 CHIUSO — WONTFIX consapevole** (2026-07-20 — **opzione A** decisa dal
+manutentore: nessuna modifica al codice; comportamento documentato). I Range
+restano serviti dalla rappresentazione **identity** e `Accept-Ranges: bytes` resta
+annunciato su ogni risposta file, comprese quelle compresse. Documentazione: nuovo
+paragrafo nella sottosezione *"Richieste Range e `If-Range`"* di
+`docs/DOCUMENTATION.md` (accanto alla nota del #2). Nessun test aggiunto (nessun
+cambiamento di comportamento; l'esito è già coperto dal probe di revisione).
+
+**Posizione:** `index.cjs:2468` (`ctx.set('Accept-Ranges', 'bytes')`, impostato
+**incondizionatamente** su ogni risposta file, prima che l'encoding sia risolto
+alle righe 2512-2522); ramo Range `index.cjs:2581-2638` (la compressione è
+**saltata** per i Range: un `206` serve sempre byte identity con `baseEtag`).
+
+**Problema:** una risposta `200` compressa dichiara `Accept-Ranges: bytes` ma il
+suo `Content-Length` è la dimensione **compressa**, mentre una richiesta Range su
+quella stessa URL viene servita dalla rappresentazione **identity** (dimensione
+diversa). Un client che riprende il download della rappresentazione compressa via
+byte-range **senza `If-Range`** riceve quindi byte identity — un cambio di
+rappresentazione a metà trasferimento.
+
+**Riproduzione (verificata a runtime, Koa 3.2.1 / Node 22):** file compressibile
+da 10001 byte, `browserCacheEnabled: true`.
+
+| Richiesta | Esito osservato |
+|---|---|
+| `GET` + `Accept-Encoding: gzip` | `200` · `Content-Encoding: gzip` · **`Content-Length: 49`** (compresso) · `Accept-Ranges: bytes` · `ETag "…-gz"` |
+| `GET` + `Range: bytes=0-99` + `Accept-Encoding: gzip` (senza If-Range) | `206` · **nessun `Content-Encoding`** (identity) · `Content-Range: bytes 0-99/10001` (dimensione identity) · `Content-Length: 100` · `ETag "…-10001"` (baseEtag) |
+| stessa Range + `If-Range: "…-gz"` (l'ETag ricevuto) | `200` pieno ri-compresso — **degrado sicuro** |
+
+**Perché non è un bug di integrità:** un client che onora `Content-Encoding` lo
+rileva senza corrompere nulla — la `206` **non** porta `Content-Encoding` (quindi
+è identity) e il denominatore del suo `Content-Range` (10001) è diverso dal
+`Content-Length` della `200` (49); i client di resume ben educati inviano
+`If-Range` e ottengono un `200` pieno. È una **divergenza da nginx**, che quando
+comprime al volo **non** annuncia `Accept-Ranges`. Il framing è identico al #2
+(una lacuna di conformità su Range/validatori, chiusa lì come wontfix-documentato).
+
+**Sotto-nota (cosmetica):** il `206` identity eredita anche `Vary: Accept-Encoding`
+dal ramo `potentiallyCompressible` (impostato a `index.cjs:2534-2538`, prima del
+ramo Range). È un over-vary innocuo — una shared cache lo indicizza per
+`Accept-Encoding` pur essendo sempre identity: costa un cache-miss in più, mai una
+risposta scorretta.
+
+**Opzioni (per contesto storico):**
+- **A — wontfix documentato (scelta adottata, coerente col #2):** i Range in
+  identity sono un comportamento legittimo e sicuro per i client conformi; una
+  sottosezione in `docs/DOCUMENTATION.md` che dichiari esplicitamente che i Range
+  sono serviti dalla rappresentazione identity e che `Accept-Ranges: bytes` resta
+  annunciato anche sulle risposte compresse. Costo zero, nessun test.
+- **B — allineare a nginx:** omettere `Accept-Ranges: bytes` quando la risposta
+  effettiva porta `Content-Encoding` (spostare/condizionare il set di
+  `index.cjs:2468` dopo la risoluzione dell'encoding, così le risposte identity —
+  inclusi i client senza gzip, i `304` e i `206` — continuano ad annunciarlo).
+  Chiude la finestra alla radice; costo: un piccolo riordino + un test.
+
+**Priorità:** Bassa (conformità/coerenza; nessuno scenario in cui la risposta
+servita sia scorretta — i client conformi distinguono le due rappresentazioni, i
+client di resume usano `If-Range`).
 
 ---
 

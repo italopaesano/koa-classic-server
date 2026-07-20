@@ -12,6 +12,30 @@ The declared positioning (since the earliest versions): behavior **similar, but 
 
 The project is **not** a framework, not a router, not a CMS. It is intentionally focused.
 
+Current version: **5.0.0** (see `docs/CHANGELOG.md`). Peer-depends on `koa` (`>=3.1.2` — Koa 2 support was dropped in 5.0.0); the only runtime dependency is `mime-types`. Requires Node `>=20`.
+
+---
+
+## Codebase structure
+
+The entire middleware lives in **one file**: `index.cjs` (~3200 lines). This is deliberate — a single-file, zero-heavy-dependency module is easy to audit and vendor. Do not split it into modules without a strong structural reason.
+
+Layout of `index.cjs`:
+
+- **Module-level constants & helpers (top ~760 lines)** — pure, testable functions declared before the factory: `normalizeExtSuffix`, `escapeHtml`, `toWellFormedName` (lone-surrogate totality), `listingDisplayName` (bidi-control scrubbing), `buildContentDisposition`, `formatSize`, `getDirentType`, `parseRangeHeader`, `ifNoneMatchSatisfied`, the `LFUCache` class, `singleFlight`, `refreshOrInsert`, and the error-page/CSP builders. The directory-listing CSS (`LISTING_CSS`) and its CSP hash (`_listingCssHash`) are also computed here at load time.
+- **The factory `module.exports = function koaClassicServer(rootDir, opts)` (from ~line 766)** — the single public entry point. Its second parameter carries a large inline `opts STRUCTURE` comment block (starts ~line 769) that is the **canonical documentation of every option and its default**. Validation/throw-guards run at the top; the returned `async (ctx, next) => {}` is the Koa middleware.
+- **`module.exports._internals` (bottom, ~line 3205)** — a curated export of pure helpers (`LFUCache`, `parseRangeHeader`, `formatSize`, `toWellFormedName`, `writeErrorPage`, …) exposed **only for unit tests** that cannot be driven through HTTP fixtures (e.g. lone-surrogate filenames that POSIX can't create). Not part of the public API.
+
+Other source files:
+
+- **`index.mjs`** — a two-line ESM re-export wrapper (`import koaClassicServer from './index.cjs'`). Keeps the package usable from both `require` and `import` via the `exports` map in `package.json`.
+
+Directories:
+
+- **`__tests__/`** — 61 `*.test.js` files, ~1450 test cases. Also holds benchmark scripts (`benchmark.js`, `setup-benchmark.js`), saved benchmark baselines (`benchmark-results-*.txt`), and fixture dirs (`compression-fixtures/`, `hidden-fixtures/`, `range-fixtures/`, `server-cache-fixtures/`, `publicWwwTest/`, `customTest/`).
+- **`docs/`** — all long-form documentation (see **Key references** below). Includes `template-engine/` with the template-engine integration guide and examples.
+- **`.github/`** — CI workflows.
+
 ---
 
 ## Design philosophy: HTTP file server first
@@ -90,18 +114,42 @@ When proposing a new feature, ask: *"does this change the default observable beh
 - **`docs/revisione_codice_v5.0.md`** — **active** open-findings register from the 2026-07-19 full code review (in Italian). Each finding has a checkbox in its index: tick it (`[x]`) when the item is resolved or consciously closed. Check this file before starting fix work — it holds the agreed problem list, code locations, and proposed fixes.
 - **`docs/revisione_codice_v4.3.md`** — previous register (2026-07-14 review); all 16 findings resolved. Kept for history.
 - **`docs/revisione_codice_v3.1.md`** — earlier register (2026-07-03 review); all 20 findings resolved. Kept for history.
-- **`__tests__/`** — 800+ tests asserting behavior contracts. Run with `npm test`; `npm run test:coverage` also enforces the coverage thresholds in `jest.config.js`.
+- **`__tests__/`** — 61 test files, ~1450 test cases asserting behavior contracts. See **Development workflows** below.
+
+---
+
+## Development workflows
+
+All commands run from the repo root; there is no build step (the package ships `index.cjs` / `index.mjs` as-is).
+
+| Command | Purpose |
+|---|---|
+| `npm test` | Full Jest suite. `pretest` runs `npm run lint` first, so a lint error fails the test run. |
+| `npm run test:ci` | Suite minus the performance tests (`--testPathIgnorePatterns=performance`). |
+| `npm run test:coverage` | Coverage run; enforces the thresholds in `jest.config.js` (~97% stmts / 94% branch / 99% funcs / 97.5% lines on `index.cjs`). A regression that deletes or bypasses tests fails loudly here. |
+| `npm run test:security` | Just `__tests__/security.test.js`. |
+| `npm run test:performance` | Performance tests, `--runInBand`. |
+| `npm run lint` | ESLint over `index.cjs` and `index.mjs` (flat config in `eslint.config.mjs`). |
+| `npm run benchmark` / `benchmark:save` | Autocannon-based throughput benchmark; `:save` writes a baseline. `benchmark:setup` generates fixtures. |
+
+Notes:
+
+- `index.mjs` reports 0% coverage in the aggregate because `__tests__/esm-export.test.js` exercises it in a **child** Node process (Jest's CJS transform can't load real ESM in-process); Istanbul can't see it. This is expected — its ~2 statements are noise.
+- Tests are written with `supertest` over a `Koa` app instantiated per `describe` block.
+- The typical fix workflow: pick a finding from the active review register, locate it in `index.cjs`, add/adjust a `*.test.js` asserting the contract, implement, run `npm test`, then tick the register checkbox and note the resolution in `docs/CHANGELOG.md`.
 
 ---
 
 ## Working conventions
 
-- All defaults are documented in the JSDoc-style block at the top of the factory function in `index.cjs` (~line 480). When you change a default, update that block.
-- Validation errors throw at factory time with a helpful migration hint. See existing throw guards for `cacheMaxAge`, `enableCaching`, `maxDirEntries`, `pageSize`, `compression.minSize`.
+- All defaults are documented in the inline `opts STRUCTURE` comment block inside the factory signature in `index.cjs` (starts ~line 769). When you change a default, update that block — it is the canonical option reference the rest of the docs mirror.
+- Validation errors throw at factory time with a helpful migration hint. See existing throw guards for `cacheMaxAge`, `enableCaching`, `maxDirEntries`, `pageSize`, `compression.minSize`, `hideExtension.redirect` (must be one of `300, 301, 302, 303, 305, 307, 308` — `_VALID_REDIRECT_CODES`), and the `compression.buffered`/`compression.streaming` quality groups.
+- Extension options (`template.ext`, `hideExtension.ext`) share one normalizer, `normalizeExtSuffix`: the leading dot is optional (`'.ejs'` ≡ `'ejs'`, `'.ejs'` preferred), matching is by suffix (compound extensions like `'.html.ejs'` work), and un-nameable entries are dropped with a one-time deprecation warning.
 - Tests use `supertest` over a `Koa` app instantiated per `describe` block.
 - The CSP hash for the directory-listing inline CSS is computed once at module load (`_listingCssHash`) — editing the listing CSS automatically refreshes the hash. Tests that asserted the hash must compute it from the actual `<style>` block in the response, not hardcode it.
-- Once-per-process warnings use a module-level boolean flag (see `_showDirContentsDeprecationWarned` for the canonical pattern).
+- Once-per-process warnings use a module-level boolean flag (see `_showDirContentsDeprecationWarned` for the canonical pattern). For **config deprecations** that should fire once per distinct message, use `warnConfigDeprecation(logger, msg)`, which dedupes via the module-level `_configDeprecationsWarned` Set. Existing warn-level deprecations are kept as warnings through 5.x; the plan is to promote them to factory-time throws in **6.0.0**.
 - Logger calls use `warnPayload(_logger, msg)` so that structured loggers (pino/winston) receive plain text and `console` receives ANSI colors.
+- Pure helpers that can't be exercised through HTTP fixtures are exported on `module.exports._internals` for unit tests only (see `__tests__/internals-unit.test.js`). This is a test seam, not public API — don't document it for operators.
 
 ---
 

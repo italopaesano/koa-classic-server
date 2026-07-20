@@ -14,11 +14,12 @@ affrontata e risolta (o consapevolmente chiusa come "wontfix", annotandolo nella
 
 **Esito complessivo:** il codice è in ottimo stato. Le 16 voci del registro v4.3 e
 le 20 del registro v3.1 risultano effettivamente implementate come descritto
-(verificato leggendo il codice, non solo le checkbox). I due punti sotto sono
-**minori** e, per entrambi, la decisione se intervenire spetta al manutentore:
-non sono bug di correttezza — il comportamento servito non è mai *sbagliato*, è
-solo sub-ottimale o non uniforme rispetto a una decisione già presa altrove nel
-codice.
+(verificato leggendo il codice, non solo le checkbox). I due punti emersi sono
+**minori** — nessuno dei due è un bug di correttezza: il comportamento servito non
+è mai *sbagliato*, solo sub-ottimale o non uniforme rispetto a una decisione già
+presa altrove nel codice. Entrambi sono ora chiusi: il **#1** risolto (opzione A —
+`no-store` su ogni error page), il **#2** chiuso come **wontfix documentato**
+(opzione A — solo validatore forte per `If-Range`, degrado sicuro al 200).
 
 ---
 
@@ -26,7 +27,7 @@ codice.
 
 ### Minori / conformità / coerenza
 - [x] [1. Le pagine d'errore 404 escono senza alcun `Cache-Control` (heuristic caching di un 404)](#1-le-pagine-derrore-404-escono-senza-alcun-cache-control-heuristic-caching-di-un-404) — **RISOLTO** (opzione A: `no-store` su ogni error page, non solo ≥ 500)
-- [ ] [2. `If-Range` in forma data non onorato → 200 pieno invece di 206](#2-if-range-in-forma-data-non-onorato--200-pieno-invece-di-206)
+- [x] [2. `If-Range` in forma data non onorato → 200 pieno invece di 206](#2-if-range-in-forma-data-non-onorato--200-pieno-invece-di-206) — **CHIUSO / WONTFIX** (opzione A: solo validatore forte per `If-Range`; degrado sicuro al 200; documentato)
 
 ---
 
@@ -113,9 +114,23 @@ applica freshness euristica ai 404; nessuna rottura diretta).
 
 ### 2. `If-Range` in forma data non onorato → 200 pieno invece di 206
 
-**Stato: 🔍 APERTO** — probabile wontfix consapevole (vedi sotto).
+**Stato: 🚫 CHIUSO — WONTFIX consapevole** (2026-07-19 — **opzione A** decisa dal
+manutentore: nessuna modifica al codice; comportamento documentato). `If-Range`
+resta un confronto **strong ed esatto con l'entity-tag base**; la forma HTTP-date
+non viene onorata e la richiesta degrada in sicurezza al `200` con l'intero file
+(risposta sempre corretta a una richiesta Range, RFC 9110 §14.2). Motivazione della
+scelta: una data ha risoluzione al secondo e **non** distingue due modifiche nello
+stesso secondo, mentre l'ETag `mtime-size` è un validatore forte per costruzione —
+onorare la forma data riaprirebbe (in modo stretto ma reale) la finestra in cui un
+`206` incollerebbe byte di due versioni diverse, esattamente il rischio che l'ETag
+forte chiude (coerente col v4.3 #3). I client che riprendono un download e ricevono
+l'ETag (cioè con `browserCacheEnabled: true`) usano già la forma entity-tag, che è
+pienamente supportata; la forma data è un fallback che qui costa un re-download
+completo, mai dati incoerenti. Documentazione: nuova sottosezione *"Richieste Range
+e `If-Range`"* in `docs/DOCUMENTATION.md`. Nessun test aggiunto (nessun cambiamento
+di comportamento; il 200 sulla forma data è già coperto dal probe di revisione).
 
-**Posizione:** `index.cjs:2557-2558` (`const ifRange = ctx.get('If-Range'); if (!ifRange || ifRange === baseEtag)`).
+**Posizione:** `index.cjs:2565` (`const ifRange = ctx.get('If-Range'); if (!ifRange || ifRange === baseEtag)`), fall-through a `index.cjs:2600`.
 
 **Problema:** RFC 9110 §13.1.5 ammette per `If-Range` **due** forme: un entity-tag
 (confronto *strong*) **oppure** un HTTP-date. Il codice confronta `If-Range`

@@ -1053,6 +1053,30 @@ app.use(koaClassicServer(root, { compression: false }));
 | `compression.streaming.brotliQuality` | `Number` | `4` | Qualità brotli del percorso streaming (intero 0–11) |
 | `compression.streaming.gzipLevel` | `Number` | `6` | Livello gzip del percorso streaming (intero 0–9) |
 
+### Richieste Range e `If-Range`
+
+Il middleware supporta le richieste `Range` a singolo intervallo (`Range: bytes=…`) e risponde
+`206 Partial Content` con `Accept-Ranges: bytes`, `Content-Range` e `Content-Length` del solo
+tratto richiesto; una spec fuori scala dà `416`, una malformata è ignorata (→ `200` intero, come
+da RFC 9110 §14.2). Le risposte Range sono sempre **identity** — la compressione è saltata per
+i range — quindi la `206` porta l'`ETag` *base* (senza suffisso `-br`/`-gz`), non quello
+encoding-specifico.
+
+**`If-Range` — solo validatore forte (entity-tag).** Alla ripresa di un download parziale,
+`If-Range` decide se servire il range (risorsa invariata → `206`) o l'intero file (risorsa
+cambiata → `200`). La RFC 9110 §13.1.5 ammette due forme di valore: **entity-tag** oppure
+**HTTP-date**. Il middleware onora **solo la forma entity-tag**, confrontata in modo *strong*
+ed esatto con l'ETag base della rappresentazione (`"<mtime>-<size>"`). Un `If-Range` in forma
+**data** non viene onorato: la richiesta degrada in sicurezza a un `200` con l'intero file
+(risposta sempre corretta a una richiesta Range). È una scelta di progetto **deliberata e
+conservativa** (registro `revisione_codice_v5.0.md` #2): una data ha risoluzione al secondo e
+non distingue due modifiche avvenute nello stesso secondo, mentre l'ETag `mtime-size` è un
+validatore forte per costruzione — onorare la forma data riaprirebbe (in modo stretto ma reale)
+la finestra in cui un `206` incollerebbe byte di due versioni diverse. I client che riprendono
+un download e ricevono l'`ETag` (cioè con `browserCacheEnabled: true`) usano già la forma
+entity-tag, che è pienamente supportata; la forma data è un semplice fallback che qui si traduce
+in un re-download completo, mai in dati incoerenti.
+
 ### Cache lato server (`serverCache`)
 
 Cache in RAM **indipendenti** dalla cache HTTP del browser (`browserCacheEnabled`):

@@ -34,6 +34,24 @@ major non più target. Nella stessa release è stato tolto anche il supporto a
 **Node 18** (`engines.node: ">=20"`), permettendo di usare
 `String.prototype.toWellFormed()` senza fallback.
 
+**Seconda passata (2026-07-20) — focus sui nuovi requisiti V5 (Koa ≥ 3, Node ≥ 20).**
+Rilettura integrale di `index.cjs` con la lente del cambio di piattaforma:
+residui di compatibilità Koa 2 / Node 18 da rimuovere, comportamenti che
+cambiano su Koa 3, API Node 20 non sfruttate. Baseline: `npm run test:ci`
+verde su **Koa 3.2.1 / Node 22** (60 suite, 1243 test; la 61ª suite è
+`performance`, esclusa da `test:ci`). Esito: **nessuno shim Koa-2-specifico
+residuo nel codice** (il middleware è agnostico rispetto alla major del
+framework; i punti sensibili — restore del `Content-Length` sugli HEAD,
+`ctx.status` prima di `ctx.redirect()`, teardown degli stream — valgono
+identici su Koa 3, verificati sul sorgente 3.2.1 e a runtime); README,
+`docs/DOCUMENTATION.md`, CHANGELOG e matrice CI già allineati ai nuovi
+requisiti. Emergono due nuove voci: **#4** (artefatti di release non
+rigenerati dopo il bump: `package-lock.json` dichiara ancora i vincoli
+pre-V5) e **#5** (su Koa 3 il ramo `sendErrorPageSync(ctx, 500)` dei gestori
+di stream-error è irraggiungibile lato client: un errore in apertura dello
+stream produce ECONNRESET, mai la pagina 500). Le verifiche senza azione
+sono registrate in fondo, sotto *Verifiche della seconda passata*.
+
 ---
 
 ## Indice / Checklist
@@ -44,6 +62,10 @@ major non più target. Nella stessa release è stato tolto anche il supporto a
 
 ### Robustezza / disponibilità
 - [x] [3. Errore di un body-stream dopo l'invio degli header → socket mai chiuso, client appeso fino a `requestTimeout` (5 min)](#3-errore-di-un-body-stream-dopo-linvio-degli-header--socket-mai-chiuso-client-appeso-fino-a-requesttimeout-5-min) — **RISOLTO** togliendo il supporto a Koa 2 in v5.0.0 (era specifico di Koa 2; Koa 3 chiude il socket via `Stream.pipeline`)
+
+### Seconda passata (2026-07-20) — focus Koa ≥ 3 / Node ≥ 20
+- [ ] [4. `package-lock.json` non rigenerato dopo il bump dei requisiti V5 (dichiara ancora `node >=18` e `koa ^2.16.4 || >=3.1.2`)](#4-package-lockjson-non-rigenerato-dopo-il-bump-dei-requisiti-v5-dichiara-ancora-node-18-e-koa-2164--312)
+- [ ] [5. Su Koa 3 la pagina 500 dei gestori stream-error è irraggiungibile: errore in apertura dello stream → ECONNRESET al client, log duplicato su stderr](#5-su-koa-3-la-pagina-500-dei-gestori-stream-error-è-irraggiungibile-errore-in-apertura-dello-stream--econnreset-al-client-log-duplicato-su-stderr)
 
 ---
 
@@ -322,6 +344,127 @@ rischio, ricalca un pattern già presente nel codice, e innocuo su Koa 3).
 
 ---
 
+## Seconda passata (2026-07-20) — focus Koa ≥ 3 / Node ≥ 20
+
+### 4. `package-lock.json` non rigenerato dopo il bump dei requisiti V5 (dichiara ancora `node >=18` e `koa ^2.16.4 || >=3.1.2`)
+
+**Stato: ⬜ APERTO**
+
+**Posizione:** `package-lock.json:23` (`"node": ">=18"`) e `package-lock.json:26`
+(`"koa": "^2.16.4 || >=3.1.2"`), nella entry root `packages[""]`. Correlato:
+`docs/security_improvement_for_V3.md:114`, la cui tabella delle dipendenze
+riporta ancora il range peer pre-V5 (`koa ^2.16.4 || >=3.1.2`).
+
+**Problema:** il commit `892fecb` (v5.0.0) ha aggiornato `engines.node` a
+`">=20"` e `peerDependencies.koa` a `">=3.1.2"` in `package.json`, ma il
+lockfile non è stato rigenerato: la sua entry root fotografa ancora i vincoli
+di v4.x. Verificato che **`npm ci` oggi non fallisce** (npm 10 non valida
+engines/peerDependencies della entry root contro `package.json`), quindi non
+c'è rottura funzionale — ma:
+
+- il lockfile **mente** sui vincoli della piattaforma a chiunque lo legga
+  (umani e tooling: auditor di supply-chain, Dependabot/Renovate, `npm query`);
+- il primo `npm install` per qualunque altra ragione riscriverà quelle righe,
+  producendo un **diff spurio** dentro un PR che non c'entra nulla — lo stesso
+  tipo di drift documentale che il progetto ha già scelto di prevenire altrove
+  (cfr. il mismatch `maxEntries` 10000/100000 citato in CLAUDE.md).
+
+**Fix proposto:** rigenerare il lock (`npm install --package-lock-only`, poi
+verifica `npm ci` + `npm run test:ci`) e allineare la riga della tabella in
+`docs/security_improvement_for_V3.md` (annotandola come aggiornata in v5.0.0 —
+il documento è storico ma è ancora referenziato da CLAUDE.md per il Future
+Work `[F-1]`). I documenti di lavoro `docs/prompt_migrazione_jest_node_test.md`
+e `docs/prompt_analisi_item_di_processo.md` citano ancora la matrice CI con
+Node 18: sono snapshot di pianificazione, nessuna azione richiesta, ma chi li
+riprende in mano deve sapere che la domanda aperta sul "leg Node 18" è stata
+chiusa da v5.0.0 (leg rimosso, commit `a0e2904`).
+
+**Priorità:** Bassa (igiene di release; nessun impatto runtime) — ma da fare
+**prima del publish** di 5.0.0, perché il tarball/repo taggato non deve uscire
+con un lockfile che contraddice `package.json`.
+
+---
+
+### 5. Su Koa 3 la pagina 500 dei gestori stream-error è irraggiungibile: errore in apertura dello stream → ECONNRESET al client, log duplicato su stderr
+
+**Stato: ⬜ APERTO**
+
+**Posizione (i 5 gestori condividono lo stesso pattern
+`if (!ctx.headerSent) sendErrorPageSync(ctx, 500)`):**
+- `streamCompressedBody` — callback di `pipeline` (`index.cjs:1936`);
+- ramo **206 Range** identity (`index.cjs:2585`);
+- **tee leader** compresso — callback di `pipeline` (`index.cjs:2715`);
+- fallback **identity post-errore-compressione** (`index.cjs:2770`);
+- ramo **identity non compresso** (`index.cjs:2822`).
+
+**Problema:** su Koa 3 quel ramo non può più produrre una 500 visibile al
+client, in **nessuna** finestra temporale:
+
+- se lo stream fallisce **dopo** l'invio degli header, la guardia è falsa e
+  `Stream.pipeline` di Koa 3 abbatte il socket (esito corretto — è la
+  risoluzione del #3);
+- se lo stream fallisce **prima di produrre il primo byte** (errore in
+  apertura: file sparito/`EACCES` tra il check e l'open, `EIO` all'open), la
+  guardia è vera e `sendErrorPageSync` scrive status/headers/body — ma a quel
+  punto `respond()` di Koa ha **già consumato** `ctx.body` (il middleware è
+  già ritornato: l'errore di open arriva dal threadpool su un tick successivo)
+  e ha già avviato `Stream.pipeline(stream, res, …)`. La pagina 500 scritta
+  non verrà mai spedita; `pipeline` distrugge `res` e il client riceve
+  **ECONNRESET** senza alcuna risposta HTTP.
+
+A differenza del #3 (che su Koa 2 era un hang, un problema reale di
+disponibilità), qui l'esito è "onesto" — connessione chiusa subito — ma
+**incoerente con il contratto interno del middleware** su tre punti:
+
+1. il ramo `!ctx.headerSent` è **codice morto** rispetto al client: dà
+   l'impressione (anche a chi legge) che un errore di apertura produca una 500
+   pulita, e non è così;
+2. `errorPages[500]` (pagina custom dell'operatore) **non viene mai servita**
+   da questi rami, silenziosamente;
+3. l'errore viene loggato **due volte su stderr dal default handler di Koa**
+   (via `ctx.onerror` → `app.emit('error')`), **fuori** dal `logger`
+   configurato — esattamente ciò che il catch di ultima istanza dichiara di
+   voler evitare ("logged outside the operator's logger"), oltre al log già
+   corretto emesso dal middleware stesso (`Stream error:` sul logger
+   dell'operatore).
+
+**Riproduzione (verificata a runtime, Koa 3.2.1 / Node 22):** file `.bin`
+(ramo identity), `fs.createReadStream` sostituito con uno stream che si
+distrugge con `EIO` prima del primo byte (equivale al file che sparisce tra
+`fs.promises.access` e l'open). Osservato sul client: **ECONNRESET**, nessuno
+status; `logger.error('Stream error:', …)` chiamato 1 volta (corretto); due
+stack `Error: EIO` addizionali su **stderr** dal default handler di Koa.
+
+**Nota:** il check `fs.promises.access(toOpen, R_OK)` (`index.cjs:2465`,
+commentato "race condition protection") restringe questa finestra ma non la
+chiude: è un TOCTOU per costruzione.
+
+**Opzioni:**
+- **A — pre-open del file descriptor (consigliata):** nei rami che oggi fanno
+  `fs.createReadStream(toOpen)`, aprire prima il file con
+  `await fs.promises.open(toOpen, 'r')` e assegnare come body
+  `handle.createReadStream()` (Node ≥ 16.11, ampiamente dentro `engines
+  >=20`). Gli errori di apertura diventano una rejection **prima**
+  dell'assegnazione del body → `sendErrorPage(ctx, 404/500)` regolare, con
+  pagina custom e header corretti. Chiude anche il TOCTOU: il check
+  `fs.promises.access` diventa superfluo (l'open **è** la prova di
+  leggibilità — un syscall in meno sul percorso caldo). Gli errori a metà
+  stream restano teardown via `pipeline` (comportamento voluto, #3). I rami
+  morti `sendErrorPageSync` si semplificano di conseguenza.
+- **B — wontfix documentato:** la finestra è stretta (richiede la sparizione
+  del file o un errore I/O esattamente tra stat/access e open) e l'esito
+  ECONNRESET è un segnale onesto. In tal caso, però, coerenza impone di
+  **rimuovere il ramo morto** `if (!ctx.headerSent) sendErrorPageSync(...)`
+  dai 5 gestori (lasciando il solo log) e di annotare qui e in
+  `DOCUMENTATION.md` (sezione errorPages) che le pagine 500 custom non
+  coprono i fallimenti degli stream.
+
+**Priorità:** Bassa-Media (coerenza + qualità dell'errore lato client in una
+race rara; nessun problema di integrità né di disponibilità — il socket viene
+chiuso subito).
+
+---
+
 ## Punti di forza rilevati (nessuna azione richiesta)
 
 Registrati per completezza della revisione:
@@ -360,3 +503,55 @@ Registrati per completezza della revisione:
   mirata di `template`/`hideExtension`); validazione a factory time con hint di
   migrazione; deprecazioni warn-ora/throw-in-6.0.0 coerenti.
 - Suite di 1249 test / 61 suite, lint pulito.
+
+---
+
+## Verifiche della seconda passata (2026-07-20) — nessuna azione richiesta
+
+Controlli mirati al cambio di piattaforma V5 (Koa ≥ 3.1.2, Node ≥ 20),
+eseguiti sul sorgente di **Koa 3.2.1** installato e a runtime dove indicato:
+
+- **Suite verde su Koa 3:** `npm run test:ci` → 60 suite / 1243 test passati
+  su Koa 3.2.1 + Node 22 (inclusa `robustness-misc.test.js:202`, che su Koa 2
+  si appendeva — conferma della risoluzione del #3 sulla piattaforma
+  supportata).
+- **Nessuno shim Koa-2 residuo:** il codice non contiene rami condizionati
+  alla versione di Koa; i pattern storicamente delicati valgono identici su
+  Koa 3, verificati sul sorgente 3.2.1: il restore del `Content-Length` dopo
+  `ctx.body = Buffer.alloc(0)` sugli HEAD resta necessario (il body setter
+  azzera la length anche in Koa 3, e `respond()` non la sovrascrive se già
+  presente: `!ctx.response.has('Content-Length')`); `ctx.status = code` prima
+  di `ctx.redirect()` resta il modo corretto di scegliere il codice
+  (`statuses.redirect[this.status]`); la distruzione automatica del vecchio
+  stream quando `ctx.body` viene riassegnato (su cui conta
+  `stripBodyForHead`) esiste ancora (`cleanupPreviousStream` nel body setter).
+- **`_VALID_REDIRECT_CODES` allineato a Koa 3:** `statuses.redirect` del
+  pacchetto `statuses` usato da Koa 3.2.1 è esattamente
+  {300, 301, 302, 303, 305, 307, 308} — il commento in `index.cjs:17-22`
+  resta accurato.
+- **Query parser Koa 3 (URLSearchParams):** Koa 3 ha sostituito
+  `querystring` con un parser basato su `URLSearchParams`
+  (`koa/lib/search-params.js`), ma i parametri ripetuti (`?sort=a&sort=b`)
+  arrivano ancora come **array** (`getAll`) — la guardia `firstQueryValue`
+  del listing (v4.3 #12) resta necessaria e corretta. `?sort` senza valore →
+  `''` → fallback a `name`, come prima.
+- **`Readable.from(rawBuffer)`:** semantica confermata su Node ≥ 20 — un
+  Buffer non viene iterato byte-per-byte ma emesso come singolo chunk
+  (comportamento documentato di `stream.Readable.from`).
+- **`String.prototype.toWellFormed()` nativo senza fallback** (`index.cjs:406`)
+  — coerente con `engines >=20`; `Buffer.subarray` già usato al posto del
+  deprecato `Buffer.slice` (DEP0158).
+- **Documentazione allineata:** README (badge `koa >=3.1.2`, riga "Requires
+  Node ≥ 20 and Koa ≥ 3.1.2"), `docs/DOCUMENTATION.md` (sezione Requisiti),
+  CHANGELOG (⚠️ Breaking Changes v5.0.0) e matrice CI (Node 20/22/24, niente
+  18) sono coerenti con `package.json`. Unica eccezione: il lockfile e una
+  riga di `security_improvement_for_V3.md` → voce **#4**.
+- **Modernizzazioni Node 20 valutate e NON adottate** (nessun beneficio
+  funzionale, solo churn): prefisso `node:` sugli import core e rimozione del
+  ridondante `const { URL } = require('url')` (la classe `URL` è globale) —
+  cosmetici, eventualmente da accorpare a un futuro intervento sul file;
+  `AbortSignal.any()` / `AbortSignal.timeout()` semplificherebbero
+  `tryRenderTemplate`, ma richiedono Node ≥ 20.3 — non adottabili finché
+  `engines` dichiara `>=20` senza patch minima (alzare il floor per un
+  refactor cosmetico non vale il breaking); `Array.prototype.toSorted` non
+  porta nulla rispetto agli usi attuali di `.sort()` su array già effimeri.

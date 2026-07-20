@@ -301,15 +301,6 @@ describe('Adversarial filenames — full-input-space serving contract', () => {
             expect(toWellFormedName('plain.txt')).toBe('plain.txt');
         });
 
-        test('the Node 18 regex fallback behaves like toWellFormed()', () => {
-            // Shadow the native method with an own property so the replace
-            // path runs; String.prototype.replace still works on the wrapper.
-            const wrap = (s) => Object.assign(Object(s), { toWellFormed: undefined });
-            expect(toWellFormedName(wrap('a\uD800b'))).toBe('a�b');
-            expect(toWellFormedName(wrap('👨‍👩‍👧‍👦.txt'))).toBe('👨‍👩‍👧‍👦.txt');
-            expect(toWellFormedName(wrap('x\uDC00\uD800y'))).toBe('x��y');
-        });
-
         test('buildContentDisposition never throws on a WTF-16 name', () => {
             const cd = buildContentDisposition('a\uD800b.txt');
             expect(cd).toContain('filename="a?b.txt"');

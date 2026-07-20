@@ -26,9 +26,13 @@ robustezza andava in timeout: un body-stream che fallisce **dopo** l'invio degli
 header lascia il socket aperto (client appeso fino a `requestTimeout`, 5 min). È
 l'unico dei tre con impatto non trascurabile (disponibilità / resource-leak, non
 integrità), ma è **specifico di Koa 2** — verificato a runtime che **Koa 3 non è
-affetto** (il suo `respond()` usa `Stream.pipeline`, che chiude il socket). Poiché
-il pacchetto supporta ufficialmente anche Koa 2.16.4+, resta un difetto reale per
-quegli utenti; confermato a runtime, aperto, in attesa di decisione sul fix.
+affetto** (il suo `respond()` usa `Stream.pipeline`, che chiude il socket).
+**Risolto** dalla decisione del manutentore di **togliere il supporto a Koa 2 in
+v5.0.0** (`peerDependencies.koa: ">=3.1.2"`): la classe di bug è eliminata alla
+radice sulla piattaforma supportata, senza portare una toppa per un framework
+major non più target. Nella stessa release è stato tolto anche il supporto a
+**Node 18** (`engines.node: ">=20"`), permettendo di usare
+`String.prototype.toWellFormed()` senza fallback.
 
 ---
 
@@ -39,7 +43,7 @@ quegli utenti; confermato a runtime, aperto, in attesa di decisione sul fix.
 - [x] [2. `If-Range` in forma data non onorato → 200 pieno invece di 206](#2-if-range-in-forma-data-non-onorato--200-pieno-invece-di-206) — **CHIUSO / WONTFIX** (opzione A: solo validatore forte per `If-Range`; degrado sicuro al 200; documentato)
 
 ### Robustezza / disponibilità
-- [ ] [3. Errore di un body-stream dopo l'invio degli header → socket mai chiuso, client appeso fino a `requestTimeout` (5 min)](#3-errore-di-un-body-stream-dopo-linvio-degli-header--socket-mai-chiuso-client-appeso-fino-a-requesttimeout-5-min) — **CONFERMATO, solo Koa 2** (Koa 3 chiude il socket via `Stream.pipeline`); fix in attesa di decisione
+- [x] [3. Errore di un body-stream dopo l'invio degli header → socket mai chiuso, client appeso fino a `requestTimeout` (5 min)](#3-errore-di-un-body-stream-dopo-linvio-degli-header--socket-mai-chiuso-client-appeso-fino-a-requesttimeout-5-min) — **RISOLTO** togliendo il supporto a Koa 2 in v5.0.0 (era specifico di Koa 2; Koa 3 chiude il socket via `Stream.pipeline`)
 
 ---
 
@@ -188,8 +192,24 @@ risposta sia scorretta).
 
 ### 3. Errore di un body-stream dopo l'invio degli header → socket mai chiuso, client appeso fino a `requestTimeout` (5 min)
 
-**Stato: 🔍 APERTO — CONFERMATO A RUNTIME** — decisione del manutentore sul fix
-(vedi "Opzioni" sotto).
+**Stato: ✅ RISOLTO** (2026-07-20 — **decisione del manutentore: togliere il
+supporto a Koa 2 in v5.0.0** anziché portare una toppa `ctx.res.destroy()`. Il
+problema era **specifico di Koa 2** (il suo `respond()` usa un bare
+`body.pipe(res)` che non chiude `res` sull'errore della sorgente); **Koa 3 non è
+affetto** perché usa `Stream.pipeline(stream, res, …)`, che distrugge la
+destinazione — verificato a runtime che il socket si chiude in ~59 ms su Koa 3
+contro l'hang su Koa 2. Con il `peerDependencies` ristretto a `koa: ">=3.1.2"` il
+ramo di codice appeso non è più raggiungibile su una piattaforma supportata,
+quindi la classe di bug è eliminata alla radice invece che mascherata da un
+workaround per un framework major non più target. `package.json` →
+`peerDependencies.koa: ">=3.1.2"`, sezione ⚠️ Breaking Changes nel CHANGELOG con
+guida di migrazione. Nessuna modifica al codice del middleware: l'API è
+invariata. Il test `robustness-misc.test.js:202`, che si appendeva 120 s su Koa 2,
+passa in ~2 s su Koa 3 — la piattaforma ora supportata. La sezione qui sotto
+resta come analisi/prova del problema.)
+
+**Nota storica (analisi che ha portato alla decisione):** confermato a runtime
+prima della scelta.
 
 **Provenienza:** emerso indagando (opzione B della discussione sul #1/#2) perché
 il test `__tests__/robustness-misc.test.js:202` *("readFile rejection →

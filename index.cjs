@@ -400,14 +400,11 @@ function escapeHtml(unsafe) {
 // (the decode guards already reject invalid encodings with a 400), but Windows
 // filenames are WTF-16 and readdir() can return them — one such name must not
 // turn the whole directory listing (or the file's Content-Disposition) into a
-// 500. Normalizes like String.prototype.toWellFormed() (Node >= 20); the
-// regex fallback covers Node 18 (engines: >=18). Well-formed strings —
+// 500. String.prototype.toWellFormed() (Node >= 20, the engines minimum since
+// v5.0.0) replaces every lone surrogate with U+FFFD. Well-formed strings —
 // including astral pairs like emoji — pass through unchanged.
-const _LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 function toWellFormedName(name) {
-    return typeof name.toWellFormed === 'function'
-        ? name.toWellFormed()
-        : name.replace(_LONE_SURROGATE_RE, '\uFFFD');
+    return name.toWellFormed();
 }
 
 // Explicit bidi control characters (embedding/override/isolate,

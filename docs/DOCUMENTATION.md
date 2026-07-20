@@ -93,7 +93,7 @@ Il middleware segue questo flusso per ogni richiesta HTTP:
 - **mime-types** (^2.1.35): Riconoscimento automatico MIME types
 
 #### Peer Dependencies
-- **koa** (^2.0.0 || >=3.1.2): Framework web minimale per Node.js
+- **koa** (>=3.1.2): Framework web minimale per Node.js (Koa 2 non è più supportato da v5.0.0)
 
 #### Development
 - **jest** (^30.2.0): Framework di testing
@@ -120,8 +120,8 @@ yarn add koa-classic-server
 
 ### Requisiti
 
-- **Node.js**: 12.20+ (raccomandato 14+)
-- **Koa**: 2.x
+- **Node.js**: 20+ (Node 18 non è più supportato da v5.0.0)
+- **Koa**: 3.x (>=3.1.2)
 
 ---
 

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ Breaking Changes
 
+- **Dropped Koa 2 support — the `koa` peerDependency is now `>=3.1.2`** (was `^2.16.4 || >=3.1.2`).
+  Koa 3 only. The trigger was `docs/revisione_codice_v5.0.md` #3: on Koa 2, a file read stream that
+  errors *after* the response headers are flushed leaves the socket open until `server.requestTimeout`
+  (5 min default), because Koa 2's `respond()` uses a bare `body.pipe(res)` that does not close `res`
+  on a source error. Koa 3's `respond()` uses `Stream.pipeline(stream, res, …)`, which tears the
+  socket down itself — so the hang cannot happen on Koa 3. Rather than carry a `ctx.res.destroy()`
+  workaround for a framework major we no longer target, Koa 2 is dropped. **Migration**: upgrade the
+  host app to Koa 3 (`npm install koa@^3`). The middleware's own API is unchanged; no code changes are
+  required beyond the Koa upgrade.
+- **Dropped Node.js 18 support — `engines.node` is now `>=20`** (was `>=18`). Node 20 is the oldest
+  maintained LTS line going forward. This lets `String.prototype.toWellFormed()` (Node 20+) be used
+  unconditionally for well-forming WTF-16 filenames; the Node-18 regex fallback in `toWellFormedName`
+  was removed as dead code. **Migration**: run on Node 20, 22, or 24.
 - **`hideExtension.redirect` now throws at factory time unless it is one of `300, 301, 302, 303, 305, 307, 308`** (the codes Koa emits as-is; `300`/`305` are exotic/deprecated but valid)
   (`docs/revisione_codice_v4.3.md` #9 — maintainer decision: hard validation in a major, option C).
   Until v4.x any number was accepted, with two silent failure modes at request time: an integer
@@ -38,6 +51,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw" with no signal. Behavior is unchanged (rendering disabled); a future major (target:
   6.0.0) will make it a startup error, together with the other pending config deprecations
   (maintainer decision: existing warn-level deprecations are kept as warnings through 5.x).
+
+### 🐛 Fixed — error pages are no longer heuristically cacheable
+
+- **Every generated error page now carries `Cache-Control: no-store`**, not just `5xx`
+  (`docs/revisione_codice_v5.0.md` #1). Previously `writeErrorPage` scrubbed any inherited
+  `Cache-Control` but re-set `no-store` only for status ≥ 500, so a **404 went out with no
+  caching directive at all**. A 404 is heuristically cacheable by default (RFC 9110 §15.1 /
+  RFC 7231 §6.1): behind a shared cache/CDN, a "not found" could keep being served after the
+  file was actually created. This was the one spot where the middleware left a caching
+  decision to a proxy's heuristic — the static-file branch (`browserCacheEnabled: false`)
+  and the directory listing already defeat it explicitly. `no-store` (rather than the
+  listing's `no-cache` trio) because an error page has nothing worth storing to revalidate
+  later. The minimal `400 Bad Request` reply is intentionally unchanged (stays header-light).
 
 ## [4.3.0] - 2026-07-14
 

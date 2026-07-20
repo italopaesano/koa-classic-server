@@ -7,7 +7,8 @@ traditional web server, but intentionally its own thing.
 [![npm version](https://img.shields.io/npm/v/koa-classic-server.svg)](https://www.npmjs.com/package/koa-classic-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-1239%20passing-brightgreen.svg)]()
-[![Node](https://img.shields.io/badge/node-%3E%3D18-blue.svg)]()
+[![Node](https://img.shields.io/badge/node-%3E%3D20-blue.svg)]()
+[![Koa](https://img.shields.io/badge/koa-%3E%3D3.1.2-blue.svg)]()
 
 One rule drives every default:
 
@@ -25,7 +26,7 @@ Hardening is opt-in.
 npm install koa-classic-server
 ```
 
-Requires **Node ≥ 18** and **Koa ≥ 2** (Koa 3 needs ≥ 3.1.2).
+Requires **Node ≥ 20** and **Koa ≥ 3.1.2**. (Koa 2 and Node 18 were supported through v4.x; both were dropped in v5.0.0.)
 
 ### Import
 

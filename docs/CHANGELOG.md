@@ -65,6 +65,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listing's `no-cache` trio) because an error page has nothing worth storing to revalidate
   later. The minimal `400 Bad Request` reply is intentionally unchanged (stays header-light).
 
+### 🐛 Fixed — open-time stream failures now produce a real 404 instead of a torn socket
+
+- **Every disk-streaming branch pre-opens the file before assigning the body**
+  (`docs/revisione_codice_v5.0.md` #5). Previously the body was a lazily-opening
+  `fs.createReadStream(path)`: if the open failed (file deleted after the `stat`, permissions
+  changed, I/O error at open — the residual TOCTOU window behind the `fs.access` probe), the
+  error fired only after Koa's `respond()` had taken ownership of the body. On Koa 3 the
+  stream-error handler's `sendErrorPageSync(ctx, 500)` could then never reach the client
+  (dead branch): `Stream.pipeline` tore the socket down, the client saw a bare **ECONNRESET**
+  with no HTTP response, custom `errorPages` were silently bypassed, and Koa's default handler
+  double-logged the error to stderr outside the operator's `logger`. Now `fs.promises.open()`
+  runs first and the stream reads from the already-open descriptor
+  (`fs.createReadStream(path, { fd })` — same seam, zero extra syscalls); an open failure is
+  answered with the regular **404 error page** (custom `errorPages[404]` honored,
+  stale `Content-Encoding`/`Content-Range`/validator headers scrubbed, `no-store`) while the
+  response is still fully writable. Affected branches: identity streaming, 206 Range,
+  streaming compression, the streamed-tee leader/followers, and the identity fallback after a
+  compression failure. Mid-flight errors (after bytes are on the wire) are unchanged by
+  design: Koa 3 tears the socket down — an honest truncation signal — and the middleware logs
+  on the operator's logger; the now-dead `sendErrorPageSync` write was removed from those
+  handlers (and the helper itself deleted). The `fs.access` readability probe is kept for the
+  branches that never open the file (compressed-cache hits, 304s, HEAD), so a file made
+  unreadable after caching does not keep being served from RAM.
+
+### 🔧 Housekeeping
+
+- **`package-lock.json` regenerated after the v5.0.0 requirement bump**
+  (`docs/revisione_codice_v5.0.md` #4): the lockfile's root entry still declared the v4.x
+  constraints (`engines.node: ">=18"`, `koa: "^2.16.4 || >=3.1.2"`). `npm ci` was unaffected
+  (npm does not validate those root fields), but the lock contradicted `package.json` and the
+  next unrelated `npm install` would have rewritten it as a spurious diff. No dependency
+  changes — only the two stale root fields. The stale peer-range line in
+  `docs/security_improvement_for_V3.md` (§PS-5) was aligned too.
+
 ## [4.3.0] - 2026-07-14
 
 Customization release: the compression qualities and the compressed cache's per-entry

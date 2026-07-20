@@ -314,11 +314,14 @@ describe('stream tee — a source read error never inserts an entry', () => {
         const server = app.listen();
         try {
             const { Readable } = require('stream');
-            jest.spyOn(fs, 'createReadStream').mockImplementationOnce(() =>
-                new Readable({
+            jest.spyOn(fs, 'createReadStream').mockImplementationOnce((p, opts) => {
+                // Close the middleware's pre-opened FileHandle (options.fd,
+                // v5.0 register #5) so the fake stream doesn't leak it.
+                if (opts && opts.fd && typeof opts.fd.close === 'function') opts.fd.close().catch(() => {});
+                return new Readable({
                     read() { this.destroy(new Error('forced read failure')); },
-                })
-            );
+                });
+            });
             // Koa 3 tears the socket down on mid-stream errors, so the client
             // may observe an exception rather than a 500 status.
             let surfaced = false;

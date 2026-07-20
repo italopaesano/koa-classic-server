@@ -111,7 +111,7 @@ Test di copertura: `__tests__/security-headers.test.js`.
 | Pacchetto | Tipo | Note |
 |---|---|---|
 | `mime-types ^3.0.2` | Runtime | Unica dipendenza runtime |
-| `koa ^2.16.4 \|\| >=3.1.2` | Peer | Sicurezza dipende dalla versione scelta dall'utente |
+| `koa >=3.1.2` | Peer | Aggiornato in v5.0.0 (Koa 2 non più supportato); sicurezza dipende dalla versione scelta dall'utente |
 | `jest`, `supertest`, `eslint`, `ejs`, `autocannon`, `inquirer` | Dev only | Non impattano il bundle di produzione |
 
 Superficie d'attacco della supply chain: **molto ridotta**.

@@ -167,12 +167,16 @@ function preHeadersBrokenStream() {
 function mockReadStreamOnce(factory) {
     const original = fs.createReadStream;
     let used = false;
-    return jest.spyOn(fs, 'createReadStream').mockImplementation((p, ...args) => {
+    return jest.spyOn(fs, 'createReadStream').mockImplementation((p, opts, ...args) => {
         if (!used) {
             used = true;
+            // The middleware pre-opens the file and passes the FileHandle as
+            // options.fd (v5.0 register #5): close it when substituting a fake
+            // stream, or the leaked descriptor would keep the fixture open.
+            if (opts && opts.fd && typeof opts.fd.close === 'function') opts.fd.close().catch(() => {});
             return factory();
         }
-        return original.call(fs, p, ...args);
+        return original.call(fs, p, opts, ...args);
     });
 }
 

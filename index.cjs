@@ -1867,12 +1867,35 @@ module.exports = function koaClassicServer(
         writeErrorPage(ctx, status, await getCustomErrorPage(status), builtinHtml);
     }
 
-    // Sync variant for stream-error callbacks, where no await is possible: serves
-    // the last-loaded custom buffer without the freshness stat — an acceptable
-    // trade for a branch that only fires when the disk fails mid-response.
-    function sendErrorPageSync(ctx, status) {
-        const entry = _errorPages.get(status);
-        writeErrorPage(ctx, status, entry ? entry.buffer : null, _BUILTIN_ERROR_HTML[status]);
+    // Pre-opens `filePath` and returns a ReadStream reading from the already-open
+    // descriptor, or null after writing the 404 error page when the open fails.
+    // Rationale (v5.0 register #5): assigning a lazily-opening
+    // fs.createReadStream(path) to ctx.body means an open-time failure (file
+    // vanished after the stat, EACCES, EIO at open) fires only AFTER Koa's
+    // respond() has taken ownership of the body — the error page written by a
+    // stream-error handler can never be sent, Stream.pipeline tears the socket
+    // down, and the client sees a bare ECONNRESET. Opening HERE, while the
+    // response is still fully ours, turns that race into a clean 404 (matching
+    // the access-check contract: "unreadable" is indistinguishable from "not
+    // found"). The path is still passed to fs.createReadStream — Node ignores it
+    // when `fd` is set — so path-based instrumentation keeps working.
+    async function openBodyStream(ctx, filePath, streamOpts) {
+        let handle;
+        try {
+            handle = await fs.promises.open(filePath, 'r');
+        } catch (err) {
+            _logger.error('File open error:', err);
+            await sendErrorPage(ctx, 404);
+            return null;
+        }
+        try {
+            // autoClose (default true) closes the FileHandle when the stream ends
+            // or is destroyed — including Koa's teardown on client disconnect.
+            return fs.createReadStream(filePath, { fd: handle, ...streamOpts });
+        } catch (err) {
+            handle.close().catch(() => {}); // nothing consumed the fd — release it
+            throw err; // unexpected: surfaces through the last-resort catch
+        }
     }
 
     const compressionConfig = normalizeCompressionConfig(options.compression);
@@ -1919,21 +1942,26 @@ module.exports = function koaClassicServer(
     // `encoding` and sets it as the response body. Shared by the cache-disabled
     // streaming branch and by tee followers; the tee leader builds its own
     // pipeline with the extra accumulator stage.
+    // The disk source is pre-opened (openBodyStream, register #5): an open-time
+    // failure becomes a clean 404 here, so the pipeline callback below only ever
+    // sees mid-flight errors — where the response is already on the wire and
+    // Koa 3 tears the socket down; logging on the operator's logger is all
+    // that is left to do.
     // pipeline (NOT pipe): teardown propagates in BOTH directions. When the
     // client disconnects mid-transfer, Koa destroys the body (the zlib
     // transform) and pipeline destroys `src` too, closing its file descriptor.
     // A bare src.pipe(compress) leaves the ReadStream paused with the fd open
     // forever — fd leak under aborted downloads. Client disconnects are a
     // normal event and are not logged (avoids client-driven log spam).
-    function streamCompressedBody(ctx, toOpen, rawBuffer, encoding) {
-        const compress = createStreamCompressor(encoding, compressionConfig.streaming);
+    async function streamCompressedBody(ctx, toOpen, rawBuffer, encoding) {
         const src = rawBuffer
             ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
-            : fs.createReadStream(toOpen);
+            : await openBodyStream(ctx, toOpen);
+        if (!src) return; // open failed — the 404 page is already written
+        const compress = createStreamCompressor(encoding, compressionConfig.streaming);
         ctx.body = pipeline(src, compress, (err) => {
             if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
             _logger.error('Stream error:', err);
-            if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
         });
     }
 
@@ -2460,6 +2488,12 @@ module.exports = function koaClassicServer(
 
             // Verify file is still readable (race condition protection).
             // Skip if rawBuffer already loaded — the successful readFile() is equivalent proof.
+            // The disk-streaming branches additionally PRE-OPEN the file
+            // (openBodyStream, register #5), which closes the residual
+            // access→open TOCTOU there; this probe is kept for the outcomes
+            // that never open the file (compressed-cache hits, 304s, HEAD):
+            // dropping it would let a file made unreadable after caching keep
+            // being served from RAM.
             if (!rawBuffer) {
                 try {
                     await fs.promises.access(toOpen, fs.constants.R_OK);
@@ -2579,10 +2613,14 @@ module.exports = function koaClassicServer(
                                 // subarray(): zero-copy view; Buffer.slice is deprecated (DEP0158).
                                 ctx.body = rawBuffer.subarray(start, end + 1);
                             } else {
-                                const src = fs.createReadStream(toOpen, { start, end });
+                                // Pre-open (register #5): an open failure is a clean 404
+                                // (writeErrorPage scrubs the 206 headers set above).
+                                const src = await openBodyStream(ctx, toOpen, { start, end });
+                                if (!src) return;
+                                // Mid-flight errors only from here on: the socket is torn
+                                // down by Koa 3 — log on the operator's logger.
                                 src.on('error', (err) => {
                                     _logger.error('Stream error:', err);
-                                    if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
                                 });
                                 ctx.body = src;
                             }
@@ -2652,10 +2690,16 @@ module.exports = function koaClassicServer(
                             // Follower: another request is already accumulating this exact
                             // file version. Stream independently (no added latency, no tee
                             // stage) — the cache will be warm for the NEXT request.
-                            streamCompressedBody(ctx, toOpen, rawBuffer, encoding);
+                            await streamCompressedBody(ctx, toOpen, rawBuffer, encoding);
                             return;
                         }
-                        // Leader: stream AND accumulate a copy for the cache.
+                        // Leader: stream AND accumulate a copy for the cache. The disk
+                        // source is pre-opened BEFORE the tee bookkeeping starts, so an
+                        // open failure is a clean 404 with nothing to unwind (register #5).
+                        const src = rawBuffer
+                            ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
+                            : await openBodyStream(ctx, toOpen);
+                        if (!src) return;
                         _inflightStreamTees.add(teeKey);
                         let acc = [];
                         let accBytes = 0;
@@ -2677,9 +2721,6 @@ module.exports = function koaClassicServer(
                         };
                         try {
                             const compress = createStreamCompressor(encoding, compressionConfig.streaming);
-                            const src = rawBuffer
-                                ? Readable.from(rawBuffer) // compress from in-memory buffer — no disk I/O
-                                : fs.createReadStream(toOpen);
                             const tee = new Transform({
                                 transform(chunk, _enc, done) {
                                     if (acc) {
@@ -2711,8 +2752,9 @@ module.exports = function koaClassicServer(
                                 }
                                 abandonAccumulation();
                                 if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
+                                // Mid-flight error: the response is already on the wire and
+                                // Koa 3 tears the socket down — log and nothing else.
                                 _logger.error('Stream error:', err);
-                                if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
                             });
                         } catch (err) {
                             // Defensive: nothing between add() and pipeline() is expected to
@@ -2720,6 +2762,7 @@ module.exports = function koaClassicServer(
                             // the tee for this file version forever.
                             _inflightStreamTees.delete(teeKey);
                             abandonAccumulation();
+                            src.destroy(); // release the pre-opened fd — nothing consumed it
                             throw err;
                         }
                         return;
@@ -2764,10 +2807,14 @@ module.exports = function koaClassicServer(
                             } else {
                                 ctx.set('Content-Length', String(fileStat.size));
                                 if (ctx.method !== 'HEAD') {
-                                    const src = fs.createReadStream(toOpen);
+                                    // Pre-open (register #5): if the disk is failing hard
+                                    // enough that the identity fallback cannot even open the
+                                    // file, the client gets a clean 404 instead of a torn
+                                    // socket.
+                                    const src = await openBodyStream(ctx, toOpen);
+                                    if (!src) return;
                                     src.on('error', (streamErr) => {
                                         _logger.error('Stream error:', streamErr);
-                                        if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
                                     });
                                     ctx.body = src;
                                 } else {
@@ -2792,7 +2839,7 @@ module.exports = function koaClassicServer(
                     // Streaming mode (compressed cache disabled): pipe through the zlib
                     // transform — Content-Length not known in advance, nothing cached.
                     if (ctx.method !== 'HEAD') {
-                        streamCompressedBody(ctx, toOpen, rawBuffer, encoding);
+                        await streamCompressedBody(ctx, toOpen, rawBuffer, encoding);
                     } else {
                         // HEAD: mirror the GET status and headers (RFC 9110 §9.3.2) — no
                         // Content-Length, since the compressed size is unknown without
@@ -2816,10 +2863,15 @@ module.exports = function koaClassicServer(
                 } else {
                     ctx.set('Content-Length', String(fileStat.size));
                     if (ctx.method !== 'HEAD') {
-                        const src = fs.createReadStream(toOpen);
+                        // Pre-open (register #5): an open-time failure (file vanished
+                        // after the stat, EACCES, EIO) becomes a clean 404 instead of
+                        // an ECONNRESET after respond() owns the body.
+                        const src = await openBodyStream(ctx, toOpen);
+                        if (!src) return;
+                        // Mid-flight errors only from here on (Koa 3 tears the socket
+                        // down): log on the operator's logger.
                         src.on('error', (err) => {
                             _logger.error('Stream error:', err);
-                            if (!ctx.headerSent) sendErrorPageSync(ctx, 500);
                         });
                         ctx.body = src;
                     } else {
@@ -3224,10 +3276,12 @@ module.exports._internals = {
     buildContentDisposition,
     listingDisplayName,
     // writeErrorPage is the shared output path for every middleware-generated error
-    // response (sendErrorPage / sendErrorPageSync delegate to it). Exposed so its
-    // contract — header scrub, no-store on >=500, Content-Type, custom-vs-built-in
-    // body, CSP only for the built-in page — can be asserted deterministically: the
-    // stream-failure branches that also use it can't be, because Koa 3 tears the
-    // socket down on a mid-stream body error before the client sees the response.
+    // response (sendErrorPage delegates to it). Exposed so its contract — header
+    // scrub, no-store, Content-Type, custom-vs-built-in body, CSP only for the
+    // built-in page — can be asserted deterministically. Mid-flight stream
+    // failures no longer route here at all (v5.0 register #5): the response is
+    // already on the wire and Koa 3 tears the socket down, so those branches
+    // only log; open-time failures are caught BEFORE the body is assigned
+    // (openBodyStream) and go through the regular async sendErrorPage.
     writeErrorPage,
 };

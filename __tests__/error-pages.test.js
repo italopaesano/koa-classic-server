@@ -93,11 +93,15 @@ function immediatelyBrokenStream(err) {
 
 function mockBrokenReadStream(targetPath) {
     const original = fs.createReadStream;
-    return jest.spyOn(fs, 'createReadStream').mockImplementation((p, ...args) => {
+    return jest.spyOn(fs, 'createReadStream').mockImplementation((p, opts, ...args) => {
         if (path.resolve(String(p)) === path.resolve(targetPath)) {
+            // The middleware pre-opens the file and passes the FileHandle as
+            // options.fd (v5.0 register #5): close it when substituting a fake
+            // stream, or the leaked descriptor would keep the fixture open.
+            if (opts && opts.fd && typeof opts.fd.close === 'function') opts.fd.close().catch(() => {});
             return immediatelyBrokenStream(Object.assign(new Error('injected EIO'), { code: 'EIO' }));
         }
-        return original.call(fs, p, ...args);
+        return original.call(fs, p, opts, ...args);
     });
 }
 
@@ -424,14 +428,14 @@ describe('500 branches unified through the error-page writer', () => {
 
 // ─── writeErrorPage output contract (deterministic) ──────────────────────────
 //
-// The stream-failure branches above route through sendErrorPageSync → the
-// module-level writeErrorPage, but their delivered output can't be asserted:
-// Koa 3 tears the socket down on a mid-stream body error, so the client always
-// sees ECONNRESET (the response never arrives). These tests exercise the SAME
-// writeErrorPage through a normal Koa response — a middleware pre-sets the
-// "dirty" headers a partially-built response would have left behind, then calls
-// writeErrorPage — so the exact scrub / no-store / Content-Type / body / CSP
-// contract is verified end-to-end without depending on the socket surviving.
+// Mid-flight stream failures no longer write an error page at all (v5.0
+// register #5): the response is already on the wire and Koa 3 tears the socket
+// down, so those handlers only log; open-time failures go through the regular
+// async sendErrorPage BEFORE the body is assigned (openBodyStream). These tests
+// exercise the module-level writeErrorPage through a normal Koa response — a
+// middleware pre-sets the "dirty" headers a partially-built response would have
+// left behind, then calls writeErrorPage — so the exact scrub / no-store /
+// Content-Type / body / CSP contract is verified end-to-end deterministically.
 
 describe('writeErrorPage output contract', () => {
     // Headers a partial file response typically set before an error is detected.

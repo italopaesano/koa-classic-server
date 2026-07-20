@@ -148,13 +148,16 @@ describe('fallback without rawBuffer (rawFile cache disabled — default)', () =
         // Second-level failure: compression already failed, and now the disk
         // stream of the identity fallback fails too.
         const original = fs.createReadStream;
-        jest.spyOn(fs, 'createReadStream').mockImplementation((p, ...args) => {
+        jest.spyOn(fs, 'createReadStream').mockImplementation((p, opts, ...args) => {
             if (String(p).endsWith('asset.txt')) {
+                // Close the middleware's pre-opened FileHandle (options.fd,
+                // v5.0 register #5) so the fake stream doesn't leak it.
+                if (opts && opts.fd && typeof opts.fd.close === 'function') opts.fd.close().catch(() => {});
                 const s = new PassThrough();
                 setImmediate(() => s.destroy(Object.assign(new Error('injected EIO'), { code: 'EIO' })));
                 return s;
             }
-            return original.call(fs, p, ...args);
+            return original.call(fs, p, opts, ...args);
         });
 
         // Koa 3 tears the connection down on a stream error, so the client may

@@ -49,7 +49,9 @@ requisiti. Emergono due nuove voci: **#4** (artefatti di release non
 rigenerati dopo il bump: `package-lock.json` dichiara ancora i vincoli
 pre-V5) e **#5** (su Koa 3 il ramo `sendErrorPageSync(ctx, 500)` dei gestori
 di stream-error è irraggiungibile lato client: un errore in apertura dello
-stream produce ECONNRESET, mai la pagina 500). Le verifiche senza azione
+stream produce ECONNRESET, mai la pagina 500). **Entrambe risolte il
+2026-07-20** (#4: lock rigenerato; #5: opzione A, pre-open del file
+descriptor — dettagli nelle rispettive voci). Le verifiche senza azione
 sono registrate in fondo, sotto *Verifiche della seconda passata*.
 
 ---
@@ -64,8 +66,8 @@ sono registrate in fondo, sotto *Verifiche della seconda passata*.
 - [x] [3. Errore di un body-stream dopo l'invio degli header → socket mai chiuso, client appeso fino a `requestTimeout` (5 min)](#3-errore-di-un-body-stream-dopo-linvio-degli-header--socket-mai-chiuso-client-appeso-fino-a-requesttimeout-5-min) — **RISOLTO** togliendo il supporto a Koa 2 in v5.0.0 (era specifico di Koa 2; Koa 3 chiude il socket via `Stream.pipeline`)
 
 ### Seconda passata (2026-07-20) — focus Koa ≥ 3 / Node ≥ 20
-- [ ] [4. `package-lock.json` non rigenerato dopo il bump dei requisiti V5 (dichiara ancora `node >=18` e `koa ^2.16.4 || >=3.1.2`)](#4-package-lockjson-non-rigenerato-dopo-il-bump-dei-requisiti-v5-dichiara-ancora-node-18-e-koa-2164--312)
-- [ ] [5. Su Koa 3 la pagina 500 dei gestori stream-error è irraggiungibile: errore in apertura dello stream → ECONNRESET al client, log duplicato su stderr](#5-su-koa-3-la-pagina-500-dei-gestori-stream-error-è-irraggiungibile-errore-in-apertura-dello-stream--econnreset-al-client-log-duplicato-su-stderr)
+- [x] [4. `package-lock.json` non rigenerato dopo il bump dei requisiti V5 (dichiara ancora `node >=18` e `koa ^2.16.4 || >=3.1.2`)](#4-package-lockjson-non-rigenerato-dopo-il-bump-dei-requisiti-v5-dichiara-ancora-node-18-e-koa-2164--312) — **RISOLTO** (lock rigenerato con `npm install --package-lock-only`; solo i due campi root, nessuna nuova entry; allineata anche la tabella in `security_improvement_for_V3.md`)
+- [x] [5. Su Koa 3 la pagina 500 dei gestori stream-error è irraggiungibile: errore in apertura dello stream → ECONNRESET al client, log duplicato su stderr](#5-su-koa-3-la-pagina-500-dei-gestori-stream-error-è-irraggiungibile-errore-in-apertura-dello-stream--econnreset-al-client-log-duplicato-su-stderr) — **RISOLTO** (opzione A: pre-open via `fs.promises.open` + `fs.createReadStream(path, { fd })`; errore di apertura → 404 pulita con `errorPages` onorate; ramo morto `sendErrorPageSync` rimosso)
 
 ---
 
@@ -348,7 +350,15 @@ rischio, ricalca un pattern già presente nel codice, e innocuo su Koa 3).
 
 ### 4. `package-lock.json` non rigenerato dopo il bump dei requisiti V5 (dichiara ancora `node >=18` e `koa ^2.16.4 || >=3.1.2`)
 
-**Stato: ⬜ APERTO**
+**Stato: ✅ RISOLTO** (2026-07-20 — lock rigenerato con `npm install
+--package-lock-only`: il diff tocca **solo** i due campi della entry root
+(`engines.node` → `">=20"`, `peerDependencies.koa` → `">=3.1.2"`); nessuna
+entry `koa` è stata aggiunta al lock, quindi il workflow documentato — koa è
+una peer da installare a mano per i test — e il comportamento di `npm ci`
+restano identici. Verificato `npm ci` + suite completa verde dopo la
+rigenerazione. Allineata anche la riga §PS-5 di
+`docs/security_improvement_for_V3.md` (annotata come aggiornata in v5.0.0).
+Nota in `docs/CHANGELOG.md` sotto 5.0.0 → Housekeeping.)
 
 **Posizione:** `package-lock.json:23` (`"node": ">=18"`) e `package-lock.json:26`
 (`"koa": "^2.16.4 || >=3.1.2"`), nella entry root `packages[""]`. Correlato:
@@ -387,7 +397,53 @@ con un lockfile che contraddice `package.json`.
 
 ### 5. Su Koa 3 la pagina 500 dei gestori stream-error è irraggiungibile: errore in apertura dello stream → ECONNRESET al client, log duplicato su stderr
 
-**Stato: ⬜ APERTO**
+**Stato: ✅ RISOLTO** (2026-07-20 — **opzione A, pre-open del file
+descriptor**, decisa dal manutentore. Nuovo helper di istanza
+`openBodyStream(ctx, filePath, streamOpts)`: apre il file con
+`await fs.promises.open(filePath, 'r')` **prima** che il body venga
+assegnato — un fallimento di apertura diventa `sendErrorPage(ctx, 404)`
+regolare (pagina custom `errorPages[404]` onorata, header sporchi scrubbati,
+`no-store`), mentre la risposta è ancora pienamente scrivibile — e in caso di
+successo restituisce `fs.createReadStream(filePath, { fd: handle, ... })`:
+lo stream legge dal descriptor **già aperto** (l'open non può più fallire a
+valle), il path resta il primo argomento così i mock path-based dei test
+continuano a funzionare, e `autoClose` chiude l'handle a fine stream o alla
+distruzione (incluso l'abort del client). Zero syscall aggiuntivi: l'open
+che prima faceva `createReadStream` internamente ora è semplicemente
+anticipato. Applicato ai 5 rami: identity, 206 Range, streaming compresso
+(`streamCompressedBody`, ora async), tee leader (open PRIMA del bookkeeping
+del tee, così un fallimento non lascia chiavi appese), fallback identity
+post-errore-compressione. Il ramo morto `if (!ctx.headerSent)
+sendErrorPageSync(ctx, 500)` è stato rimosso dai 5 gestori (restano i log
+`Stream error:` sul logger dell'operatore per gli errori mid-flight, dove
+Koa 3 abbatte il socket — comportamento voluto, #3) e la funzione
+`sendErrorPageSync` è stata eliminata.
+
+**Due deviazioni consapevoli dallo sketch originale dell'opzione A:**
+1. il check `fs.promises.access(toOpen, R_OK)` **NON** è stato rimosso:
+   toglierlo avrebbe cambiato la semantica dei percorsi che non aprono mai il
+   file (hit della cache compressa, 304, HEAD) — un file reso illeggibile
+   dopo il caching avrebbe continuato a essere servito dalla RAM. Il probe
+   resta quindi come guardia per quei percorsi; sui rami streaming il TOCTOU
+   residuo access→open è chiuso dal pre-open (commento aggiornato in codice);
+2. si usa `fs.createReadStream(path, { fd })` invece di
+   `handle.createReadStream()` per **preservare il seam di test**: ~8 suite
+   instrumentano/mockano `fs.createReadStream` per path. Semantica di
+   `{ fd: FileHandle }` + `start`/`end` + `autoClose` verificata con probe a
+   runtime su Node 22 prima dell'adozione.
+
+Test: nuovo describe *"open-time failures → clean 404 error page (pre-open
+contract)"* in `__tests__/io-failure-paths.test.js` — 6 casi: identity, Range
+(header 206 scrubbati), streaming compresso (niente `Content-Encoding`
+stantio), tee leader (404 + recovery del tee alla richiesta successiva),
+fallback con `readFile` e open entrambi falliti, `errorPages[404]` custom
+onorata. Gli helper di failure-injection che sostituiscono stream finti
+(`io-failure-paths`, `robustness-misc`, `error-pages`,
+`compression-fallback-deep`, `compression-stream-tee`) ora chiudono il
+`FileHandle` ricevuto in `options.fd` per non trattenere il descriptor
+(teardown Windows). Suite completa: 60 suite / 1249 test verdi su Koa 3.2.1;
+coverage 98.46% stmts / 98.34% branch sopra le soglie. CHANGELOG aggiornato
+sotto 5.0.0 → Fixed.)
 
 **Posizione (i 5 gestori condividono lo stesso pattern
 `if (!ctx.headerSent) sendErrorPageSync(ctx, 500)`):**

@@ -70,7 +70,7 @@ function createServer(opts = {}) {
 async function outcomeOf(server, request) {
     try {
         const res = await request;
-        return { status: res.status, text: res.text };
+        return { status: res.status, text: res.text, headers: res.headers };
     } catch (err) {
         return { clientError: err };
     } finally {
@@ -99,13 +99,17 @@ function brokenStream(err) {
 
 // Mocks fs.createReadStream so reads of `targetPath` fail mid-flight while
 // every other read (fixtures, other tests' I/O) uses the real implementation.
+// The middleware pre-opens the file and passes the FileHandle as options.fd
+// (v5.0 register #5): close it when substituting a fake stream, or the leaked
+// descriptor would keep the fixture file open (EPERM on Windows teardown).
 function mockBrokenReadStream(targetPath) {
     const original = fs.createReadStream;
-    return jest.spyOn(fs, 'createReadStream').mockImplementation((p, ...args) => {
+    return jest.spyOn(fs, 'createReadStream').mockImplementation((p, opts, ...args) => {
         if (path.resolve(String(p)) === path.resolve(targetPath)) {
+            if (opts && opts.fd && typeof opts.fd.close === 'function') opts.fd.close().catch(() => {});
             return brokenStream(Object.assign(new Error('injected EIO'), { code: 'EIO' }));
         }
-        return original.call(fs, p, ...args);
+        return original.call(fs, p, opts, ...args);
     });
 }
 
@@ -309,6 +313,156 @@ describe('read-stream failures', () => {
 
         expect(logger.errors.some(e => e.includes('Stream error'))).toBe(true);
         expectSurfacedError(outcome);
+    });
+});
+
+// ─── Open-time failures: the pre-open contract (v5.0 register #5) ────────────
+//
+// Every disk-streaming branch pre-opens the file (fs.promises.open) BEFORE
+// assigning the stream to ctx.body. An open-time failure — file deleted after
+// the stat, chmod race, EIO at open — must therefore produce a clean 404
+// error page (custom errorPages honored, stale representation headers
+// scrubbed), NOT the Koa 3 socket teardown that a lazily-opening
+// fs.createReadStream(path) used to cause on this race.
+
+describe('open-time failures → clean 404 error page (pre-open contract)', () => {
+    // Rejects fs.promises.open for `targetPath` only; everything else uses the
+    // real implementation.
+    function mockOpenFailure(targetPath) {
+        const original = fs.promises.open;
+        return jest.spyOn(fs.promises, 'open').mockImplementation(async (p, ...args) => {
+            if (path.resolve(String(p)) === path.resolve(targetPath)) {
+                throw Object.assign(new Error('injected ENOENT'), { code: 'ENOENT' });
+            }
+            return original.call(fs.promises, p, ...args);
+        });
+    }
+
+    test('identity streaming: open failure → 404 page delivered, socket intact', async () => {
+        const logger = capturingLogger();
+        const server = createServer({ logger });
+        mockOpenFailure(path.join(fixturesDir, 'file.txt'));
+
+        const outcome = await outcomeOf(
+            server,
+            supertest(server).get('/file.txt').set('Accept-Encoding', 'identity').ok(() => true)
+        );
+
+        expect(outcome.clientError).toBeUndefined(); // a real HTTP response arrived
+        expect(outcome.status).toBe(404);
+        expect(outcome.text).toContain('The requested URL was not found');
+        expect(outcome.headers['cache-control']).toBe('no-store');
+        expect(logger.errors.some(e => e.includes('File open error'))).toBe(true);
+    });
+
+    test('Range request: open failure → 404 page, 206 headers scrubbed', async () => {
+        const logger = capturingLogger();
+        const server = createServer({ logger });
+        mockOpenFailure(path.join(fixturesDir, 'file.txt'));
+
+        const outcome = await outcomeOf(
+            server,
+            supertest(server).get('/file.txt').set('Range', 'bytes=0-4').ok(() => true)
+        );
+
+        expect(outcome.clientError).toBeUndefined();
+        expect(outcome.status).toBe(404);
+        expect(outcome.headers['content-range']).toBeUndefined();   // scrubbed
+        expect(outcome.headers['accept-ranges']).toBeUndefined();   // scrubbed
+        expect(logger.errors.some(e => e.includes('File open error'))).toBe(true);
+    });
+
+    test('streaming compression (cache disabled): open failure → 404, no stale Content-Encoding', async () => {
+        const logger = capturingLogger();
+        const server = createServer({
+            logger,
+            serverCache: { compressedFile: { enabled: false } },
+        });
+        mockOpenFailure(path.join(fixturesDir, 'big.txt'));
+
+        const outcome = await outcomeOf(
+            server,
+            supertest(server).get('/big.txt').set('Accept-Encoding', 'gzip').ok(() => true)
+        );
+
+        expect(outcome.clientError).toBeUndefined();
+        expect(outcome.status).toBe(404);
+        expect(outcome.headers['content-encoding']).toBeUndefined(); // scrubbed
+        expect(logger.errors.some(e => e.includes('File open error'))).toBe(true);
+    });
+
+    test('tee leader (file above compression.maxFileSize): open failure → 404; the tee recovers afterwards', async () => {
+        const logger = capturingLogger();
+        // big.txt (4096 B) above maxFileSize (2048) → tee-leader streaming path
+        const app = new Koa();
+        app.on('error', () => {});
+        app.use(koaClassicServer(fixturesDir, {
+            logger,
+            compression: { maxFileSize: 2048 },
+        }));
+        const server = app.listen();
+        try {
+            mockOpenFailure(path.join(fixturesDir, 'big.txt'));
+
+            const failed = await supertest(server)
+                .get('/big.txt').set('Accept-Encoding', 'gzip').ok(() => true);
+            expect(failed.status).toBe(404);
+            expect(logger.errors.some(e => e.includes('File open error'))).toBe(true);
+
+            // The failed open must not leave a stuck tee key: with the mock
+            // removed, the next request streams (and tees) normally.
+            jest.restoreAllMocks();
+            const res = await supertest(server)
+                .get('/big.txt').set('Accept-Encoding', 'gzip')
+                .buffer(true).parse((r, cb) => {
+                    const chunks = [];
+                    r.on('data', c => chunks.push(c));
+                    r.on('end', () => cb(null, Buffer.concat(chunks)));
+                });
+            expect(res.status).toBe(200);
+            expect(res.headers['content-encoding']).toBe('gzip');
+        } finally {
+            server.close();
+        }
+    });
+
+    test('buffered-compression fallback: readFile AND open both fail → 404 page', async () => {
+        const logger = capturingLogger();
+        const server = createServer({ logger }); // compressed cache on → buffered path
+        // 1. the compression job's readFile explodes → catch → identity fallback
+        jest.spyOn(fs.promises, 'readFile').mockRejectedValueOnce(
+            Object.assign(new Error('injected EIO'), { code: 'EIO' })
+        );
+        // 2. the fallback's pre-open fails too (disk really gone)
+        mockOpenFailure(path.join(fixturesDir, 'big.txt'));
+
+        const outcome = await outcomeOf(
+            server,
+            supertest(server).get('/big.txt').set('Accept-Encoding', 'gzip').ok(() => true)
+        );
+
+        expect(outcome.clientError).toBeUndefined();
+        expect(outcome.status).toBe(404);
+        expect(outcome.headers['content-encoding']).toBeUndefined(); // scrubbed
+        expect(logger.errors.some(e => e.includes('Compression error'))).toBe(true);
+        expect(logger.errors.some(e => e.includes('File open error'))).toBe(true);
+    });
+
+    test('custom errorPages[404] is honored on an open failure', async () => {
+        const custom = path.join(fixturesDir, 'custom-open-404.html');
+        fs.writeFileSync(custom, '<!DOCTYPE html><html><body><h1>Custom Open 404</h1></body></html>');
+        const logger = capturingLogger();
+        const server = createServer({ logger, errorPages: { 404: custom } });
+        mockOpenFailure(path.join(fixturesDir, 'file.txt'));
+
+        const outcome = await outcomeOf(
+            server,
+            supertest(server).get('/file.txt').set('Accept-Encoding', 'identity').ok(() => true)
+        );
+
+        expect(outcome.status).toBe(404);
+        expect(outcome.text).toContain('Custom Open 404'); // the operator's page, not the built-in
+        fs.rmSync(custom, { force: true });
     });
 });
 

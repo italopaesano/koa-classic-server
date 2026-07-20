@@ -399,7 +399,7 @@ describe('500 branches unified through the error-page writer', () => {
         }
     });
 
-    test('access failure with browser caching on → 404 without the public Cache-Control', async () => {
+    test('access failure with browser caching on → 404 with no-store (public Cache-Control replaced)', async () => {
         const logger = capturingLogger();
         const server = createServer({
             errorPages: { 404: page404 },
@@ -415,9 +415,10 @@ describe('500 branches unified through the error-page writer', () => {
 
         expect(res.status).toBe(404);
         expect(res.text).toBe(CUSTOM_404);
-        // Previously this branch leaked `public, max-age=...` onto the 404 —
-        // a proxy could cache the error as the resource. Now scrubbed.
-        expect(res.headers['cache-control']).toBeUndefined();
+        // Previously this branch leaked `public, max-age=...` onto the 404; then
+        // it was scrubbed to nothing. Now every error page is no-store (v5.0 #1),
+        // so the 404 is not heuristically cacheable by a shared cache either.
+        expect(res.headers['cache-control']).toBe('no-store');
     });
 });
 
@@ -493,7 +494,7 @@ describe('writeErrorPage output contract', () => {
         for (const h of SCRUBBED) expect(res.headers[h]).toBeUndefined();
     });
 
-    test('built-in 404: Cache-Control removed entirely (no no-store on < 500), CSP present', async () => {
+    test('built-in 404: dirty Cache-Control scrubbed then replaced with no-store (v5.0 #1), CSP present', async () => {
         const server = serveViaWriter(404, null, '<html>BUILTIN 404</html>');
         const res = await supertest(server).get('/').ok(() => true);
         server.close();
@@ -501,7 +502,10 @@ describe('writeErrorPage output contract', () => {
         expect(res.status).toBe(404);
         expect(res.text).toBe('<html>BUILTIN 404</html>');
         expect(res.headers['content-type']).toContain('text/html');
-        expect(res.headers['cache-control']).toBeUndefined(); // scrubbed, and NOT replaced by no-store
+        expect(res.headers['cache-control']).toBe('no-store'); // now no-store on all statuses, not just >= 500
+        // no-store, NOT the listing's no-cache trio: Pragma/Expires stay scrubbed.
+        expect(res.headers['pragma']).toBeUndefined();
+        expect(res.headers['expires']).toBeUndefined();
         expect(res.headers['content-security-policy']).toBeDefined();
         for (const h of SCRUBBED) expect(res.headers[h]).toBeUndefined();
     });
@@ -516,5 +520,55 @@ describe('writeErrorPage output contract', () => {
         expect(res.text).toBe('<html>CUSTOM 404 BODY</html>');
         expect(res.headers['content-security-policy']).toBeUndefined();
         expect(res.headers['content-encoding']).toBeUndefined();
+    });
+});
+
+// ─── v5.0 register #1: error pages are never (heuristically) cacheable ────────
+// A 404 is heuristically cacheable by default (RFC 9110 §15.1 / RFC 7231 §6.1):
+// without an explicit directive a shared cache could keep serving a stale
+// "not found" after the file is created. Every generated error page now carries
+// Cache-Control: no-store — regardless of browserCacheEnabled — closing the last
+// gap where the middleware left a caching decision to a proxy's heuristic
+// (the file branch and the listing #5 already defeat it explicitly).
+describe('#1 error pages carry no-store on every handled status', () => {
+    for (const browserCacheEnabled of [false, true]) {
+        test(`missing file → 404 no-store (browserCacheEnabled: ${browserCacheEnabled})`, async () => {
+            const server = createServer({ browserCacheEnabled });
+            const res = await supertest(server).get('/does-not-exist.txt').ok(() => true);
+            server.close();
+
+            expect(res.status).toBe(404);
+            expect(res.headers['cache-control']).toBe('no-store');
+        });
+    }
+
+    test('path traversal → 404 no-store', async () => {
+        const server = createServer({ browserCacheEnabled: true });
+        const res = await supertest(server).get('/../../etc/passwd').ok(() => true);
+        server.close();
+
+        expect(res.status).toBe(404);
+        expect(res.headers['cache-control']).toBe('no-store');
+    });
+
+    test('directory with dirListing.enabled:false → 404 no-store', async () => {
+        const server = createServer({ dirListing: { enabled: false }, browserCacheEnabled: true });
+        const res = await supertest(server).get('/').ok(() => true);
+        server.close();
+
+        expect(res.status).toBe(404);
+        expect(res.headers['cache-control']).toBe('no-store');
+    });
+
+    test('500 (directory read failure) still no-store — unchanged', async () => {
+        const server = createServer({ browserCacheEnabled: true });
+        jest.spyOn(fs.promises, 'readdir').mockRejectedValue(
+            Object.assign(new Error('injected EIO'), { code: 'EIO' })
+        );
+        const res = await supertest(server).get('/').ok(() => true);
+        server.close();
+
+        expect(res.status).toBe(500);
+        expect(res.headers['cache-control']).toBe('no-store');
     });
 });

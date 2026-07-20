@@ -25,7 +25,7 @@ codice.
 ## Indice / Checklist
 
 ### Minori / conformità / coerenza
-- [ ] [1. Le pagine d'errore 404 escono senza alcun `Cache-Control` (heuristic caching di un 404)](#1-le-pagine-derrore-404-escono-senza-alcun-cache-control-heuristic-caching-di-un-404)
+- [x] [1. Le pagine d'errore 404 escono senza alcun `Cache-Control` (heuristic caching di un 404)](#1-le-pagine-derrore-404-escono-senza-alcun-cache-control-heuristic-caching-di-un-404) — **RISOLTO** (opzione A: `no-store` su ogni error page, non solo ≥ 500)
 - [ ] [2. `If-Range` in forma data non onorato → 200 pieno invece di 206](#2-if-range-in-forma-data-non-onorato--200-pieno-invece-di-206)
 
 ---
@@ -34,9 +34,23 @@ codice.
 
 ### 1. Le pagine d'errore 404 escono senza alcun `Cache-Control` (heuristic caching di un 404)
 
-**Stato: 🔍 APERTO** — decisione del manutentore (vedi "Opzioni" sotto).
+**Stato: ✅ RISOLTO** (2026-07-19 — **opzione A, variante `no-store` semplice**,
+decisa dal manutentore. In `writeErrorPage` la riga `if (status >= 500)
+ctx.set('Cache-Control', 'no-store')` è diventata un `ctx.set('Cache-Control',
+'no-store')` **incondizionato**: ogni error page generata (404 / 500 / 504) è ora
+non-cacheabile, chiudendo l'unico punto in cui il middleware lasciava la decisione
+di caching all'euristica di un proxy. Scelto `no-store` — non la tripla no-cache
+del listing — perché di un error page non c'è nulla da conservare per una futura
+revalidation; `Pragma`/`Expires` restano quindi scrubbati (non reimpostati). Il
+400 di `sendBadRequest` è deliberatamente lasciato fuori: resta minimale/header-light
+come da design (i 400 sono raramente cachati dai proxy). Test:
+describe "#1 error pages carry no-store on every handled status" in
+`__tests__/error-pages.test.js` — 404 da file mancante (con `browserCacheEnabled`
+sia false che true), 404 da traversal, 404 da `dirListing.enabled:false`, e
+invarianza del 500; aggiornati i due test che codificavano il vecchio esito
+(404 → `cache-control` undefined) alla nuova asserzione `no-store`.)
 
-**Posizione:** `writeErrorPage` (`index.cjs:204-211`); lista di scrub
+**Posizione:** `writeErrorPage` (`index.cjs:204-218`); lista di scrub
 `ERROR_PAGE_SCRUB_HEADERS` (`index.cjs:194-198`).
 
 **Problema:** `writeErrorPage` **rimuove** ogni `Cache-Control` che una risposta

@@ -39,6 +39,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   6.0.0) will make it a startup error, together with the other pending config deprecations
   (maintainer decision: existing warn-level deprecations are kept as warnings through 5.x).
 
+### 🐛 Fixed — error pages are no longer heuristically cacheable
+
+- **Every generated error page now carries `Cache-Control: no-store`**, not just `5xx`
+  (`docs/revisione_codice_v5.0.md` #1). Previously `writeErrorPage` scrubbed any inherited
+  `Cache-Control` but re-set `no-store` only for status ≥ 500, so a **404 went out with no
+  caching directive at all**. A 404 is heuristically cacheable by default (RFC 9110 §15.1 /
+  RFC 7231 §6.1): behind a shared cache/CDN, a "not found" could keep being served after the
+  file was actually created. This was the one spot where the middleware left a caching
+  decision to a proxy's heuristic — the static-file branch (`browserCacheEnabled: false`)
+  and the directory listing already defeat it explicitly. `no-store` (rather than the
+  listing's `no-cache` trio) because an error page has nothing worth storing to revalidate
+  later. The minimal `400 Bad Request` reply is intentionally unchanged (stays header-light).
+
 ## [4.3.0] - 2026-07-14
 
 Customization release: the compression qualities and the compressed cache's per-entry

@@ -136,6 +136,7 @@ Notes:
 
 - `index.mjs` reports 0% coverage in the aggregate because `__tests__/esm-export.test.js` exercises it in a **child** Node process (Jest's CJS transform can't load real ESM in-process); Istanbul can't see it. This is expected — its ~2 statements are noise.
 - Tests are written with `supertest` over a `Koa` app instantiated per `describe` block.
+- The `__tests__/*.property.test.js` files are [fast-check](https://fast-check.dev) (dev-only dependency) property-based tests that **complement** the example tests, targeting the pure `_internals` helpers. They are intentionally un-seeded; the how/why and the failure-reproduction recipe live in **`docs/property-based-testing.md`**.
 - The typical fix workflow: pick a finding from the active review register, locate it in `index.cjs`, add/adjust a `*.test.js` asserting the contract, implement, run `npm test`, then tick the register checkbox and note the resolution in `docs/CHANGELOG.md`.
 
 ---

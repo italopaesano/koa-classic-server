@@ -412,10 +412,15 @@ remain in the **[changelog](./docs/CHANGELOG.md)**.
 
 ```bash
 npm test                 # full suite (lints first)
-npm run test:ci          # suite without benchmarks — 1239 tests
+npm run test:ci          # suite without benchmarks — 1284 tests
 npm run test:security    # security tests only
 npm run test:performance # benchmarks
 ```
+
+The suite includes [fast-check](https://fast-check.dev) property-based tests
+(`__tests__/*.property.test.js`) alongside the example-based ones. They are
+intentionally un-seeded; to replay a failure, see
+**[property-based-testing.md](./docs/property-based-testing.md)**.
 
 ---
 

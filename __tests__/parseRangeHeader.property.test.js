@@ -20,6 +20,9 @@
  *   { start, end }   valid single range (both inclusive, 0-based)
  *   'invalid'        malformed / multi-range        → caller serves full 200
  *   'unsatisfiable'  syntactically ok but off-file  → caller returns 416
+ *
+ * Un-seeded on purpose: on failure fast-check prints `{ seed, path }` — pass them
+ * to that test's fc.assert to replay it. See docs/property-based-testing.md.
  */
 
 const fc = require('fast-check');

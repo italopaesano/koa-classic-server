@@ -22,6 +22,9 @@
  *    (equal frequencies), generalized over the number of entries. Correct
  *    eviction order is a stated design goal — popular files must survive
  *    maxAge refreshes — so it is asserted directly rather than by example alone.
+ *
+ * Un-seeded on purpose: on failure fast-check prints `{ seed, path }` — pass them
+ * to that test's fc.assert to replay it. See docs/property-based-testing.md.
  */
 
 const fc = require('fast-check');

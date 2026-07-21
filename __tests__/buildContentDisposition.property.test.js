@@ -23,6 +23,9 @@
  *   3. it has the RFC 6266 shape  inline; filename="..."; filename*=UTF-8''...
  *   4. the RFC 5987 extended value round-trips: it decodes back to the
  *      well-formed filename losslessly, even when the ASCII fallback mangles it.
+ *
+ * Un-seeded on purpose: on failure fast-check prints `{ seed, path }` — pass them
+ * to that test's fc.assert to replay it. See docs/property-based-testing.md.
  */
 
 const http = require('node:http');

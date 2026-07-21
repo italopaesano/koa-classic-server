@@ -15,6 +15,9 @@
  * Control characters (bidi controls, direction marks, lone surrogates) are
  * built from code points via String.fromCharCode — never pasted literally —
  * so the source stays readable and reviewable.
+ *
+ * Un-seeded on purpose: on failure fast-check prints `{ seed, path }` — pass them
+ * to that test's fc.assert to replay it. See docs/property-based-testing.md.
  */
 
 const fc = require('fast-check');

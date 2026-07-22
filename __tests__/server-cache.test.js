@@ -205,14 +205,24 @@ describe('serverCache.rawFile.maxAge — time-based staleness', () => {
     // Verify maxAge triggers a fresh disk read even when mtime+size are unchanged.
     // Simulates the NFS attribute-cache scenario by manually restoring mtime after
     // editing the file, so the mtime-based invariant alone cannot detect the change.
+    //
+    // Staleness is driven off a controlled clock (Date.now mocked), not wall time:
+    // the "within maxAge" request must run inside the 100 ms window, and on a slow
+    // CI runner real elapsed time between requests can cross that threshold, flaking
+    // the assertion. Freezing the clock makes the window independent of runner speed.
     let tmpDir;
     let filePath;
     let server;
+    let nowSpy;
+    let fakeNow;
 
     beforeAll(() => {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-maxage-raw-'));
         filePath = path.join(tmpDir, 'data.txt');
         fs.writeFileSync(filePath, 'version-A');
+
+        fakeNow = Date.now();
+        nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => fakeNow);
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
@@ -223,6 +233,7 @@ describe('serverCache.rawFile.maxAge — time-based staleness', () => {
     });
 
     afterAll(() => {
+        nowSpy.mockRestore();
         server.close();
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
@@ -237,13 +248,13 @@ describe('serverCache.rawFile.maxAge — time-based staleness', () => {
         fs.writeFileSync(filePath, 'version-B'); // same 9 bytes as 'version-A'
         fs.utimesSync(filePath, originalStat.atime, originalStat.mtime);
 
-        // Within maxAge → stale check passes → still serves cached A
+        // Clock unchanged → within maxAge → stale check passes → still serves cached A
         const second = await supertest(server).get('/data.txt').set('Accept-Encoding', 'identity');
         expect(second.text).toBe('version-A');
     });
 
     test('after maxAge: cache is refreshed (disk re-read) even when mtime+size unchanged', async () => {
-        await new Promise(r => setTimeout(r, 120)); // exceeds 100 ms maxAge
+        fakeNow += 120; // advance the clock past the 100 ms maxAge
 
         const third = await supertest(server).get('/data.txt').set('Accept-Encoding', 'identity');
         expect(third.text).toBe('version-B');
@@ -286,11 +297,21 @@ describe('serverCache.compressedFile.maxAge — time-based staleness', () => {
     let tmpDir;
     let filePath;
     let server;
+    let nowSpy;
+    let fakeNow;
 
     beforeAll(() => {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-maxage-cmp-'));
         filePath = path.join(tmpDir, 'data.css');
         fs.writeFileSync(filePath, 'a'.repeat(2048)); // above minFileSize=1024 to ensure compression
+
+        // Drive staleness off a controlled clock, not wall time: on a slow CI runner
+        // (seen on Node 20 / ubuntu-latest) the real gap between the first request
+        // warming the cache and the "within maxAge" request could cross the 100 ms
+        // threshold, rebuilding from B and flaking the assertion. Freezing Date.now
+        // makes the window deterministic; the third request advances it explicitly.
+        fakeNow = Date.now();
+        nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => fakeNow);
 
         const app = new Koa();
         app.use(koaClassicServer(tmpDir, {
@@ -301,6 +322,7 @@ describe('serverCache.compressedFile.maxAge — time-based staleness', () => {
     });
 
     afterAll(() => {
+        nowSpy.mockRestore();
         server.close();
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
@@ -316,12 +338,12 @@ describe('serverCache.compressedFile.maxAge — time-based staleness', () => {
         fs.writeFileSync(filePath, 'b'.repeat(2048));
         fs.utimesSync(filePath, originalStat.atime, originalStat.mtime);
 
-        // Within maxAge → cached gzip of A still served.
+        // Clock unchanged → within maxAge → cached gzip of A still served.
         const second = await supertest(server).get('/data.css').set('Accept-Encoding', 'gzip');
         expect(second.text).toBe('a'.repeat(2048));
 
-        // After maxAge → cache refreshed → gzip of B served.
-        await new Promise(r => setTimeout(r, 120));
+        // Advance the clock past maxAge → cache refreshed → gzip of B served.
+        fakeNow += 120;
         const third = await supertest(server).get('/data.css').set('Accept-Encoding', 'gzip');
         expect(third.text).toBe('b'.repeat(2048));
     });

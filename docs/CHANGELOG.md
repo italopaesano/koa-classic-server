@@ -5,7 +5,50 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.0.0] - Unreleased
+## [5.1.0] - 2026-07-22
+
+Test-hardening release: no runtime or API changes. This version adds a
+**property-based test layer** (fast-check) on top of the existing example
+suite, plus its documentation. Every path exercised here already shipped in
+5.0.0 — the new tests assert its invariants against thousands of generated
+inputs, so the version bump is warranted by the strengthened test coverage
+alone.
+
+### ✅ Added — fast-check property-based tests for the pure helpers
+
+- **Four new `__tests__/*.property.test.js` files** drive the pure helpers
+  exposed on `module.exports._internals` (the test-only seam) with
+  [fast-check](https://fast-check.dev), stating invariants and letting the
+  generator try to break them. They **complement** — not replace — the
+  example-based tests, targeting the edge cases (lone surrogates, bidi
+  controls, off-file byte ranges, long cache-mutation sequences) that are
+  cheapest to reach directly:
+  - `parseRangeHeader.property.test.js` — `parseRangeHeader`: a returned range
+    always sits inside the file (`0 ≤ start ≤ end ≤ fileSize-1`).
+  - `buildContentDisposition.property.test.js` — `buildContentDisposition`:
+    totality on hostile filenames, output is always a legal HTTP header value,
+    and the RFC 5987 `filename*` value round-trips.
+  - `lfuCache.property.test.js` — `LFUCache` (model-based): capacity, size
+    accounting, buffer integrity and frequency-bucket consistency across random
+    `set`/`get`/`peek`/`delete`, with LFU + FIFO eviction order.
+  - `internals-helpers.property.test.js` — one invariant block each for
+    `formatSize`, `ifNoneMatchSatisfied`, `toWellFormedName`, `escapeHtml`, and
+    `listingDisplayName`.
+- The suite is **intentionally un-seeded**: fast-check picks a fresh time-based
+  seed per run, so CI explores a wider input space over time; any failure is
+  still reproducible from the printed `seed`/`path`.
+
+### 📝 Documentation
+
+- **New `docs/property-based-testing.md`** — explains why the property tests
+  exist alongside the example tests, the invariant covered by each file, how to
+  run a single property, the deliberate no-fixed-seed choice, and the
+  failure-reproduction recipe. Linked from `README.md` and `docs/DOCUMENTATION.md`.
+- **`docs/revisione_codice_v5.0.md`** — full-codebase review pass appended
+  (register #6, `Accept-Ranges` on compressed responses, closed *wontfix*);
+  documentation-only, no code change.
+
+## [5.0.0] - 2026-07-20
 
 ### ⚠️ Breaking Changes
 

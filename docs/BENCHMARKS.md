@@ -101,7 +101,7 @@ diff results-before.txt results-after.txt
 
 ## Expected Improvements
 
-After implementing the optimizations from `PERFORMANCE_ANALYSIS.md`:
+After the async/streaming optimizations first delivered in v2.0.0:
 
 | Metric | Before | After | Improvement |
 |--------|--------|-------|-------------|
@@ -284,16 +284,11 @@ OS: Ubuntu 22.04 LTS
 
 ## Next Steps
 
-After running baseline benchmarks:
+After running baseline benchmarks, compare against the current performance
+references:
 
-1. Review `PERFORMANCE_ANALYSIS.md` for optimization recommendations
-2. Review `OPTIMIZATION_HTTP_CACHING.md` for HTTP caching details
-3. Implement Priority 1 optimizations:
-   - Convert sync operations to async
-   - Fix string concatenation in `show_dir()`
-   - Add HTTP caching headers
-4. Re-run benchmarks to measure improvements
-5. Update to v1.3.0 "Performance Edition"
+1. [`PERFORMANCE_TUNING.md`](./PERFORMANCE_TUNING.md) — operator-facing tuning guide
+2. [`performance_v3_vs_v4.md`](./performance_v3_vs_v4.md) — methodology and raw numbers
 
 ## Contributing
 

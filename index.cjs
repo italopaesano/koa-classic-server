@@ -2981,7 +2981,15 @@ module.exports = function koaClassicServer(
             const sortParam  = firstQueryValue(ctx.query.sort);
             const orderParam = firstQueryValue(ctx.query.order);
             const sortBy = sortParam || 'name';
-            const sortOrder = orderParam || 'asc';
+            // Normalized to exactly 'asc' | 'desc' — anything else (absent,
+            // 'DESC', 'bogus') is ascending. The three consumers below used to
+            // test the raw value with opposite polarity: the comparator asked
+            // `=== 'desc'` (unknown → ascending) while the header arrow asked
+            // `=== 'asc'` (unknown → ↓) and the toggle link asked `=== 'asc'`
+            // too, so `?order=DESC` sorted ascending under a descending arrow
+            // and a link that re-requested ascending. Normalizing once keeps
+            // the rendered state honest; 'asc'/'desc' behave exactly as before.
+            const sortOrder = orderParam === 'desc' ? 'desc' : 'asc';
 
             // Base for the listing's self-referencing links (sort headers,
             // paginator). Built from the WITH-prefix pathname — the out-prefix

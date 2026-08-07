@@ -23,6 +23,12 @@
  *   4. Content-Disposition for a latin1-representable name keeps the real
  *      character in the quoted-string fallback (no '?' mangling) — the '?'
  *      substitution is reserved for what a header value cannot carry.
+ *
+ * Platform note: NTFS reserves " * : < > ? \ | in filenames, so the `?` and `"`
+ * fixtures of section 3 cannot be created on win32 — they are dropped from the
+ * corpus there and their assertions are skipped. Every other character in the
+ * corpus (# & % ' + space) is legal on all supported platforms and stays under
+ * test everywhere.
  */
 
 const fs = require('fs');
@@ -31,6 +37,8 @@ const path = require('path');
 const Koa = require('koa');
 const supertest = require('supertest');
 const koaClassicServer = require('../index.cjs');
+
+const IS_WINDOWS = process.platform === 'win32';
 
 function createServer(root, opts = {}) {
     const app = new Koa();
@@ -268,14 +276,20 @@ describe('listing links for URL-significant and HTML-significant filenames', () 
     let root;
     let server;
 
-    const NAMES = [
-        'hash#tag.txt',
-        'query?a=b.txt',
-        'amp&ersand.txt',
-        'percent%20.txt',
-        "quote'and\".txt",
-        'plus+space .txt',
+    // win: false → NTFS reserves the character, so the fixture cannot exist on
+    // win32 and is dropped from the corpus there (see the platform note above).
+    const CORPUS = [
+        { name: 'hash#tag.txt' },
+        { name: 'query?a=b.txt', win: false },
+        { name: 'amp&ersand.txt' },
+        { name: 'percent%20.txt' },
+        { name: "quote'single.txt" },
+        { name: 'double"quote.txt', win: false },
+        { name: 'plus+space .txt' },
     ];
+    const NAMES = CORPUS
+        .filter((e) => !IS_WINDOWS || e.win !== false)
+        .map((e) => e.name);
 
     beforeAll(() => {
         root = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-url-chars-'));
@@ -284,8 +298,10 @@ describe('listing links for URL-significant and HTML-significant filenames', () 
     });
 
     afterAll(() => {
-        server.close();
-        fs.rmSync(root, { recursive: true, force: true });
+        // Guarded: if beforeAll throws, `server` is never assigned and an
+        // unguarded close() masks the real failure with a TypeError.
+        if (server) server.close();
+        if (root) fs.rmSync(root, { recursive: true, force: true });
     });
 
     test('every generated href round-trips back to its own file (200 + exact bytes)', async () => {
@@ -306,17 +322,25 @@ describe('listing links for URL-significant and HTML-significant filenames', () 
     test('the URL delimiters # ? & % are percent-encoded in the href', async () => {
         const res = await supertest(server).get('/');
         expect(res.text).toContain('href="/hash%23tag.txt"');
-        expect(res.text).toContain('href="/query%3Fa%3Db.txt"');
         expect(res.text).toContain('href="/amp%26ersand.txt"');
         expect(res.text).toContain('href="/percent%2520.txt"');
+        if (!IS_WINDOWS) {
+            expect(res.text).toContain('href="/query%3Fa%3Db.txt"');
+        }
     });
 
     test("quotes are HTML-escaped in both the href and the displayed name", async () => {
         const res = await supertest(server).get('/');
-        // An unescaped " would terminate the href attribute early.
-        expect(res.text).toContain('href="/quote&#039;and%22.txt"');
-        expect(res.text).toContain('quote&#039;and&quot;.txt</a>');
+        expect(res.text).toContain('href="/quote&#039;single.txt"');
+        expect(res.text).toContain('quote&#039;single.txt</a>');
+        // An unescaped ' would terminate an href attribute early in a renderer
+        // that quoted attributes with single quotes.
         expect(res.text).not.toMatch(/href="[^"]*'[^"]*"/);
+        if (!IS_WINDOWS) {
+            // An unescaped " would terminate the href attribute early.
+            expect(res.text).toContain('href="/double%22quote.txt"');
+            expect(res.text).toContain('double&quot;quote.txt</a>');
+        }
     });
 });
 

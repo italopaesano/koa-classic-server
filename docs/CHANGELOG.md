@@ -54,6 +54,23 @@ Four new suites, 71 tests, no production-code change beyond the fix above:
   *before* hidden filtering, and href encoding for names containing `#`, `?`,
   `&`, `%`, `'`, `"`.
 
+### 🐛 Fixed — `listing-sort-and-cap.test.js` could not run on Windows
+
+The href-encoding fixtures above created files named `query?a=b.txt` and
+`quote'and".txt`. NTFS reserves `"` and `?` in filenames, so `writeFileSync`
+failed with `ENOENT` in `beforeAll` on the Windows CI legs, taking the whole
+suite down (and the unguarded `server.close()` in `afterAll` then masked the
+real cause with a `TypeError`). Test-only defect — the middleware behaves
+correctly on Windows; the fixtures simply could not exist there.
+
+The corpus now carries the `win: false` marker already used by
+`adversarial-filenames.test.js`: reserved-character fixtures are dropped on
+win32 and their assertions skipped, so the suite runs everywhere while keeping
+full coverage on the platforms that can represent the names. `"` was also split
+out of the combined quote fixture into its own file, so the `'` escaping stays
+under test on Windows too. `afterAll` is now guarded against a failed
+`beforeAll`.
+
 ## [5.2.0] - 2026-08-07
 
 Correctness release. `dirListing.enabled: false` no longer swallows a

@@ -2,7 +2,7 @@
 
 > Documento di riferimento sul **flusso di esecuzione** del middleware, diviso
 > per fasi. Ogni sezione è un diagramma ASCII autonomo con i riferimenti alle
-> righe di `index.cjs` (versione **5.0.0**). I nomi di funzioni, variabili e
+> righe di `index.cjs` (versione **5.2.0**). I nomi di funzioni, variabili e
 > opzioni sono lasciati in inglese perché corrispondono uno-a-uno al codice.
 >
 > **Come leggere i diagrammi**
@@ -227,7 +227,7 @@ middleware assuma la proprietà della richiesta. Nessun `next()` viene chiamato
 dopo questo blocco (a parte quello interno al render del template).
 
 ```
-  ╱ options.method.includes(ctx.method)? ╲──no──▶ ►► next()          (2057)
+  ╱ options.method.includes(ctx.method)? ╲──no──▶ ►► next()          (2075)
         │ sì   (default: solo 'GET')
         ▼
   urlToUse = useOriginalUrl ? ctx.originalUrl : ctx.url               (2063)
@@ -391,25 +391,38 @@ sottoposto alle guardie finali prima del dispatch.
 ```
   ┌───────────────────────── isDirectory() === true ─────────────────────────┐
   │                                                                            │
-  │  ╱ dirListing.enabled? ╲──no──▶ ⇒ 404                            (2319)   │
-  │        │ sì                                                                │
-  │        ▼                                                                   │
+  │  ╱ dirListing.enabled? ╲──no──▶ resolveIndexFile(toOpen)          (2364)   │
+  │        │ sì                     ╱ indice servibile? ╲──no──▶ ⇒ 404         │
+  │        │                              │ sì            (assente / nascosto  │
+  │        │                              │                / fuori boundary:   │
+  │        │                              │                niente da rendere)  │
+  │        ▼                              ▼                                    │
   │  ╱ trailingSlash  AND  !_pathEndsWithSlash? ╲──sì──▶ ⇒ 301 /dir → /dir/   │
-  │        │ no                                          (2325, apre index UI  │
-  │        ▼                                             con base corretta)    │
-  │  ╱ index configurato? ╲                                                    │
-  │        │ sì                                                                │
+  │        │ no                                          (2387, apre index UI  │
+  │        │     Il redirect è raggiunto solo quando       con base corretta)   │
+  │        │     la directory renderizza qualcosa:                              │
+  │        │     mai un 301 verso un 404.                                       │
   │        ▼                                                                   │
-  │  indexFile = findIndexFile(toOpen, index)   ← string=stat, RegExp=readdir  │
-  │        │                                                          (2352)   │
-  │  ╱ trovato  AND  !hidden  AND  symlinkAllowed? ╲──sì──▶ loadFile ──▶ Fase 3│
+  │  ╱ indice già risolto? ╲──no──▶ resolveIndexFile(toOpen)          (2417)   │
+  │        │ sì  (ramo enabled:false)     │  (ramo enabled:true: lookup dopo    │
+  │        │                              │   il redirect, così la richiesta    │
+  │        │                              │   pre-redirect non paga stat/readdir)│
+  │        │                              ├──▶ rejected (symlink fuori root)    │
+  │        │                              │         ⇒ 404 duro, mai il listing  │
+  │        ▼                              ▼                                    │
+  │  ╱ indexFile ≠ null? ╲──sì──▶ loadFile(indexPath, stat) ──▶ Fase 3 (2429)  │
   │        │ no                                                                │
   │        ▼                                                                   │
-  │  listing = await show_dir(toOpen, ctx)   ──▶ Fase 5              (2374)   │
+  │  listing = await show_dir(toOpen, ctx)   ──▶ Fase 5              (2436)   │
   │        │  (su errore readdir, show_dir scrive già ⇒ 500 e ritorna undef)  │
   │        ▼                                                                   │
   │  se listing ≠ undefined → ctx.body = listing         ⇒ 200 HTML listing   │
   └────────────────────────────────────────────────────────────────────────────┘
+
+  resolveIndexFile(dirPath)                                          (2057)
+    findIndexFile → { file } se esiste, non è hidden e passa symlinkAllowed
+                  → { file: null } se assente OPPURE nascosto (nascosto ≡ assente)
+                  → { file: null, rejected: true } se esce dal boundary symlink
 
   ┌───────────────────────── isDirectory() === false (FILE) ─────────────────┐
   │                                                                            │
@@ -753,7 +766,7 @@ condividono **un solo** lavoro (read / compress), rigetto incluso.
 |---|---|---|
 | `►► next()` | metodo non gestito · prefix non combacia · URL riservato | 2057 · 2091 · 2113 |
 | `⇒ 400` | Host invalido · %-encoding rotto · null byte · originalUrl malformato | 2083 · 2139 · 2149 · 2213 |
-| `⇒ 404` | fuori root · genitore/leaf nascosto · symlink fuori root · non esiste · dirListing off · trailing-slash su file · file con `/` finale | 2165 · 2173/2298 · 2312 · 2289 · 2378 · 2387 |
+| `⇒ 404` | fuori root · genitore/leaf nascosto · symlink fuori root · non esiste · directory senza niente da renderizzare (listing off e nessun indice servibile) · indice fuori dal boundary symlink · trailing-slash su file | 2165 · 2173/2298 · 2312 · 2289 · 2372 · 2422 · 2446 |
 | `⇒ 301 / 3xx` | `hideExtension` redirect · trailing-slash `/dir → /dir/` | 2262 · 2346 |
 | `⇒ 304` | If-None-Match o If-Modified-Since soddisfatti | 2560 · 2574 |
 | `⇒ 206` | Range valido (e If-Range ok) | 2601 |

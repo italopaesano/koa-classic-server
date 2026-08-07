@@ -145,7 +145,7 @@ const options3 = {
   urlsReserved : Array('/percorso_riservato', '/percorso riservato con spazi')
 };
 
-describe(` koaClassicServer options2: ${JSON.stringify(options2)}`, () => {
+describe(` koaClassicServer options3: ${JSON.stringify(options3)}`, () => {
   let app;
   let server;
 
@@ -172,8 +172,12 @@ describe(` koaClassicServer options2: ${JSON.stringify(options2)}`, () => {
     expect(res.text.replace(/\s/g, '')).toBe("Not Found".replace(/\s/g, '')); //.replace(/\s/g, '') --> rimuoce gli spazi bianchi e le tabulazioni , il server agiunge degli spazi all'inizio facendo fallire il controllo 
   }); */
 
-  
-  const testFnCallbacks = testAllPathByFileList(filesAndDirArray, () => server, options2);//Genera l'array di callback per i test
+  // NB: il server di questo describe monta options3, che NON configura `index`.
+  // Fino alla 5.1.0 qui veniva passato options2 per copia-incolla: l'helper
+  // guardava solo dirListing.enabled (identico nelle due), quindi la svista non
+  // si vedeva. Ora che l'helper legge anche options.index va passata la config
+  // realmente montata.
+  const testFnCallbacks = testAllPathByFileList(filesAndDirArray, () => server, options3);//Genera l'array di callback per i test
   testFnCallbacks.forEach(cb => cb());// Esegui ogni callback per registrare il test nello scope del describe
 
   afterAll(() => {// Chiude il server dopo aver completato tutti i test
@@ -271,11 +275,23 @@ function testAllPathByFileList(filesAndDirArray, getServer, options) {
             const responseBody = res.text !== undefined ? res.text : res.body.toString('utf8');
             expect(responseBody).toBe(content);
           } else {//è una directory
-            if( options.dirListing && options.dirListing.enabled === false ){
-              // FIX: Quando directory listing è disabilitato, restituisce 404
+            // Un file index presente viene servito a prescindere da
+            // dirListing.enabled: l'opzione governa il LISTING, non la
+            // risoluzione dell'indice (v5.2.0). Solo una directory senza
+            // indice servibile fa 404 quando il listing è disabilitato.
+            const indexOnDisk = (options.index || [])
+              .filter(p => typeof p === 'string')
+              .find(p => fs.existsSync(path.join(entry.fullPath, p)));
+
+            if( options.dirListing && options.dirListing.enabled === false && !indexOnDisk ){
+              // Listing disabilitato e nessun indice: 404
               expect(res.status).toBe(404);
               expect(res.type).toBe('text/html');
               expect(res.text.replace(/\s/g, '')).toBe(requestedUrlNotFound().replace(/\s/g, '')); //.replace(/\s/g, '') --> rimuoce gli spazi bianchi e le tabulazioni , il server agiunge degli spazi all'inizio facendo fallire il controllo
+            } else if( indexOnDisk ){
+              // Indice presente: servito, con listing abilitato o meno
+              expect(res.status).toBe(200);
+              expect(res.text).toBe(fs.readFileSync(path.join(entry.fullPath, indexOnDisk), 'utf8'));
             } else {
               expect(res.status).toBe(200);
               expect(res.type).toBe('text/html');

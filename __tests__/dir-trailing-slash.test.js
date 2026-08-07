@@ -132,16 +132,29 @@ describe('trailingSlash: false (v3 behavior restored)', () => {
     });
 });
 
-// ─── Listing disabled: no redirect (would 404 anyway) ────────────────────────
+// ─── Listing disabled: redirect only when the directory renders something ────
+//
+// dirListing.enabled governs the LISTING, not index resolution (v5.2.0): a
+// directory holding a servable index still serves it, so it still redirects to
+// its canonical URL. A directory with nothing to render 404s *without* a
+// redirect — 301-then-404 would be two responses where one suffices, and the
+// first would confirm the directory exists.
 
 describe('dirListing.enabled: false', () => {
     let server;
     beforeAll(() => { server = app({ dirListing: { enabled: false } }); });
     afterAll(() => server.close());
 
-    test('GET /dir → 404, not a redirect', async () => {
+    test('GET /dir (has an index) → 301 /dir/, listing disabled or not', async () => {
         const res = await supertest(server).get('/dir').redirects(0);
+        expect(res.status).toBe(301);
+        expect(res.headers.location).toBe('/dir/');
+    });
+
+    test('GET /listdir (no index) → 404, never a redirect', async () => {
+        const res = await supertest(server).get('/listdir').redirects(0);
         expect(res.status).toBe(404);
+        expect(res.headers.location).toBeUndefined();
     });
 
     test('GET /file.txt/ still 404s (canonicalization independent of listing)', async () => {

@@ -12,7 +12,7 @@ The declared positioning (since the earliest versions): behavior **similar, but 
 
 The project is **not** a framework, not a router, not a CMS. It is intentionally focused.
 
-Current version: **5.0.0** (see `docs/CHANGELOG.md`). Peer-depends on `koa` (`>=3.1.2` — Koa 2 support was dropped in 5.0.0); the only runtime dependency is `mime-types`. Requires Node `>=20`.
+Current version: **5.2.0** (see `docs/CHANGELOG.md`). Peer-depends on `koa` (`>=3.1.2` — Koa 2 support was dropped in 5.0.0); the only runtime dependency is `mime-types`. Requires Node `>=20`.
 
 ---
 

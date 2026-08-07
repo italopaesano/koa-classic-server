@@ -32,7 +32,7 @@ Other source files:
 
 Directories:
 
-- **`__tests__/`** — 61 `*.test.js` files, ~1450 test cases. Also holds benchmark scripts (`benchmark.js`, `setup-benchmark.js`), saved benchmark baselines (`benchmark-results-*.txt`), and fixture dirs (`compression-fixtures/`, `hidden-fixtures/`, `range-fixtures/`, `server-cache-fixtures/`, `publicWwwTest/`, `customTest/`).
+- **`__tests__/`** — 70 `*.test.js` files, ~1390 test cases. Also holds benchmark scripts (`benchmark.js`, `setup-benchmark.js`), saved benchmark baselines (`benchmark-results-*.txt`), and fixture dirs (`compression-fixtures/`, `hidden-fixtures/`, `range-fixtures/`, `server-cache-fixtures/`, `publicWwwTest/`, `customTest/`).
 - **`docs/`** — all long-form documentation (see **Key references** below). Includes `template-engine/` with the template-engine integration guide and examples.
 - **`.github/`** — CI workflows.
 
@@ -114,7 +114,7 @@ When proposing a new feature, ask: *"does this change the default observable beh
 - **`docs/revisione_codice_v5.0.md`** — **active** open-findings register from the 2026-07-19 full code review (in Italian). Each finding has a checkbox in its index: tick it (`[x]`) when the item is resolved or consciously closed. Check this file before starting fix work — it holds the agreed problem list, code locations, and proposed fixes.
 - **`docs/revisione_codice_v4.3.md`** — previous register (2026-07-14 review); all 16 findings resolved. Kept for history.
 - **`docs/revisione_codice_v3.1.md`** — earlier register (2026-07-03 review); all 20 findings resolved. Kept for history.
-- **`__tests__/`** — 61 test files, ~1450 test cases asserting behavior contracts. See **Development workflows** below.
+- **`__tests__/`** — 70 test files, ~1390 test cases asserting behavior contracts. See **Development workflows** below.
 
 ---
 

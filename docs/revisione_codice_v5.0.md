@@ -89,6 +89,10 @@ integrità rilevato.
 ### Quarta passata (2026-08-07) — segnalazione esterna sul dispatch directory
 - [x] [7. `dirListing.enabled: false` inghiotte anche il file index: una directory con `index.html` risponde 404](#7-dirlistingenabled-false-inghiotte-anche-il-file-index-una-directory-con-indexhtml-risponde-404) — **RISOLTO in 5.2.0** (dispatch ristrutturato con `resolveIndexFile()`; indice risolto prima del redirect quando il listing è off; suite di regressione dedicata)
 
+### Quinta passata (2026-08-07) — revisione della copertura dei test
+- [x] [8. Listing: `?order=` con valore non riconosciuto ordina in modo ASCENDENTE ma disegna la freccia DISCENDENTE](#8-listing-order-con-valore-non-riconosciuto-ordina-in-modo-ascendente-ma-disegna-la-freccia-discendente) — **RISOLTO** (normalizzazione unica di `sortOrder` a `'asc' | 'desc'`)
+- [ ] [9. `loadFile()`: il ramo `if (!fileStat)` è irraggiungibile — entrambi i call site passano già lo stat](#9-loadfile-il-ramo-if-filestat-è-irraggiungibile--entrambi-i-call-site-passano-già-lo-stat) — **APERTO** (nessun impatto funzionale; decisione del manutentore: rimuovere o marcare come difensivo)
+
 ---
 
 ## Minori / conformità / coerenza
@@ -705,6 +709,100 @@ solo `dirListing.enabled`, identico nelle due config).
 
 **Priorità:** Media-alta (correttezza: una richiesta legittima riceveva 404 per
 un file esistente e servito al suo URL diretto).
+
+---
+
+## Quinta passata (2026-08-07) — revisione della copertura dei test
+
+Rilettura integrale di `index.cjs` e delle 65 suite con una domanda sola: *quali
+comportamenti reali non sono asseriti da nessun test?* La copertura di riga era
+già al 98.5% stmts / 98.4% branch, quindi le lacune non erano di riga ma
+**semantiche**: rami eseguiti da un test che ne asserisce un altro aspetto.
+
+Esito: **4 nuove suite** (71 test) e **due voci** qui sotto. Nessuna delle due è
+una vulnerabilità; la #8 è un difetto di coerenza dell'interfaccia del listing,
+la #9 è codice morto.
+
+### 8. Listing: `?order=` con valore non riconosciuto ordina in modo ASCENDENTE ma disegna la freccia DISCENDENTE
+
+**Stato: RISOLTO.**
+
+**Sintomo.** `GET /?sort=size&order=DESC` (maiuscolo, o qualsiasi valore diverso
+da `desc`) restituisce le righe in ordine **ascendente** ma intesta la colonna
+Size con la freccia **↓**, e il link della colonna attiva ripropone `order=asc`
+— cioè cliccarlo non cambia nulla. Lo stato disegnato mente su quello servito.
+
+**Causa.** `sortOrder` conservava il valore grezzo del parametro e i tre
+consumatori lo testavano con **polarità opposta**:
+
+| consumatore | test | valore ignoto ⇒ |
+|---|---|---|
+| comparatore `items.sort` | `sortOrder === 'desc'` | ascendente |
+| `getSortIndicator` | `sortOrder === 'asc'` | ↓ (discendente) |
+| `getSortUrl` (toggle) | `sortOrder === 'asc'` | link a `asc` |
+
+Con `'asc'` e `'desc'` le tre letture coincidono, per questo il difetto non è
+mai emerso: la suite copriva entrambi i valori validi e — in
+`listing-special-entries.test.js` — il fatto che un `order` ignoto *ordina*
+ascendente, ma nessun test confrontava l'ordine delle righe con la freccia
+renderizzata.
+
+**Fix.** Normalizzazione unica a monte:
+
+```js
+const sortOrder = orderParam === 'desc' ? 'desc' : 'asc';
+```
+
+I tre consumatori restano invariati e ora concordano per costruzione.
+Comportamento identico a prima per `'asc'` / `'desc'` / parametro assente; cambia
+solo il rendering dei valori non riconosciuti (freccia ↓ → ↑, toggle
+`asc` → `desc`), che ora descrive le righe effettivamente mostrate.
+
+**Test.** `__tests__/listing-sort-and-cap.test.js` — l'ordine delle righe è
+confrontato con la freccia e con il target del link per ognuno di
+`asc` / `desc` / `DESC` / valore ignoto / parametro assente. La stessa suite pinna
+anche un'asimmetria preesistente ma non asserita: `compareDirsFirst` è cablato
+nei comparatori `type` e `size` ma **non** in `name`, quindi una directory
+ordinata per nome può finire dopo un file.
+
+**Priorità:** Bassa (coerenza dell'interfaccia; nessun impatto su cosa viene
+servito).
+
+### 9. `loadFile()`: il ramo `if (!fileStat)` è irraggiungibile — entrambi i call site passano già lo stat
+
+**Stato: APERTO** (nessuna azione presa: è una decisione di stile del manutentore).
+
+`loadFile(toOpen, fileStat)` (`index.cjs:2467`) apre con un fallback che rifà
+lo `stat()` quando il secondo argomento manca:
+
+```js
+if (!fileStat) {
+    try { fileStat = await fs.promises.stat(toOpen); }
+    catch (error) { _logger.error('File stat error:', error); await sendErrorPage(ctx, 404); return; }
+}
+```
+
+I due soli call site lo passano sempre — `loadFile(path.join(toOpen,
+indexFile.name), indexFile.stat)` (`index.cjs:2429`) e `loadFile(toOpen, stat)`
+(`index.cjs:2449`) — quindi il ramo non è mai eseguito. È esattamente ciò che
+resta scoperto nel report di coverage (righe 2470-2475): non una lacuna dei
+test, ma codice morto. È l'**unico** blocco scoperto che non sia già
+documentato come difensivo-per-scelta (gli altri: comparazione case-insensitive
+riservata a darwin/win32, `_isWithinRoot` come difesa in profondità dopo
+`path.normalize`, il `catch` del `decodeURIComponent` già validato dal
+costruttore `URL`, il `catch` sincrono attorno alla pipeline del tee).
+
+Due opzioni, entrambe legittime:
+
+- **A — rimuovere il ramo** e rendere `fileStat` un parametro obbligatorio: −7
+  righe, coverage a 100% su quel tratto, e un futuro call site che dimenticasse
+  lo stat fallirebbe rumorosamente invece di pagare silenziosamente una `stat`
+  in più.
+- **B — tenerlo** come rete per un futuro call site, annotandolo con un commento
+  `defensive:` come gli altri rami scoperti, così il report di coverage resta
+  leggibile.
+
+**Priorità:** Molto bassa (nessun impatto funzionale).
 
 ---
 

@@ -5,6 +5,55 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🐛 Fixed — directory listing: a non-canonical `?order=` value drew the wrong arrow
+
+`GET /?sort=size&order=DESC` (any value other than `desc`, including a
+wrong-case one) sorted the rows **ascending** while heading the column with the
+**descending** ▼ arrow, and the column link offered `order=asc` — so clicking it
+did nothing. The rendered state contradicted the rows actually served.
+
+The three consumers of the `order` query parameter tested the raw value with
+opposite polarity: the comparator asked `=== 'desc'` (unknown → ascending),
+while the arrow and the toggle link asked `=== 'asc'` (unknown → descending).
+The value is now normalized once, `orderParam === 'desc' ? 'desc' : 'asc'`, so
+the three agree by construction.
+
+`asc`, `desc` and an absent parameter behave exactly as before — only the
+rendering of unrecognized values changes. See `docs/revisione_codice_v5.0.md` #8.
+
+### ✅ Tests — semantic coverage review
+
+Line coverage was already at ~98.5% statements / 98.4% branches, so this pass
+looked for behaviors that are *executed* by the suite but never *asserted*.
+Four new suites, 71 tests, no production-code change beyond the fix above:
+
+- **`range-conditional-surface.test.js`** — the full header surface of 416
+  (`Content-Range: bytes */size`, empty body, `Accept-Ranges`, `Cache-Control`,
+  `nosniff`, and the encoding-specific ETag it keeps), 416 on a zero-byte
+  representation, `HEAD` + 416, the fact that a 206 of a compressible resource
+  stays identity while keeping `Vary` and dropping the `-br`/`-gz` ETag suffix,
+  the date-form `If-Range` degradation to 200 (register #2, previously
+  untested), and `*` being the wildcard only as the whole `If-None-Match` value.
+- **`url-rewriting-canonicalization.test.js`** — the canonical trailing-slash
+  and `hideExtension` redirects under a URL-rewriting upstream and under
+  `urlPrefix`: `Location` stays in *original-URL* space so the target actually
+  resolves. Also the three consequences of the slash decision being read from
+  `ctx.originalUrl` while resolution uses `ctx.url`, and `GET /static` (the bare
+  prefix) canonicalizing to `/static/`.
+- **`option-boundary-values.test.js`** — `compression.minFileSize` /
+  `maxFileSize` at the exact inclusive boundary, `encodings: []` (no coding and
+  no `Vary`), configured preference order, `Accept-Encoding: identity;q=0`
+  (deliberately served rather than answered 406), `options.method` with a
+  non-GET verb and the degenerate `method: []`, `browserCacheMaxAge: 0`, and the
+  zero-byte representation.
+- **`listing-sort-and-cap.test.js`** — sort state consistency (rows vs arrow vs
+  toggle link), the `name` column not applying dirs-first while `type`/`size`
+  do, `dirListing.maxEntries` being applied to the raw `readdir()` result
+  *before* hidden filtering, and href encoding for names containing `#`, `?`,
+  `&`, `%`, `'`, `"`.
+
 ## [5.2.0] - 2026-08-07
 
 Correctness release. `dirListing.enabled: false` no longer swallows a

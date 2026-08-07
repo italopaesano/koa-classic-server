@@ -308,15 +308,30 @@ errorPages: {
 
 #### `dirListing.enabled` (Boolean)
 
-Controlla se mostrare il contenuto delle directory.
+Controlla se mostrare il **listing** del contenuto delle directory.
 
 ```javascript
 // Mostra directory listing
 dirListing: { enabled: true }
 
-// Non mostra directory (restituisce "Not Found")
+// Non mostra il listing: una directory senza indice restituisce "Not Found"
 dirListing: { enabled: false }
 ```
+
+L'opzione governa **solo il listing**, non la risoluzione del file index: una directory che contiene un file index servibile lo serve comunque, con `enabled: true` o `false`. Con `enabled: false` fa `404` solo la directory che non ha **niente da renderizzare**.
+
+```
+Config: dirListing: { enabled: false }, index: ['index.html']
+
+GET /docs/     con /docs/index.html          → 200, serve l'indice
+GET /docs/     senza /docs/index.html        → 404
+GET /docs      con /docs/index.html          → 301 → /docs/
+GET /docs      senza /docs/index.html        → 404 (mai 301 verso un 404)
+```
+
+Un indice **nascosto** dal namespace `hidden` conta come **assente**: non viene mai servito e con `enabled: false` la directory fa `404` (con `enabled: true` si ricade sul listing, che non mostra l'indice nascosto).
+
+> ⚠️ **Cambio di comportamento in 5.2.0**: fino alla 5.1.0 `enabled: false` faceva `404` su *ogni* directory, indice presente o meno. Era un'incoerenza e non una protezione — con `enabled: false` `GET /docs/index.html` restituiva (e restituisce) comunque `200`, quindi il `404` sull'URL della directory non nascondeva nulla; negava solo l'URL canonico di un file già servito. Se ti affidavi al vecchio `404` per rendere irraggiungibile una directory, la via corretta è nasconderla con il namespace `hidden` (che copre anche l'accesso diretto ai file), oppure non configurare `index`.
 
 #### `dirListing.trailingSlash` (Boolean)
 
@@ -325,7 +340,7 @@ dirListing: { enabled: false }
 - `GET /dir` su una **directory** → `301` redirect a `/dir/` (così i link **relativi** nella pagina index/listing si risolvono contro la directory, non contro il genitore);
 - `GET /file/` su un **file** → `404` (un file è raggiungibile solo al suo URL senza slash).
 
-La query string e l'eventuale percent-encoding del path sono preservati nel redirect, e il redirect include `urlPrefix`. La radice `/` non redirige mai. Il redirect di **directory** scatta solo quando la directory renderizzerebbe qualcosa (listing abilitato), quindi con `dirListing.enabled: false` una directory fa direttamente `404` senza un redirect-verso-404. Il **404 sui file** (`/file/`) invece è pura canonicalizzazione dell'URL e vale a prescindere da `dirListing.enabled`. Il redirect nota: anche un file template richiesto con slash (`/page.ejs/`) fa `404` invece di renderizzare.
+La query string e l'eventuale percent-encoding del path sono preservati nel redirect, e il redirect include `urlPrefix`. La radice `/` non redirige mai. Il redirect di **directory** scatta solo quando la directory renderizzerebbe qualcosa — cioè quando il listing è abilitato **oppure** esiste un indice servibile — quindi una directory che non ha nulla da renderizzare fa direttamente `404` senza un redirect-verso-404 (due risposte al posto di una, e la prima confermerebbe che la directory esiste). Il **404 sui file** (`/file/`) invece è pura canonicalizzazione dell'URL e vale a prescindere da `dirListing.enabled`. Il redirect nota: anche un file template richiesto con slash (`/page.ejs/`) fa `404` invece di renderizzare.
 
 > Con `useOriginalUrl: false` (middleware di URL rewriting) la canonicalizzazione si basa sull'URL originale del client; se il tuo rewriting mappa un URL con slash finale a un file, imposta `trailingSlash: false`.
 
@@ -806,12 +821,42 @@ Risultato: Mostra directory listing HTML
 
 > Nota: con il default `index: []` nessun file index viene mai cercato, quindi questo è il comportamento per **tutte** le directory.
 
-#### Caso 3: dirListing.enabled = false
+#### Caso 3: dirListing.enabled = true, index configurato ma nascosto
 
 ```
+Config:    index: ['index.html'], hidden: { alwaysHide: ['cartella/index.html'] }
 Richiesta: GET /cartella/
+Filesystem:
+  /cartella/index.html ✓ (esiste, ma nascosto)
+  /cartella/file1.txt
 
-Risultato: "Not Found" (indipendentemente da index)
+Risultato: Mostra directory listing HTML (senza la riga index.html)
+```
+
+> Un indice nascosto è trattato come **assente**: non viene mai servito.
+
+#### Caso 4: dirListing.enabled = false, index presente
+
+```
+Config:    index: ['index.html']
+Richiesta: GET /cartella/
+Filesystem:
+  /cartella/index.html ✓ (esiste)
+
+Risultato: Serve /cartella/index.html
+```
+
+> `dirListing.enabled` governa il listing, non l'indice. Vedi il riquadro sul cambio di comportamento 5.2.0 nella sezione dell'opzione.
+
+#### Caso 5: dirListing.enabled = false, index assente, non configurato o nascosto
+
+```
+Config:    index: ['index.html']   // oppure il default: []
+Richiesta: GET /cartella/
+Filesystem:
+  /cartella/file1.txt
+
+Risultato: "Not Found"
 ```
 
 ### Gestione dei File

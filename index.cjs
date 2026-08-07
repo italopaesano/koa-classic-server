@@ -788,6 +788,10 @@ module.exports = function koaClassicServer(
         dirListing: {                   // Directory listing configuration (V3+).
             enabled:        true,       // Render the directory listing HTML when no index file matches.
                                         //   Set to false to return 404 instead of a listing.
+                                        //   Governs the LISTING only: a directory holding a servable
+                                        //   index file serves it either way (since 5.2.0). An index
+                                        //   hidden by the `hidden` namespace counts as absent, so with
+                                        //   enabled:false such a directory 404s.
             maxEntries:     10000,      // Soft cap on entries shown / sorted / stat'd per listing.
                                         //   Implementation: fs.promises.readdir() then slice(0, maxEntries).
                                         //   This is a SAFETY NET against catastrophic operational accidents
@@ -810,6 +814,9 @@ module.exports = function koaClassicServer(
                                         //   so relative links in an index page resolve against the
                                         //   directory. Set false for the v3 behavior (serve directories
                                         //   and files regardless of the trailing slash).
+                                        //   The directory redirect fires only once the directory is
+                                        //   known to render something, so /dir never answers 301 and
+                                        //   then 404.
         },
         index: [], // Index file name(s) - must be an ARRAY.
                    // Default: [] — no index file is looked up; directories always
@@ -2053,6 +2060,37 @@ module.exports = function koaClassicServer(
         return null;
     }
 
+    // Resolve the *servable* index file of a directory, applying to it the same
+    // visibility rules a directly-requested file would get. Returns:
+    //   { file: <entry> }   a servable index (exists, not hidden, inside the
+    //                       symlink boundary);
+    //   { file: null }      the directory has no index to serve — absent OR
+    //                       hidden. A hidden index is deliberately treated as
+    //                       ABSENT, not as servable: it falls through to the
+    //                       listing, or to the 404 when the listing is off;
+    //   { file: null, rejected: true }
+    //                       an index exists but escapes the symlink boundary —
+    //                       the caller must answer 404 (a hard security 404,
+    //                       never a fall-through to the listing).
+    async function resolveIndexFile(dirPath) {
+        if (!options.index || options.index.length === 0) return { file: null };
+
+        const found = await findIndexFile(dirPath, options.index);
+        if (!found) return { file: null };
+
+        const indexPath = path.join(dirPath, found.name);
+        const indexRelPath = path.relative(normalizedRootDir, indexPath).split(path.sep).join('/');
+        if (isHiddenEntry(found.name, indexRelPath, false)) return { file: null };
+
+        // Symlink boundary check (V-1): an index file may itself be a symlink
+        // escaping rootDir — validate before declaring it servable. Guarded so
+        // the default 'follow' mode skips the await entirely.
+        if (_symlinkMode !== 'follow' && !(await symlinkAllowed(indexPath))) {
+            return { file: null, rejected: true };
+        }
+        return { file: found };
+    }
+
     return async (ctx, next) => {
         if (!options.method.includes(ctx.method)) {
             await next();
@@ -2315,68 +2353,88 @@ module.exports = function koaClassicServer(
             }
 
             if (stat.isDirectory()) {
-                // Handle directory
-                if (options.dirListing.enabled) {
-                    // Canonical trailing-slash redirect (V4): a directory URL
-                    // without a trailing slash serves an index/listing whose
-                    // relative links would resolve against the parent. Redirect
-                    // /dir → /dir/ (301) BEFORE serving so the browser's base is
-                    // the directory itself.
-                    if (options.dirListing.trailingSlash && !_pathEndsWithSlash) {
-                        // Build the Location from the parsed originalUrl (same
-                        // defense as the hideExtension redirect): re-parsing forces
-                        // the target to be origin-relative — an absolute-form
-                        // request target (`GET http://evil/x`, legal in HTTP/1.1
-                        // and reachable under useOriginalUrl:false + rewriting)
-                        // would otherwise become an off-origin `Location` (open
-                        // redirect). .pathname keeps urlPrefix and percent-encoding.
-                        let originalUrlObj;
-                        try {
-                            originalUrlObj = new URL(_origin + ctx.originalUrl);
-                        } catch {
-                            sendBadRequest(ctx);
-                            return;
-                        }
-                        // Collapse a leading "//" / "/\" (protocol-relative) to a
-                        // single slash before appending the canonical trailing one.
-                        let redirectPath = originalUrlObj.pathname;
-                        if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
-                            redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
-                        }
-                        ctx.status = 301;
-                        ctx.redirect(redirectPath + '/' + originalUrlObj.search);
+                // Handle directory. What a directory renders is decided by two
+                // independent things: whether it has a servable index file, and
+                // whether the listing is enabled. dirListing.enabled governs the
+                // LISTING only — a directory holding an index file serves it
+                // either way (the index is already reachable at its own URL, so
+                // 404-ing the directory URL would hide nothing).
+                let indexFile = null;
+
+                if (!options.dirListing.enabled) {
+                    // Listing off: the directory renders something only if it
+                    // has a servable index, so the index lookup must run BEFORE
+                    // the canonical redirect — otherwise /dir would answer 301
+                    // and then 404, two responses where one suffices, and the
+                    // first would confirm the directory exists. Keeps "nothing
+                    // to render here" indistinguishable from "does not exist".
+                    const resolved = await resolveIndexFile(toOpen);
+                    if (!resolved.file) {
+                        // No index (absent, hidden, or outside the symlink
+                        // boundary) and no listing to fall back on.
+                        await sendErrorPage(ctx, 404);
                         return;
                     }
-
-                    // Search for index file matching configured patterns
-                    if (options.index && options.index.length > 0) {
-                        const indexFile = await findIndexFile(toOpen, options.index);
-                        if (indexFile) {
-                            const indexRelPath = path.relative(normalizedRootDir, path.join(toOpen, indexFile.name)).split(path.sep).join('/');
-                            if (!isHiddenEntry(indexFile.name, indexRelPath, false)) {
-                                const indexPath = path.join(toOpen, indexFile.name);
-                                // Symlink boundary check (V-1): an index file may itself be a
-                                // symlink escaping rootDir — validate before serving it.
-                                // Guarded so the default 'follow' mode skips the await entirely.
-                                if (_symlinkMode !== 'follow' && !(await symlinkAllowed(indexPath))) {
-                                    await sendErrorPage(ctx, 404);
-                                    return;
-                                }
-                                await loadFile(indexPath, indexFile.stat);
-                                return;
-                            }
-                        }
-                    }
-
-                    // No index file found, show directory listing. On a readdir
-                    // failure show_dir writes the 500 error page itself and returns
-                    // undefined — don't clobber that body with the listing assignment.
-                    const listing = await show_dir(toOpen, ctx);
-                    if (listing !== undefined) ctx.body = listing;
-                } else {
-                    // Directory listing disabled
-                    await sendErrorPage(ctx, 404);
+                    indexFile = resolved.file;
                 }
+
+                // Canonical trailing-slash redirect (V4): a directory URL
+                // without a trailing slash serves an index/listing whose
+                // relative links would resolve against the parent. Redirect
+                // /dir → /dir/ (301) BEFORE serving so the browser's base is
+                // the directory itself. Reached only once the directory is
+                // known to render something, so it never redirects to a 404.
+                if (options.dirListing.trailingSlash && !_pathEndsWithSlash) {
+                    // Build the Location from the parsed originalUrl (same
+                    // defense as the hideExtension redirect): re-parsing forces
+                    // the target to be origin-relative — an absolute-form
+                    // request target (`GET http://evil/x`, legal in HTTP/1.1
+                    // and reachable under useOriginalUrl:false + rewriting)
+                    // would otherwise become an off-origin `Location` (open
+                    // redirect). .pathname keeps urlPrefix and percent-encoding.
+                    let originalUrlObj;
+                    try {
+                        originalUrlObj = new URL(_origin + ctx.originalUrl);
+                    } catch {
+                        sendBadRequest(ctx);
+                        return;
+                    }
+                    // Collapse a leading "//" / "/\" (protocol-relative) to a
+                    // single slash before appending the canonical trailing one.
+                    let redirectPath = originalUrlObj.pathname;
+                    if (redirectPath.length > 1 && (redirectPath.charCodeAt(1) === 0x2F || redirectPath.charCodeAt(1) === 0x5C)) {
+                        redirectPath = '/' + redirectPath.replace(/^[/\\]+/, '');
+                    }
+                    ctx.status = 301;
+                    ctx.redirect(redirectPath + '/' + originalUrlObj.search);
+                    return;
+                }
+
+                // Listing on: the index lookup is deferred to here, past the
+                // redirect. The directory renders something either way, so the
+                // redirect above was unconditionally correct and the
+                // pre-redirect request is spared the stat()/readdir().
+                if (!indexFile) {
+                    const resolved = await resolveIndexFile(toOpen);
+                    if (resolved.rejected) {
+                        // Index outside the symlink boundary: a hard 404, never
+                        // a fall-through that would list the directory instead.
+                        await sendErrorPage(ctx, 404);
+                        return;
+                    }
+                    indexFile = resolved.file;
+                }
+
+                if (indexFile) {
+                    await loadFile(path.join(toOpen, indexFile.name), indexFile.stat);
+                    return;
+                }
+
+                // No index file found, show directory listing. On a readdir
+                // failure show_dir writes the 500 error page itself and returns
+                // undefined — don't clobber that body with the listing assignment.
+                const listing = await show_dir(toOpen, ctx);
+                if (listing !== undefined) ctx.body = listing;
                 return;
             } else {
                 // Canonical trailing-slash 404 (V4): a trailing slash means

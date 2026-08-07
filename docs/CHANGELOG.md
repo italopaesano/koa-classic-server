@@ -5,6 +5,83 @@ All notable changes to koa-classic-server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.2.0] - 2026-08-07
+
+Correctness release. `dirListing.enabled: false` no longer swallows a
+directory's index file.
+
+### 🐛 Fixed — `dirListing.enabled: false` now serves the index file
+
+`dirListing.enabled` is documented as the switch for the directory **listing**.
+Until 5.1.0 it also silently disabled **index-file resolution**: the whole
+lookup lived inside the `if (options.dirListing.enabled)` branch, so a
+directory containing `index.html` answered **404** with the listing off.
+
+That 404 protected nothing. With `dirListing.enabled: false`, `GET
+/docs/index.html` returned — and still returns — `200`; only the directory's
+own canonical URL was denied. It was an inconsistency, and it broke the
+project's core contract: *if a file exists in the served directory, `GET` on
+its path returns it*.
+
+```js
+// dirListing: { enabled: false }, index: ['index.html']
+GET /docs/    with /docs/index.html      → 5.1.0: 404      5.2.0: 200 (index)
+GET /docs/    without /docs/index.html   → 5.1.0: 404      5.2.0: 404
+GET /docs     with /docs/index.html      → 5.1.0: 404      5.2.0: 301 → /docs/
+GET /docs     without /docs/index.html   → 5.1.0: 404      5.2.0: 404
+```
+
+The two documentation sources disagreed on this, which is how it went
+unnoticed: the 3.0.0 entry below describes the option as *"requests for a
+directory **without a matching index file** return 404"* — the 5.2.0 behavior —
+while `docs/DOCUMENTATION.md` documented the shipped one. `docs/SECURITY_HARDENING.md`
+went further and *recommended* the broken pairing in two places, including the
+maximally-hardened reference config: an operator following the project's own
+security guide to the letter got an all-404 site.
+
+**Dispatch restructured.** Index resolution moved into a new internal
+`resolveIndexFile()` and now runs *before* the canonical trailing-slash
+redirect when the listing is disabled, because that is when the
+redirect-vs-404 decision depends on it. Two invariants are preserved
+deliberately, and pinned by tests:
+
+- **A directory with nothing to render answers a single 404, never
+  301-then-404.** Two responses where one suffices, and the first would
+  confirm the directory exists. "Nothing to render here" stays
+  indistinguishable from "does not exist".
+- **A hidden index counts as absent, never as servable.** An index filtered by
+  the `hidden` namespace falls through to the listing when the listing is on,
+  and to the 404 when it is off — it is never served, and its name never
+  appears in the listing. Same for an index escaping the symlink boundary,
+  which is a hard 404 rather than a fall-through that would list the directory.
+
+With the listing **enabled** the lookup is deferred until after the redirect:
+the directory renders something either way, so the redirect is unconditionally
+correct and the pre-redirect request is spared the extra `stat()`/`readdir()`.
+The default path (`dirListing.enabled: true`) therefore performs exactly as
+before.
+
+### ⚠️ Behavior change
+
+Operators running `dirListing.enabled: false` over directories that contain an
+index file will now get the index served instead of a 404. If you relied on the
+404 to make a directory unreachable, hide it via the `hidden` namespace (which
+also covers direct file access — the previous behavior did not) or stop
+configuring `index`.
+
+### ✅ Added — regression matrix
+
+- **`__tests__/dirlisting-index-resolution.test.js`** — new suite pinning the
+  full `enabled` × `index` × on-disk-state matrix, both trailing-slash forms,
+  `trailingSlash: false`, the root directory, RegExp index patterns, and the
+  two invariants above (hidden index never served; no 301-then-404, with
+  "renders nothing" and "does not exist" asserted byte-identical).
+- `__tests__/dir-trailing-slash.test.js` and `__tests__/index.test.js` updated
+  where they pinned the old behavior. The latter also had a copy-paste slip —
+  its third `describe` mounts `options3` but passed `options2` to the shared
+  assertion helper; invisible while the helper only read `dirListing.enabled`
+  (identical in both), so it is corrected here.
+
 ## [5.1.0] - 2026-07-22
 
 Test-hardening release: no runtime or API changes. This version adds a

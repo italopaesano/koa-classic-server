@@ -97,6 +97,10 @@ millions of entries can exhaust RAM regardless of `maxEntries`.
   ```js
   dirListing: { enabled: false }, index: ['index.html']
   ```
+  > **Requires >= 5.2.0.** Up to 5.1.0 `dirListing.enabled: false` also disabled index-file
+  > resolution, so this pairing answered 404 for *every* directory, index file or not. On
+  > 5.1.0 and earlier, either upgrade or keep listings enabled. Note this was never a
+  > containment measure: `GET /dir/index.html` returned 200 on those versions too.
 - If you do need them, lower the cap (a lower value is *more* defensive) and paginate:
   ```js
   dirListing: { enabled: true, maxEntries: 1000, entriesPerPage: 100 }

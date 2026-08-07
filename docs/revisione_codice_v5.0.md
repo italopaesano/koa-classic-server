@@ -86,6 +86,9 @@ integrità rilevato.
 ### Terza passata (2026-07-20) — revisione completa (sessione separata)
 - [x] [6. `Accept-Ranges: bytes` annunciato sulle risposte compresse, mentre il Range è servito dalla rappresentazione identity](#6-accept-ranges-bytes-annunciato-sulle-risposte-compresse-mentre-il-range-è-servito-dalla-rappresentazione-identity) — **CHIUSO / WONTFIX** (opzione A: comportamento sicuro per i client conformi; nessuna modifica al codice; documentato in `docs/DOCUMENTATION.md`)
 
+### Quarta passata (2026-08-07) — segnalazione esterna sul dispatch directory
+- [x] [7. `dirListing.enabled: false` inghiotte anche il file index: una directory con `index.html` risponde 404](#7-dirlistingenabled-false-inghiotte-anche-il-file-index-una-directory-con-indexhtml-risponde-404) — **RISOLTO in 5.2.0** (dispatch ristrutturato con `resolveIndexFile()`; indice risolto prima del redirect quando il listing è off; suite di regressione dedicata)
+
 ---
 
 ## Minori / conformità / coerenza
@@ -610,6 +613,98 @@ risposta scorretta.
 **Priorità:** Bassa (conformità/coerenza; nessuno scenario in cui la risposta
 servita sia scorretta — i client conformi distinguono le due rappresentazioni, i
 client di resume usano `If-Range`).
+
+---
+
+## Quarta passata (2026-08-07) — segnalazione esterna sul dispatch directory
+
+### 7. `dirListing.enabled: false` inghiotte anche il file index: una directory con `index.html` risponde 404
+
+**Stato: RISOLTO in 5.2.0.**
+
+**Sintomo.** Con `dirListing: { enabled: false }` e `index: ['index.html']`, una
+directory che *contiene* `index.html` risponde **404** invece di servire
+l'indice.
+
+**Causa.** In `index.cjs` (stato pre-fix, righe 2317-2379) l'intera risoluzione
+dell'indice era annidata dentro `if (options.dirListing.enabled)`; il ramo
+`else` faceva `sendErrorPage(ctx, 404)` senza mai guardare se un indice
+esistesse. Il nome dell'opzione dice `dirListing` — governa il *listing* — ma di
+fatto governava anche la risoluzione dell'indice.
+
+**Perché è un bug e non una scelta.** Tre elementi convergono:
+
+1. **Il 404 non proteggeva nulla.** Con `enabled: false`, `GET /docs/index.html`
+   restituiva comunque `200`. Veniva negato solo l'URL canonico della directory,
+   cioè l'URL *corretto* di un file che il server serviva comunque.
+2. **Viola il contratto dichiarato** in `CLAUDE.md`: *"If a file exists in the
+   served directory, `GET` on its path returns it."*
+3. **La documentazione si contraddiceva.** `docs/CHANGELOG.md` (voce 3.0.0, che
+   introduce l'opzione) descrive `enabled: false` come *"requests for a
+   directory **without a matching index file** return 404"* — cioè il
+   comportamento corretto — mentre `docs/DOCUMENTATION.md` (Caso 3) documentava
+   quello implementato, *"indipendentemente da index"*. La discrepanza è
+   probabilmente il motivo per cui il difetto è sopravvissuto a tre revisioni.
+4. **La guida di hardening raccomandava la configurazione rotta.** Prova
+   decisiva: `docs/SECURITY_HARDENING.md` prescriveva `dirListing: { enabled:
+   false }, index: ['index.html']` in **due** punti — la raccomandazione §3.3
+   (*"disable them and rely on an index file"*) e la config
+   *maximally-hardened* di chiusura (*"no listings; rely on index files"*). Un
+   operatore che seguiva alla lettera la guida di sicurezza canonica del
+   progetto otteneva un sito interamente **404**. Nessuno può aver inteso
+   quel comportamento come corretto.
+
+**Il comportamento era pinnato da tre test**, il che conferma che era stato
+asserito consapevolmente ma sulla base dell'assunzione sbagliata — il commento
+in `dir-trailing-slash.test.js` la esplicita: *"no redirect (would 404
+anyway)"*.
+
+**Fix (opzione scelta: ristrutturazione del dispatch, minor 5.2.0).**
+
+- Nuovo helper interno **`resolveIndexFile(dirPath)`** (`index.cjs:2075`) che
+  applica all'indice le stesse regole di visibilità di un file richiesto
+  direttamente e ritorna `{ file }`, `{ file: null }` (assente **oppure**
+  nascosto) o `{ file: null, rejected: true }` (fuori dal boundary symlink).
+- Con il listing **off** la risoluzione gira **prima** del redirect canonico
+  (`index.cjs:2364`): è lì che la decisione redirect-vs-404 dipende
+  dall'esistenza dell'indice.
+- Con il listing **on** la risoluzione resta **dopo** il redirect
+  (`index.cjs:2417`): la directory renderizza comunque qualcosa, quindi il
+  redirect è incondizionatamente corretto e la richiesta pre-redirect non paga
+  lo `stat()`/`readdir()` aggiuntivo. **Il percorso di default non cambia
+  costo.**
+
+**Due invarianti preservate deliberatamente** (entrambe pinnate dalla nuova
+suite):
+
+- **Mai 301-poi-404.** Una directory che non renderizza nulla risponde con un
+  solo 404, senza redirect: due risposte al posto di una, e la prima
+  confermerebbe l'esistenza della directory. "Niente da renderizzare" resta
+  indistinguibile da "non esiste" — asserito confrontando status **e body** con
+  quelli di una directory inesistente.
+- **Indice nascosto ≡ assente.** Un indice filtrato da `isHiddenEntry` non viene
+  mai servito: cade sul listing se il listing è on, sul 404 se è off. Stesso
+  trattamento per un indice che esce dal boundary symlink, che però è un 404
+  *duro* — mai un fall-through che finirebbe per elencare la directory.
+
+**Nota sul costo, per il verbale.** La segnalazione originale stimava «una
+`readdir` in più sulla richiesta pre-redirect». In realtà `findIndexFile` usa
+`stat()` per i pattern stringa e ricorre a `readdir()` solo per i pattern
+RegExp; con `index: []` (default) non viene chiamata affatto. Il costo reale
+sarebbe stato **una `stat`**, e comunque non viene pagato: con il listing
+abilitato il lookup resta dopo il redirect.
+
+**Test.** Nuova suite `__tests__/dirlisting-index-resolution.test.js` con la
+matrice completa `enabled` × `index` × stato-su-disco, entrambe le forme dello
+slash finale, `trailingSlash: false`, la root, i pattern RegExp e le due
+invarianti. Aggiornati `dir-trailing-slash.test.js` e `index.test.js` dove
+pinnavano il vecchio comportamento; in quest'ultimo è emersa e stata corretta
+una svista di copia-incolla preesistente (il terzo `describe` monta `options3`
+ma passava `options2` all'helper condiviso — invisibile finché l'helper leggeva
+solo `dirListing.enabled`, identico nelle due config).
+
+**Priorità:** Media-alta (correttezza: una richiesta legittima riceveva 404 per
+un file esistente e servito al suo URL diretto).
 
 ---
 

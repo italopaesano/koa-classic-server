@@ -71,6 +71,41 @@ out of the combined quote fixture into its own file, so the `'` escaping stays
 under test on Windows too. `afterAll` is now guarded against a failed
 `beforeAll`.
 
+### 🔒 Security — two high-severity advisories in **dev-only** dependencies (lockfile only)
+
+**The published package was never exposed.** Both advisories sit in the *development*
+tree — the tooling that lints and tests the project. The runtime tree is three packages
+(`mime-types` → `mime-db`), it does not reach either package, and `files` ships only
+`index.cjs` / `index.mjs`, so no consumer of koa-classic-server was affected at any
+version. This is a build-environment fix, not a runtime one.
+
+- **`brace-expansion` 5.0.7 → 5.0.9** — two DoS advisories:
+  [GHSA-mh99-v99m-4gvg](https://github.com/advisories/GHSA-mh99-v99m-4gvg) (unbounded
+  expansion length → OOM crash, fixed in 5.0.8) and
+  [GHSA-rgw5-rvv9-x895](https://github.com/advisories/GHSA-rgw5-rvv9-x895) (unbounded
+  intermediate arrays, bypassing the CVE-2026-14257 mitigation, fixed in 5.0.9). Reached
+  transitively through `minimatch`, under `eslint`, `@eslint/config-array`, `glob` and
+  `test-exclude`.
+- **`js-yaml` 3.15.0 → 3.15.1** —
+  [GHSA-5p4m-2wfm-xmqj](https://github.com/advisories/GHSA-5p4m-2wfm-xmqj), quadratic CPU
+  consumption resolving `!!omap`. Reached through
+  `jest` → `babel-plugin-istanbul` → `@istanbuljs/load-nyc-config`.
+
+`package.json` is **unchanged**: no declared range moved and no `overrides` entry was
+added. Every bump is a patch/minor already permitted by the existing ranges, so the fix is
+confined to `package-lock.json`. `npm audit fix` alone could not finish the job — it left
+two stale nested `brace-expansion@5.0.7` copies pinned under the `glob` and `test-exclude`
+override subtrees, which `npm update` and `npm dedupe` also refused to touch. Those two
+lock entries were dropped so both subtrees resolve to the hoisted `brace-expansion@5.0.9`
+their `^5.0.5` requirement already allowed; `npm ci` reproduces the result exactly. No
+`--force`, and therefore no major bump of `eslint` (stays 10.6.0) or `jest` (stays 30.4.2).
+
+Incidental patch/minor movements pulled in by the same resolution: `lru-cache` 11.5.1 →
+11.5.2, `minimatch` 10.2.5 → 10.2.6 (hoisted copy), `picomatch` 4.0.4 → 4.0.5, `semver`
+7.7.4 → 7.8.5. The production tree is byte-identical to the previous lockfile, all engine
+constraints still admit the Node 20 / 22 / 24 CI matrix, and `npm audit` now reports zero
+vulnerabilities.
+
 ## [5.2.0] - 2026-08-07
 
 Correctness release. `dirListing.enabled: false` no longer swallows a

@@ -93,6 +93,10 @@ integrità rilevato.
 - [x] [8. Listing: `?order=` con valore non riconosciuto ordina in modo ASCENDENTE ma disegna la freccia DISCENDENTE](#8-listing-order-con-valore-non-riconosciuto-ordina-in-modo-ascendente-ma-disegna-la-freccia-discendente) — **RISOLTO** (normalizzazione unica di `sortOrder` a `'asc' | 'desc'`)
 - [ ] [9. `loadFile()`: il ramo `if (!fileStat)` è irraggiungibile — entrambi i call site passano già lo stat](#9-loadfile-il-ramo-if-filestat-è-irraggiungibile--entrambi-i-call-site-passano-già-lo-stat) — **APERTO** (nessun impatto funzionale; decisione del manutentore: rimuovere o marcare come difensivo)
 
+### Sesta passata (2026-08-22) — conformità HEAD (RFC 9110 §9.1 / §9.3.2)
+- [x] [10. Il default `method: ['GET']` rende il server non conforme: `HEAD` risponde 404 su OGNI path mentre `GET` risponde 200](#10-il-default-method-get-rende-il-server-non-conforme-head-risponde-404-su-ogni-path-mentre-get-risponde-200) — **RISOLTO in 5.3.0** (default `['GET', 'HEAD']`; normalizzazione maiuscola; matrice di parità HEAD/GET verificata per mutazione; documentazione riscritta)
+- [ ] [11. `method` era l'unica opzione a valori enumerati senza guardia: verificare che non ce ne siano altre](#11-method-era-lunica-opzione-a-valori-enumerati-senza-guardia-verificare-che-non-ce-ne-siano-altre) — **APERTO** (audit di normalizzazione/validazione sulle opzioni restanti)
+
 ---
 
 ## Minori / conformità / coerenza
@@ -803,6 +807,121 @@ Due opzioni, entrambe legittime:
   leggibile.
 
 **Priorità:** Molto bassa (nessun impatto funzionale).
+
+---
+
+## Sesta passata (2026-08-22) — conformità HEAD (RFC 9110 §9.1 / §9.3.2)
+
+### 10. Il default `method: ['GET']` rende il server non conforme: `HEAD` risponde 404 su OGNI path mentre `GET` risponde 200
+
+**Problema:** con la configurazione di default il middleware rifiutava `HEAD`, che
+cadeva in `next()` e finiva sul 404 di default di Koa. Misurato su server reale:
+
+```
+GET  /        -> 200   HEAD /        -> 404
+GET  /a.txt   -> 200   HEAD /a.txt   -> 404
+GET  /sub/    -> 200   HEAD /sub/    -> 404
+```
+
+Non è una funzione in meno: un 404 **afferma che la risorsa non esiste**, ed è falso.
+RFC 9110 **§9.1** rende `GET` e `HEAD` il minimo che ogni server generalista **DEVE**
+supportare; **§9.3.2** impone che `HEAD` rispecchi `GET` — stesso status, stessi header,
+nessun body. Lo status di `HEAD` e quello di `GET` non possono divergere.
+
+**Il punto dirimente:** il modello `next()` è corretto per POST/PUT/DELETE — un router a
+valle può legittimamente gestirli — ma **nessun middleware a valle potrà mai servire
+`HEAD` su un file statico, perché solo questo middleware sa che quel file esiste.** Per
+`HEAD` il fall-through non delega nulla: produce solo un 404 falso.
+
+**Incoerenza interna:** il progetto aveva già corretto **due volte** la divergenza
+HEAD/GET trattandola come bug e citando §9.3.2 — in **3.0.1** (ramo template, impatto
+dichiarato MEDIO) e in **4.0.0** (ramo streaming compression). Erano stati riparati due
+rami periferici mentre il default riproduceva lo stesso difetto su ogni path.
+
+**Costo di migrazione misurato:** con `HEAD` nel default la suite dava **1380 test verdi
+su 1381**. L'unico fallimento era `option-boundary-values.test.js:229`, un test
+**tautologico** che asseriva che il default esclude `HEAD`. Zero test comportamentali.
+
+**Perché non è una "restrizione" secondo la filosofia del progetto:** il criterio di
+`CLAUDE.md` è *«does this change the default observable behavior of `GET /path/to/file`?»*
+— no, `GET` resta identico al byte. Cambia solo `HEAD`, da sbagliato a corretto. È lo
+stesso inquadramento di `dirListing.trailingSlash` in 4.0.0 (*correctness fix, not a
+restriction*), con un argomento più forte: quello modificava `GET`, questo no.
+
+**Nessuna nuova esposizione:** il gate del metodo è il **primo** controllo; `urlPrefix`,
+`urlsReserved`, path traversal, `isHiddenEntry` e `symlinkAllowed` stanno tutti a valle e
+non sono condizionati al metodo. Una `HEAD` ammessa percorre la stessa identica pipeline
+di autorizzazione di una `GET`, e rivela solo un sottoinsieme di ciò che `GET` già rivela
+allo stesso chiamante.
+
+**Risolto (opzione A — cambio di default in minor):**
+
+1. `index.cjs` — default `['GET', 'HEAD']` + normalizzazione `.toUpperCase()` (vedi #11);
+   blocco `opts STRUCTURE` riscritto con l'obbligo RFC e l'avvertenza sulla via di fuga.
+2. La via di fuga resta onorata: `method: ['GET']` esplicito continua a escludere `HEAD`.
+   La non conformità diventa una **scelta esplicita e documentata** invece di un incidente
+   di default — coerente con «l'operatore è la fonte di verità». Nessun warning a runtime:
+   sarebbe rumore su una configurazione legittima.
+3. Il `next()` sui verbi non ammessi **resta invariato**. Rispondere `405` di propria
+   iniziativa romperebbe ogni app `app.use(static); app.use(router)`; il `405` con `Allow`
+   di §15.5.6 è responsabilità dell'applicazione composta, non del middleware. Documentato.
+4. Costo accettato e documentato: con `serverCache.compressedFile.enabled` attivo, una
+   `HEAD` a freddo su file comprimibile esegue la compressione completa, perché un
+   `Content-Length` accurato è conoscibile solo comprimendo. Mitigato da single-flight e
+   cache. I rami streaming short-circuitano invece (200, niente `Content-Length`: la deroga
+   di §9.3.2 per gli header calcolabili solo generando il contenuto). Documentata anche
+   l'implicazione: `serverCache.compressedFile.enabled` decide implicitamente il costo di
+   una `HEAD`.
+5. Test — `__tests__/head-parity-matrix.test.js`: una tabella, una riga per ramo di
+   risposta, ciascuna annotata con il ramo che pinna. **Validata per mutazione** contro
+   build deliberatamente rotte:
+   - riprodotto il bug 3.0.1 (rimosso il mascheramento di `ctx.method`) → **catturato**
+   - riprodotto il bug 4.0.0 (rimosso lo status 200 su HEAD nello streaming) → **catturato**
+   - buffered che perde il `Content-Length` reale → **catturato**
+   - default che torna a `['GET']` → **catturato** (13 righe su 14)
+   - rami streaming che perdono lo short-circuit **interno** → **NON catturato**: la
+     risposta resta identica byte per byte (Node stripa il body di una `HEAD` a livello di
+     trasporto, e il tee abbandonato non arriva mai in cache), quindi la CPU sprecata non
+     ha firma black-box. Limite dichiarato nel docblock del file: quell'ottimizzazione è
+     protetta dai commenti al codice, non dai test.
+
+**Esito:** 70 suite / 1398 test verdi, lint pulito, coverage 98.48% stmts / 98.36% branch
+/ 99.01% funcs / 98.51% lines.
+
+---
+
+### 11. `method` era l'unica opzione a valori enumerati senza guardia: verificare che non ce ne siano altre
+
+**Problema:** prima della 5.3.0, `options.method` non aveva né normalizzazione né
+validazione sul contenuto dell'array. Conseguenza:
+
+```js
+method: ['get', 'head']   // → 404 su TUTTO, GET compreso: middleware spento in silenzio
+```
+
+Nessun warning, nessun throw. `ctx.method` è sempre il token maiuscolo grezzo, quindi una
+voce minuscola non corrisponde mai. Risolto in 5.3.0 con `.map(v => String(v).toUpperCase())`.
+
+**Perché resta aperta:** verificando il resto della superficie di configurazione, `method`
+è risultata l'**anomalia**, non la regola — le altre opzioni a valori enumerati hanno già
+una guardia forte:
+
+| Opzione | Valore invalido | Comportamento |
+|---|---|---|
+| `symlinks` | `'Follow'` | **throw** con messaggio guida (`index.cjs:1714`) |
+| `hidden.*.default` | `'Hidden'` | **throw** (`index.cjs:1317`) |
+| `hideExtension.redirect` | `999` | **throw** (`_VALID_REDIRECT_CODES`) |
+| `compression.buffered/streaming` | fuori range | **throw** |
+| `method` (pre-5.3.0) | `['get']` | **silenzio, middleware spento** |
+
+**Da fare:** completare l'audit sulle opzioni non coperte da questa tabella — in
+particolare quelle a forma libera dove un valore malformato degrada in silenzio anziché
+fallire (`urlPrefix`, `urlsReserved` con voci senza slash iniziale, `index`,
+`template.ext` / `hideExtension.ext` rispetto al case) — e decidere se il progetto vuole
+una politica uniforme (throw) o caso per caso.
+
+**Priorità:** Bassa (nessun impatto noto sul comportamento servito; è robustezza di
+configurazione).
 
 ---
 

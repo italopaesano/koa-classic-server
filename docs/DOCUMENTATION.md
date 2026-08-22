@@ -188,7 +188,7 @@ koaClassicServer(rootDir, options)
 ```javascript
 const options = {
   // Metodi HTTP ammessi
-  // Default: ['GET']
+  // Default: ['GET', 'HEAD']
   method: ['GET', 'HEAD'],
 
   // Mostra il contenuto delle directory
@@ -240,18 +240,30 @@ const options = {
 
 #### `method` (Array)
 
-Specifica i metodi HTTP accettati dal middleware. Se una richiesta usa un metodo non presente nell'array, viene passata al middleware successivo.
+**Default: `['GET', 'HEAD']`.** Specifica i metodi HTTP accettati dal middleware. Se una richiesta
+usa un metodo non presente nell'array, viene passata al middleware successivo.
+
+Le voci vengono normalizzate in maiuscolo, quindi `['get', 'head']` equivale a `['GET', 'HEAD']`.
 
 ```javascript
-// Solo GET
-method: ['GET']
-
-// GET e HEAD (utile per check esistenza file)
+// Default: GET e HEAD
 method: ['GET', 'HEAD']
 
-// Multipli metodi (uso avanzato)
+// Metodi aggiuntivi (uso avanzato) — serviti esattamente come GET
 method: ['GET', 'HEAD', 'POST']
 ```
+
+> ⚠️ **`method: ['GET']` produce un server NON CONFORME.** `HEAD` non è un metodo opzionale: RFC
+> 9110 **§9.1** lo rende, insieme a `GET`, il minimo che ogni server generalista **DEVE** supportare,
+> e **§9.3.2** impone che rispecchi `GET` — stesso status, stessi header, nessun body. Togliendolo,
+> una `HEAD` su un file che `GET` serve con `200` risponde `404`, cioè **afferma che la risorsa non
+> esiste**. Si rompono cache, reverse proxy, link-checker, monitor di uptime e `curl -I`.
+> La via di fuga resta onorata così com'è — il middleware non contraddice una configurazione
+> esplicita — ma usala solo se sai perché.
+
+> I verbi fuori dalla lista **non** ricevono `405`: il middleware chiama `next()` perché un router
+> a valle possa gestirli. Rispondere `405` con l'header `Allow` obbligatorio (RFC 9110 §15.5.6) è
+> responsabilità dell'applicazione composta, non di questo middleware.
 
 #### `symlinks` (String)
 
@@ -1404,14 +1416,20 @@ urlsReserved: ['/percorso_riservato', '/percorso-riservato']
 **Soluzione:**
 
 ```javascript
-// ❌ Solo GET (default)
-method: ['GET']
+// ❌ Solo GET e HEAD (default) — POST/PUT/DELETE cadono in next()
+method: ['GET', 'HEAD']
 
-// ✅ Aggiungi metodi necessari
-method: ['GET', 'POST', 'PUT', 'DELETE']
+// ✅ Aggiungi i metodi necessari (serviti esattamente come una GET)
+method: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE']
 ```
 
-**Nota:** Di solito file server necessita solo GET e HEAD
+Nota: un verbo fuori dalla lista non produce `405` ma `next()`. Se il file server è l'intera
+applicazione e vuoi il `405` con `Allow` richiesto da RFC 9110 §15.5.6, aggiungi un middleware
+terminale dopo le tue route.
+
+**Nota:** Di solito un file server necessita solo di `GET` e `HEAD` — che sono già il default, e
+che RFC 9110 §9.1 rende obbligatori. Aggiungi altri verbi solo se il middleware deve servirli
+esattamente come una `GET`.
 
 ---
 

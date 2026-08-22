@@ -774,7 +774,20 @@ module.exports = function koaClassicServer(
     /*
     opts STRUCTURE
      opts = {
-        method: ['GET'], // Supported methods, otherwise next() will be called
+        method: ['GET', 'HEAD'], // Supported methods; any other verb falls through to next().
+                            //   HEAD is in the default since 5.3.0. RFC 9110 §9.1 makes GET and
+                            //   HEAD the minimum a general-purpose server MUST support, and
+                            //   §9.3.2 requires HEAD to mirror GET: same status, same headers,
+                            //   no body. Entries are upper-cased, so ['get'] behaves as ['GET'].
+                            //   WARNING — setting method: ['GET'] explicitly REMOVES HEAD and
+                            //   yields a server NON-CONFORMANT with RFC 9110 §9.1: a HEAD on a
+                            //   file that GET serves with 200 answers 404, i.e. it asserts the
+                            //   resource does not exist. Caches, reverse proxies, link-checkers
+                            //   and uptime monitors that issue HEAD break on it. The escape
+                            //   hatch is honored as-is — configure it only if you know why.
+                            //   Verbs beyond GET/HEAD are NOT answered with 405 here: the
+                            //   middleware calls next() so a downstream router can handle them
+                            //   (405 + Allow is the composed application's responsibility).
         symlinks: 'follow', // Symlink policy (V3.1+). Opt-in protection against symlink escape:
                             //   'follow'             (default) — follow symlinks anywhere, incl.
                             //                        targets OUTSIDE rootDir. Zero overhead;
@@ -919,7 +932,17 @@ module.exports = function koaClassicServer(
                 warnInterval: 60000,          // ms between "maxSize reached" warnings; 0 = always; false = never
             },
             compressedFile: {                 // cache for HTTP br/gzip responses — not for .zip/.tar files on disk
-                enabled: true,               // enable in-memory cache of compressed response buffers
+                enabled: true,               // enable in-memory cache of compressed response buffers.
+                                             //   Couples to the COST OF A HEAD: with this cache ON, a cold
+                                             //   HEAD on a compressible file runs the full buffered
+                                             //   compression, because an accurate Content-Length is only
+                                             //   knowable by compressing. Concurrent HEADs collapse via
+                                             //   single-flight and the result is cached, so the cost is paid
+                                             //   once per file version. With this cache OFF — and on the
+                                             //   streaming path above compression.maxFileSize — HEAD instead
+                                             //   short-circuits: status 200, no compression, no
+                                             //   Content-Length (the omission RFC 9110 §9.3.2 permits for
+                                             //   headers computable only by generating the content).
                 maxSize: 104857600,          // max total RAM used by this cache (bytes; default: 100 MB)
                 maxEntrySize: undefined,     // max bytes of a SINGLE cached entry, measured on the compressed
                                              //   OUTPUT (V4.3+). Applies to every insertion: buffered path and
@@ -1015,7 +1038,12 @@ module.exports = function koaClassicServer(
 
     const _logger = normalizeLogger(options.logger);
 
-    options.method = Array.isArray(options.method) ? options.method : ['GET'];
+    // HEAD ships in the default (5.3.0): see the opts STRUCTURE note above —
+    // RFC 9110 §9.1 (MUST support GET and HEAD) and §9.3.2 (HEAD mirrors GET).
+    // Upper-cased because ctx.method is always the raw uppercase token: a
+    // lowercase entry would match nothing and silently disable the middleware.
+    options.method = (Array.isArray(options.method) ? options.method : ['GET', 'HEAD'])
+        .map(verb => String(verb).toUpperCase());
 
     // ── V3 breaking-change guards: helpful errors for V3-alpha-only renamed options ──
     // These were introduced in v3.0.0-alpha.0 only; no v2 user can have them in production.

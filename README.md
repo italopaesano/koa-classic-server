@@ -202,15 +202,21 @@ app.use(koaClassicServer(path.join(__dirname, 'uploads'), {
 }));
 ```
 
-### Allow HEAD (health checks, preflight)
+### Allow more methods
 
-Only `GET` is accepted by default; other methods fall through to the next middleware:
+`GET` and `HEAD` are accepted by default — `HEAD` needs no opt-in, since RFC 9110 §9.1 makes the
+pair the minimum a general-purpose server must support. Any other verb falls through to the next
+middleware (it is **not** answered with `405`, so a downstream router can handle it):
 
 ```javascript
 app.use(koaClassicServer(root, {
-  method: ['GET', 'HEAD'],   // HEAD mirrors GET: same status + headers, no body
+  method: ['GET', 'HEAD', 'POST'],   // POST served exactly like GET
 }));
 ```
+
+> Dropping `HEAD` (`method: ['GET']`) is honored, but produces an RFC 9110 §9.1 non-conformant
+> server: `HEAD` then answers `404` on files `GET` serves with `200`. See the
+> [Security Hardening Guide](docs/SECURITY_HARDENING.md) §3.7.
 
 ### Behind a URL rewriter (i18n, routing)
 
@@ -293,7 +299,7 @@ Defaults shown; every option is optional.
 
 ```javascript
 koaClassicServer(rootDir, {
-  method: ['GET'],                       // allowed HTTP methods
+  method: ['GET', 'HEAD'],               // allowed HTTP methods (upper-cased; other verbs → next())
 
   dirListing: {
     enabled:        true,                // render a listing when no index matches (false → 404)

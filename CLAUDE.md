@@ -12,7 +12,7 @@ The declared positioning (since the earliest versions): behavior **similar, but 
 
 The project is **not** a framework, not a router, not a CMS. It is intentionally focused.
 
-Current version: **5.2.0** (see `docs/CHANGELOG.md`). Peer-depends on `koa` (`>=3.1.2` — Koa 2 support was dropped in 5.0.0); the only runtime dependency is `mime-types`. Requires Node `>=20`.
+Current version: **5.3.0** (see `docs/CHANGELOG.md`). Peer-depends on `koa` (`>=3.1.2` — Koa 2 support was dropped in 5.0.0); the only runtime dependency is `mime-types`. Requires Node `>=20`.
 
 ---
 
@@ -32,7 +32,7 @@ Other source files:
 
 Directories:
 
-- **`__tests__/`** — 70 `*.test.js` files, ~1390 test cases. Also holds benchmark scripts (`benchmark.js`, `setup-benchmark.js`), saved benchmark baselines (`benchmark-results-*.txt`), and fixture dirs (`compression-fixtures/`, `hidden-fixtures/`, `range-fixtures/`, `server-cache-fixtures/`, `publicWwwTest/`, `customTest/`).
+- **`__tests__/`** — 71 `*.test.js` files, ~1400 test cases. Also holds benchmark scripts (`benchmark.js`, `setup-benchmark.js`), saved benchmark baselines (`benchmark-results-*.txt`), and fixture dirs (`compression-fixtures/`, `hidden-fixtures/`, `range-fixtures/`, `server-cache-fixtures/`, `publicWwwTest/`, `customTest/`).
 - **`docs/`** — all long-form documentation (see **Key references** below). Includes `template-engine/` with the template-engine integration guide and examples.
 - **`.github/`** — CI workflows.
 
@@ -84,7 +84,7 @@ These are deliberate exceptions because they protect the process from itself, no
 
 When proposing a new feature, ask: *"does this change the default observable behavior of `GET /path/to/file` or `GET /some/dir/`?"* If yes, it is a restriction — make it opt-in.
 
-> Note: `method: ['GET']` IS technically restrictive (rejects HEAD, POST, etc. by default). It is kept as-is because it has been the v2 default since forever and the migration cost is not worth the philosophical purity. Documented as a known imperfection.
+> Note: `method` defaults to `['GET', 'HEAD']` since **5.3.0**. The old `['GET']` default was not merely restrictive but **non-conformant**: RFC 9110 §9.1 makes GET and HEAD the minimum a general-purpose server MUST support, and §9.3.2 forbids their statuses from diverging — so `HEAD` answered 404 on every path that `GET` served with 200. It was fixed as a **correctness fix, not a feature** (the same defect the project had already fixed twice, in 3.0.1 and 4.0.0, on individual branches), shipped in a minor because `GET` is byte-for-byte unchanged. Rejecting the other verbs stays as-is: `next()` is the correct move for a composable middleware, since a downstream router may handle them — 405 + `Allow` (§15.5.6) is the composed application's responsibility. See `docs/revisione_codice_v5.0.md` #10.
 
 > Note: `dirListing.trailingSlash: true` (V4 default) DOES change the default observable behavior of `GET /dir` (now `301 → /dir/`) and `GET /file/` (now `404`). This is a deliberate exception to "make default-changing features opt-in", defended as a **correctness fix, not a restriction**: without the redirect, an index page served at `/dir` resolves its relative links against the parent, so the page is broken. It shipped in a **major** (4.0.0) with an escape hatch (`trailingSlash: false`). The justification stands on its own merit — that Apache/nginx/Caddy/express all do the same is context, not the reason.
 
@@ -114,7 +114,7 @@ When proposing a new feature, ask: *"does this change the default observable beh
 - **`docs/revisione_codice_v5.0.md`** — **active** open-findings register from the 2026-07-19 full code review (in Italian). Each finding has a checkbox in its index: tick it (`[x]`) when the item is resolved or consciously closed. Check this file before starting fix work — it holds the agreed problem list, code locations, and proposed fixes.
 - **`docs/revisione_codice_v4.3.md`** — previous register (2026-07-14 review); all 16 findings resolved. Kept for history.
 - **`docs/revisione_codice_v3.1.md`** — earlier register (2026-07-03 review); all 20 findings resolved. Kept for history.
-- **`__tests__/`** — 70 test files, ~1390 test cases asserting behavior contracts. See **Development workflows** below.
+- **`__tests__/`** — 71 test files, ~1400 test cases asserting behavior contracts. See **Development workflows** below.
 
 ---
 

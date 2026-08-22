@@ -885,8 +885,37 @@ allo stesso chiamante.
      ha firma black-box. Limite dichiarato nel docblock del file: quell'ottimizzazione è
      protetta dai commenti al codice, non dai test.
 
-**Esito:** 70 suite / 1398 test verdi, lint pulito, coverage 98.48% stmts / 98.36% branch
-/ 99.01% funcs / 98.51% lines.
+**Revisione post-implementazione (stessa data).** Una revisione completa del diff ha
+prodotto due rilievi, entrambi verificati e corretti nello stesso PR:
+
+1. **`stripBodyForHead()` pubblicava un `Content-Length` che `GET` non inviava.** La
+   funzione sostituiva qualunque body di render con un `Buffer` vuoto; il `respond()`
+   di Koa, su HEAD, riempie un `Content-Length` mancante da `ctx.response.length`, che
+   su un buffer vuoto vale **0**. Risultato misurato: body stream senza lunghezza
+   dichiarata → `GET` chunked ma `HEAD: Content-Length: 0`; body stream con
+   `ctx.length = 3` → `GET: 3` ma **`HEAD: 0`**; body oggetto → `GET: 24` ma
+   `HEAD: 0`. Il caso intermedio è il dannoso: un client che dimensiona la risorsa con
+   `HEAD` leggeva 0 byte. §9.3.2 consente di **omettere** un header calcolabile solo
+   generando il contenuto, non di inviarne uno **diverso** da quello di `GET`.
+   Un quarto caso emerso completando la copertura: body **non serializzabile**
+   (circolare) → `GET: 500` ma `HEAD: 200` con corpo vuoto, cioè una divergenza di
+   **status**, non solo di header. Corretto lasciando il body al suo posto, così Koa
+   fallisce su `HEAD` esattamente dove fallisce su `GET`: rispecchiare il **fallimento**
+   fa parte di §9.3.2 quanto rispecchiare il successo.
+   Il bug è antecedente (arrivato con `stripBodyForHead()` in 3.0.1) ma richiedeva
+   `method: ['GET','HEAD']` per essere raggiunto: corretto qui perché è questa release
+   a renderlo raggiungibile di default. Corpo vuoto ora scelto per forma: `Buffer` dove
+   la lunghezza è conoscibile, stream già terminato dove non lo è (per uno stream
+   `ctx.response.length` è `undefined`, quindi l'header resta sotto controllo della
+   funzione). Nessuna crescita di descrittori su 200 HEAD con stream di file reali.
+2. **Le etichette di riga nella matrice erano sbagliate all'atto del merge.** Erano
+   state scritte sui numeri di riga PRE-modifica, e la stessa commit aveva aggiunto 24
+   righe sopra: una etichetta indicava un ramo diverso da quello che la sua riga
+   esercita. Sostituite con **àncore grep-abili**, più un test che verifica che ogni
+   àncora corrisponda esattamente una volta in `index.cjs` — così il marcire di un
+   puntatore diventa un fallimento di test invece di una bugia silenziosa.
+
+**Esito:** 71 suite / 1412 test verdi, lint pulito, coverage sopra le soglie.
 
 ---
 

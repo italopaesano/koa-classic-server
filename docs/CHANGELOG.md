@@ -26,11 +26,11 @@ not exist**, which is false. RFC 9110 **§9.1** makes `GET` and `HEAD` the minim
 a general-purpose server MUST support, and **§9.3.2** requires `HEAD` to mirror
 `GET` — same status, same headers, no body. The two statuses cannot diverge.
 
-The middleware's `HEAD` implementation was already complete and correct across
-every branch (206, 416, 304, buffered and streaming compression, template
-renders, redirects, listings); it was simply gated off by a configuration
-default. This release removes the gate: **the default is now
-`method: ['GET', 'HEAD']`**.
+The middleware's `HEAD` implementation was already in place across every branch
+(206, 416, 304, buffered and streaming compression, template renders, redirects,
+listings); it was gated off by a configuration default. This release removes the
+gate: **the default is now `method: ['GET', 'HEAD']`** — and fixes the one branch
+that turned out not to be correct once the gate was gone (see the next entry).
 
 This is the same defect this project has already fixed twice as a bug, citing
 §9.3.2 both times — in **3.0.1** (template routes) and **4.0.0** (streaming
@@ -73,6 +73,44 @@ Also in this change:
 > second-guess an explicit configuration. Be aware that it yields a server on
 > which caches, reverse proxies, link-checkers, uptime monitors and `curl -I`
 > see a 404 for files that `GET` serves with 200.
+
+### 🐛 Fixed — `HEAD` published a `Content-Length` the `GET` never sent, for stream and object render bodies
+
+Found by the code review of the change above, and reachable by default because of
+it. `stripBodyForHead()` replaced any render body with an empty `Buffer`. Koa's
+`respond()` fills a missing `Content-Length` in on `HEAD` from
+`ctx.response.length`, which reads **0** off that empty buffer — so every body
+shape whose size is not a string/Buffer byte length reported the wrong number:
+
+| Render body | `GET` | `HEAD` (before) | `HEAD` (now) |
+|---|---|---|---|
+| `fs.createReadStream(f)` | no `Content-Length` (chunked) | `Content-Length: 0` | no `Content-Length` |
+| stream + `ctx.length = 3` | `Content-Length: 3` | `Content-Length: 0` | `Content-Length: 3` |
+| `{ hello: 'world' }` | `Content-Length: 24` | `Content-Length: 0` | `Content-Length: 24` |
+| circular object | `500` | `200`, empty | `500`, mirrored |
+
+The middle row is the damaging one: a client sizing a resource with `HEAD` was
+told **0 bytes** for a resource `GET` serves as 3. RFC 9110 §9.3.2 permits
+*omitting* a header that is only computable by generating the content; it does
+not permit sending a different value than `GET` would.
+
+The last row is a status divergence, not just a header one: an unserializable
+body makes `GET` fail inside Koa's `respond()`, while `HEAD` used to answer a
+cheerful `200` with no body. Mirroring the *failure* is as much a part of §9.3.2
+as mirroring the success, so such a body is now left in place and `HEAD` fails
+identically.
+
+The empty replacement body is otherwise chosen per shape: a `Buffer` where the
+length is knowable (string / Buffer / JSON-serializable), an already-ended stream
+where it is not — because `ctx.response.length` is `undefined` for a stream, which
+leaves the header under the function's own control. Either replacement still
+makes Koa destroy the render's stream, verified with no descriptor growth over
+200 `HEAD` requests against real file streams.
+
+The bug predates this release (it shipped with `stripBodyForHead()` in 3.0.1) but
+required `method: ['GET', 'HEAD']` to reach, so it is fixed here rather than
+left for operators who are about to get `HEAD` by default. Four matrix rows pin
+the four body shapes.
 
 > #### Cost note
 >

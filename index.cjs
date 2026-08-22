@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const zlib = require("zlib");
 const util = require("util");
 const mime = require("mime-types");
-const { Readable, Transform, pipeline } = require('stream');
+const { Readable, Stream, Transform, pipeline } = require('stream');
 
 const _brotliCompressAsync = util.promisify(zlib.brotliCompress);
 const _gzipAsync           = util.promisify(zlib.gzip);
@@ -285,25 +285,61 @@ async function sendTemplateError(ctx, status, builtinHtml, logMsg, err, logger, 
 }
 
 // Rewrites an already-rendered response into an RFC 9110 §9.3.2 compliant HEAD
-// response: the status and headers produced by the render are preserved, the
-// body is replaced with an empty buffer (so no content is sent), and
-// Content-Length is restored to the byte length the GET body would have had.
-// Reassigning ctx.body to a non-stream value also makes Koa auto-destroy a
-// previous stream body, so no file descriptor leaks. Stream / non-buffer bodies
-// (uncommon for template renders) carry no Content-Length, matching the static
-// streaming-HEAD branch.
+// response: the status and headers produced by the render are preserved, and the
+// body is dropped while Content-Length keeps reporting exactly what the GET
+// response would have reported — including reporting nothing when GET would have
+// been chunked.
+//
+// The empty replacement body is NOT uniform, and the difference is load-bearing.
+// Koa's respond() fills a missing Content-Length in on HEAD from
+// ctx.response.length, which reads 0 off an empty Buffer but is undefined for a
+// Stream. So a Buffer is correct only where the length is knowable (string /
+// Buffer / JSON-serializable bodies); for a stream body it would publish
+// "Content-Length: 0" where GET sends the render's declared length or no length
+// at all. An already-ended stream is used there instead, which keeps the header
+// under this function's control.
+//
+// Either replacement makes Koa destroy the render's previous stream body, so no
+// file descriptor leaks.
 function stripBodyForHead(ctx) {
     if (ctx.headerSent) return;       // render already flushed — status/headers are locked
     const body = ctx.body;
     if (body == null) return;         // render produced no body (redirect, pass-through, ...) — leave status as-is
-    const hasKnownLength = typeof body === 'string' || Buffer.isBuffer(body);
-    const length = hasKnownLength ? Buffer.byteLength(body) : null;
-    ctx.body = Buffer.alloc(0);
-    if (length !== null) {
-        ctx.set('Content-Length', String(length)); // body setter zeroed it — restore the real length
-    } else {
-        ctx.remove('Content-Length');               // unknown length — omit, like static streaming HEAD
+
+    // The length GET would have carried, when it is knowable without generating
+    // the content. A stream is the one shape where it is not: Koa streams it and
+    // lets the transfer encoding carry the framing.
+    let length = null;
+    if (typeof body === 'string' || Buffer.isBuffer(body)) {
+        length = Buffer.byteLength(body);
+    } else if (!(body instanceof Stream)) {
+        // Koa JSON-serializes anything else and sizes the response from that.
+        try {
+            length = Buffer.byteLength(JSON.stringify(body));
+        } catch {
+            // Unserializable body (circular reference, BigInt, ...). GET fails on it
+            // inside Koa's respond(); leaving it in place makes HEAD fail the same
+            // way instead of answering a cheerful 200 with no body. Mirroring the
+            // FAILURE is as much a part of §9.3.2 as mirroring the success.
+            return;
+        }
     }
+
+    if (length !== null) {
+        ctx.body = Buffer.alloc(0);
+        ctx.set('Content-Length', String(length)); // body setter zeroed it — restore the real length
+        return;
+    }
+
+    // Stream body. Capture any length the render declared BEFORE swapping the
+    // body: assigning over a stream makes Koa drop Content-Length.
+    const declaredLength = ctx.response.get('Content-Length');
+    ctx.body = Readable.from([]);
+    if (declaredLength) {
+        ctx.set('Content-Length', declaredLength); // mirror the render's own framing
+    }
+    // else: GET would have been chunked — leave the header absent, matching the
+    // static streaming-HEAD branch and the §9.3.2 derogation it relies on.
 }
 
 // Attempts to render the requested file through the user's template engine.

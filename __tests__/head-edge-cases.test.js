@@ -42,7 +42,7 @@ afterAll(() => {
 function createServer(opts = {}) {
     const app = new Koa();
     app.on('error', () => {});
-    // HEAD must be opted into: the v2-stable default is method: ['GET']
+    // HEAD is in the default since 5.3.0; kept explicit here to document intent
     app.use(koaClassicServer(fixturesDir, { method: ['GET', 'HEAD'], dirListing: { enabled: false }, ...opts }));
     return app.listen();
 }

@@ -221,12 +221,38 @@ describe('options.method — verbs beyond GET', () => {
         expect(res.headers['content-security-policy']).toBeUndefined();
     });
 
-    test('a non-array method value falls back to the ["GET"] default', async () => {
+    test('a non-array method value falls back to the ["GET", "HEAD"] default', async () => {
         const res = await withApp({ method: 'GET' }, (s) => supertest(s).get('/file.txt'));
         expect(res.status).toBe(200);
 
         const head = await withApp({ method: 'GET' }, (s) => supertest(s).head('/file.txt'));
-        expect(head.status).toBe(404); // HEAD is not in the default list
+        expect(head.status).toBe(200); // HEAD is in the default list (5.3.0, RFC 9110 §9.1)
+    });
+
+    // The escape hatch. An operator who explicitly asks for GET-only gets GET-only,
+    // even though that server is RFC 9110 §9.1 non-conformant — the middleware does
+    // not second-guess an explicit configuration. This test is what protects that
+    // promise from a future "HEAD is always implied by GET" refactor.
+    test('an explicit method: ["GET"] still excludes HEAD (documented escape hatch)', async () => {
+        const res = await withApp({ method: ['GET'] }, (s) => supertest(s).get('/file.txt'));
+        expect(res.status).toBe(200);
+
+        const head = await withApp({ method: ['GET'] }, (s) => supertest(s).head('/file.txt'));
+        expect(head.status).toBe(404); // fell through to next() → Koa's own 404
+        expect(head.headers['content-security-policy']).toBeUndefined();
+    });
+
+    test('verbs are upper-cased: method: ["get", "head"] behaves as ["GET", "HEAD"]', async () => {
+        const res = await withApp({ method: ['get', 'head'] }, (s) => supertest(s).get('/file.txt'));
+        expect(res.status).toBe(200);
+
+        const head = await withApp({ method: ['get', 'head'] }, (s) => supertest(s).head('/file.txt'));
+        expect(head.status).toBe(200);
+    });
+
+    test('a non-string entry is upper-cased harmlessly and simply never matches', async () => {
+        const res = await withApp({ method: ['GET', null, 42] }, (s) => supertest(s).get('/file.txt'));
+        expect(res.status).toBe(200);
     });
 });
 

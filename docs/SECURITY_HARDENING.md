@@ -189,10 +189,39 @@ is still `evil.com`, the Same-Origin Policy does not protect. The middleware doe
 
 ### 3.7 HTTP methods
 
-The default `method: ['GET']` already rejects everything else. Add `HEAD` only if you need it:
+The default is `method: ['GET', 'HEAD']`, and **you should leave it that way**. Everything else
+falls through to the next middleware.
+
+> **Do not "harden" this by removing `HEAD`.** It buys nothing and costs conformance.
+> A `HEAD` response is by construction a subset of the `GET` response that the same caller is
+> already allowed to make, and it travels the identical authorization pipeline — same hidden-file
+> rules, same symlink boundary, same reserved paths. There is no principal that gains information.
+> Removing it yields a server that is **non-conformant with RFC 9110 §9.1** (`GET` and `HEAD` are
+> the minimum a general-purpose server MUST support) and **§9.3.2** (`HEAD` mirrors `GET`: same
+> status, same headers, no body). The concrete symptom is that a `HEAD` on a file served `200` by
+> `GET` answers `404` — an assertion that the resource does not exist. Caches, reverse proxies,
+> link-checkers, uptime monitors and `curl -I` all break on it.
+
+If you genuinely need `GET`-only, the escape hatch is honored as-is — the middleware does not
+second-guess an explicit configuration:
 ```js
-method: ['GET', 'HEAD']
+method: ['GET']   // deliberate: RFC 9110 §9.1 non-conformant, HEAD answers 404
 ```
+
+Entries are upper-cased, so `['get', 'head']` behaves as `['GET', 'HEAD']`.
+
+**Verbs beyond the list are not answered with `405`.** The middleware calls `next()` so a
+downstream router can handle them; returning `405` itself would break every app that mounts a
+static server alongside an API. Emitting `405` with the mandatory `Allow` header (RFC 9110
+§15.5.6) is the composed application's job — add a terminal middleware after your routes if the
+static server is your whole server.
+
+> **Cost note.** With `serverCache.compressedFile.enabled` on (the default), a cold `HEAD` on a
+> compressible file runs the full buffered compression, because an accurate `Content-Length` is
+> only knowable by compressing. Concurrent `HEAD`s collapse via single-flight and the result is
+> cached, so it is paid once per file version. With that cache off — and on the streaming path
+> above `compression.maxFileSize` — `HEAD` short-circuits instead: `200`, no compression, no
+> `Content-Length` (the omission §9.3.2 permits).
 
 ### 3.8 Reserved paths
 
@@ -315,7 +344,7 @@ For Profile C (untrusted writes) especially:
 ## 7. Per-profile checklists
 
 ### Profile A — Trusted static content (public)
-- [ ] `method: ['GET']` (or `['GET', 'HEAD']`)
+- [ ] `method: ['GET', 'HEAD']` (the default — do not drop `HEAD`, see §3.7)
 - [ ] `browserCacheEnabled: true`
 - [ ] `staticSecurityHeaders: { nosniff: true }`
 - [ ] Upstream headers (CSP/HSTS/…) via proxy or middleware
@@ -369,7 +398,7 @@ app.use(async (ctx, next) => {
 
 // 3) The file server — hardened.
 app.use(koaClassicServer('/var/www/public', {
-  method: ['GET'],                                  // read-only
+  method: ['GET', 'HEAD'],                          // read-only; HEAD is required by RFC 9110 §9.1
   symlinks: 'follow-within-root',                   // no symlink escape (use 'deny' for hostile tenants)
   staticSecurityHeaders: { nosniff: true },         // block MIME sniffing on static files
   hidden: {

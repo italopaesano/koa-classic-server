@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.0] - 2026-08-22
+
+### 🐛 Fixed — `HEAD` returned 404 on every path with the default configuration (RFC 9110 §9.1 / §9.3.2)
+
+With the default `method: ['GET']`, a `HEAD` request was rejected by the method
+gate, fell through to `next()`, and landed on Koa's default **404** — on every
+path, while `GET` answered **200**:
+
+```
+GET  /        -> 200      HEAD /        -> 404
+GET  /a.txt   -> 200      HEAD /a.txt   -> 404
+GET  /sub/    -> 200      HEAD /sub/    -> 404
+```
+
+That is not one feature short of complete: a 404 **asserts that the resource does
+not exist**, which is false. RFC 9110 **§9.1** makes `GET` and `HEAD` the minimum
+a general-purpose server MUST support, and **§9.3.2** requires `HEAD` to mirror
+`GET` — same status, same headers, no body. The two statuses cannot diverge.
+
+The middleware's `HEAD` implementation was already complete and correct across
+every branch (206, 416, 304, buffered and streaming compression, template
+renders, redirects, listings); it was simply gated off by a configuration
+default. This release removes the gate: **the default is now
+`method: ['GET', 'HEAD']`**.
+
+This is the same defect this project has already fixed twice as a bug, citing
+§9.3.2 both times — in **3.0.1** (template routes) and **4.0.0** (streaming
+compression path). Those repaired two peripheral branches while the default
+reproduced the identical defect everywhere, which is why this ships as a fix
+rather than a feature.
+
+Also in this change:
+
+- **Method entries are upper-cased.** `method: ['get', 'head']` previously
+  matched nothing and silently disabled the entire middleware — 404 on
+  everything, `GET` included, with no warning. `ctx.method` is always the raw
+  uppercase token, so entries are now normalized with `.toUpperCase()`.
+- **Verbs beyond the list still fall through to `next()`** — unchanged, and
+  deliberately so. Answering `405` here would break every application that
+  mounts a static server alongside a router. Emitting `405` with the mandatory
+  `Allow` header (§15.5.6) is the composed application's responsibility.
+- **Tests:** `__tests__/head-parity-matrix.test.js`, one row per response branch,
+  each annotated with the branch it pins. Validated by mutation against
+  deliberately broken builds: reproducing the 3.0.1 bug, the 4.0.0 bug, a
+  buffered path that loses its real `Content-Length`, and a default reverting to
+  `['GET']` all fail the matrix. Its one documented blind spot is recorded in the
+  file's docblock.
+
+> #### ⚠️ Behavior change on upgrade
+>
+> `HEAD` requests that previously fell through to your downstream middleware are
+> now answered by koa-classic-server. If you mounted your own `HEAD` handler for
+> paths under `rootDir` — most likely as a workaround for this very bug — it will
+> no longer be reached for those paths. `GET` is byte-for-byte unchanged, and no
+> other verb changes behavior.
+>
+> To keep the previous behavior, ask for it explicitly:
+>
+> ```js
+> method: ['GET']   // honored as-is — but RFC 9110 §9.1 non-conformant
+> ```
+>
+> The escape hatch is deliberate and will not warn: the middleware does not
+> second-guess an explicit configuration. Be aware that it yields a server on
+> which caches, reverse proxies, link-checkers, uptime monitors and `curl -I`
+> see a 404 for files that `GET` serves with 200.
+
+> #### Cost note
+>
+> With `serverCache.compressedFile.enabled` on (the default), a cold `HEAD` on a
+> compressible file runs the full buffered compression, because an accurate
+> `Content-Length` is only knowable by compressing. Concurrent `HEAD`s collapse
+> via single-flight and the result is cached, so it is paid once per file
+> version. With that cache off — and on the streaming path above
+> `compression.maxFileSize` — `HEAD` short-circuits instead: 200, no compression,
+> no `Content-Length` (the omission §9.3.2 permits for headers computable only by
+> generating the content).
+
+See `docs/revisione_codice_v5.0.md` #10, and #11 for the follow-up audit of
+option validation.
+
 ### 🐛 Fixed — directory listing: a non-canonical `?order=` value drew the wrong arrow
 
 `GET /?sort=size&order=DESC` (any value other than `desc`, including a

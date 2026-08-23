@@ -95,7 +95,7 @@ integrità rilevato.
 
 ### Sesta passata (2026-08-22) — conformità HEAD (RFC 9110 §9.1 / §9.3.2)
 - [x] [10. Il default `method: ['GET']` rende il server non conforme: `HEAD` risponde 404 su OGNI path mentre `GET` risponde 200](#10-il-default-method-get-rende-il-server-non-conforme-head-risponde-404-su-ogni-path-mentre-get-risponde-200) — **RISOLTO in 5.3.0** (default `['GET', 'HEAD']`; normalizzazione maiuscola; matrice di parità HEAD/GET verificata per mutazione; documentazione riscritta)
-- [ ] [11. `method` era l'unica opzione a valori enumerati senza guardia: verificare che non ce ne siano altre](#11-method-era-lunica-opzione-a-valori-enumerati-senza-guardia-verificare-che-non-ce-ne-siano-altre) — **APERTO** (audit di normalizzazione/validazione sulle opzioni restanti)
+- [ ] [11. `method` era l'unica opzione a valori enumerati senza guardia: verificare che non ce ne siano altre](#11-method-era-lunica-opzione-a-valori-enumerati-senza-guardia-verificare-che-non-ce-ne-siano-altre) — **PARZIALE**: `method` chiuso in 5.3.0 (maiuscolo forzato + voci inutilizzabili scartate, entrambi segnalati); resta l'audit sulle opzioni a forma libera
 - [ ] [12. Con un `Transfer-Encoding` impostato da un middleware a monte, i rami statici emettono anche `Content-Length` (illegale, RFC 9112 §6.1)](#12-con-un-transfer-encoding-impostato-da-un-middleware-a-monte-i-rami-statici-emettono-anche-content-length-illegale-rfc-9112-61) — **APERTO** (preesistente e simmetrico GET/HEAD, quindi non una violazione di §9.3.2)
 - [ ] [13. `stripBodyForHead()` reimplementa il dimensionamento del body di Koa: valutare di eliminarla](#13-stripbodyforhead-reimplementa-il-dimensionamento-del-body-di-koa-valutare-di-eliminarla) — **APERTO** (rimuove alla radice una classe di difetti recidiva, ma reintroduce un costo: da misurare prima di procedere)
 
@@ -990,11 +990,33 @@ una guardia forte:
 | `compression.buffered/streaming` | fuori range | **throw** |
 | `method` (pre-5.3.0) | `['get']` | **silenzio, middleware spento** |
 
-**Da fare:** completare l'audit sulle opzioni non coperte da questa tabella — in
-particolare quelle a forma libera dove un valore malformato degrada in silenzio anziché
-fallire (`urlPrefix`, `urlsReserved` con voci senza slash iniziale, `index`,
-`template.ext` / `hideExtension.ext` rispetto al case) — e decidere se il progetto vuole
-una politica uniforme (throw) o caso per caso.
+**Parte `method`: CHIUSA in 5.3.0.** Decisione del manutentore (2026-08-23): la forma
+corretta è **tutta maiuscola per ogni verbo**, non solo `GET`/`HEAD`; il minuscolo va
+corretto **e segnalato**; la validazione copre anche le voci non utilizzabili.
+
+Implementato con un canale nuovo, `warnConfigNotice()`. Non si poteva riusare
+`warnConfigDeprecation()`: quel canale chiude da sé ogni messaggio con «WILL throw in a
+future major version» ed è destinato a diventare un throw nella 6.0.0. Qui l'intento
+dell'operatore è inequivocabile (`['get']` significa palesemente GET) e la correzione è
+meccanica, quindi si è scelto un **avviso permanente** senza promessa di throw.
+
+- voce minuscola o mista → upper-case + notice che elenca le correzioni
+- voce non utilizzabile (non stringa, oppure stringa fuori dal `token` di RFC 9110
+  §5.6.2, es. `'BAD METHOD'`, `''`, `'a,b'`) → **scartata** + notice; i primitivi sono
+  nominati per valore (`42`, non `number`)
+- verbo valido ma inusuale (`'PURGE'`) → **nessun avviso**: il middleware serve
+  qualunque verbo elencato, segnalarlo sarebbe rumore e contraddirebbe «l'operatore è
+  la fonte di verità»
+- dedupe once-per-process per messaggio distinto, come il resto
+
+Test: `__tests__/method-normalization.test.js` (11 casi), validati per mutazione — sei
+build rotte di proposito, sei catturate, inclusa quella che sostituisce il notice con una
+deprecation.
+
+**Resta da fare:** l'audit sulle opzioni **a forma libera** dove un valore malformato
+degrada in silenzio anziché fallire — `urlPrefix`, `urlsReserved` con voci senza slash
+iniziale, `index`, `template.ext` / `hideExtension.ext` rispetto al case — e la decisione
+se il progetto voglia una politica uniforme o caso per caso.
 
 **Priorità:** Bassa (nessun impatto noto sul comportamento servito; è robustezza di
 configurazione).

@@ -270,6 +270,79 @@ function warnConfigDeprecation(logger, message) {
         '\n  This is tolerated for now and WILL throw in a future major version.'));
 }
 
+// Config NOTICES — deduplicated the same way, but deliberately NOT deprecations.
+// A notice reports a value the middleware corrected or discarded and intends to
+// keep correcting: there is no future-throw promise attached, so it must not go
+// through warnConfigDeprecation, whose message ends by announcing one. Used where
+// the operator's intent is unmistakable and the fix is mechanical — writing
+// method: ['get'] plainly means GET, so normalizing it and saying so is more
+// useful than refusing it.
+const _configNoticesWarned = new Set();
+function warnConfigNotice(logger, message) {
+    if (_configNoticesWarned.has(message)) return;
+    _configNoticesWarned.add(message);
+    logger.warn(...warnPayload(logger, '[koa-classic-server] ' + message));
+}
+
+// An HTTP method is a `token` (RFC 9110 §5.6.2): the tchar set below. An entry
+// outside it can never equal ctx.method, so it is dead configuration.
+const _METHOD_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+// Renders a rejected config entry for a message without ever throwing on it:
+// strings are quoted so whitespace is visible, everything else is described.
+function describeEntry(value) {
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (Array.isArray(value)) return 'an array';
+    // Primitives print their value — 'number' tells the operator nothing, '42' points
+    // straight at the offending entry. Symbols and functions stay described by type,
+    // since String() on them is either useless or throws in a template literal.
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+        return String(value);
+    }
+    return typeof value;
+}
+
+// Normalizes options.method: upper-cases the entries that need it, drops the ones
+// that could never match, and reports both. Method tokens are case-SENSITIVE
+// (RFC 9110 §9) and ctx.method is always the raw uppercase token, so a lowercase
+// entry silently matches nothing — for a single-entry list that means the whole
+// middleware goes inert and answers 404 to everything, which is exactly the kind
+// of failure that is impossible to diagnose from the outside. Both corrections
+// are therefore announced rather than applied in silence.
+function normalizeMethods(rawMethods, logger) {
+    const normalized = [];
+    const upperCased = [];
+    const dropped = [];
+
+    for (const entry of rawMethods) {
+        if (typeof entry !== 'string' || !_METHOD_TOKEN.test(entry)) {
+            dropped.push(describeEntry(entry));
+            continue;
+        }
+        const upper = entry.toUpperCase();
+        if (upper !== entry) upperCased.push(`${JSON.stringify(entry)} → "${upper}"`);
+        normalized.push(upper);
+    }
+
+    if (upperCased.length > 0) {
+        warnConfigNotice(logger,
+            'options.method entries must be uppercase — normalized ' + upperCased.join(', ') + '.\n' +
+            '  HTTP method tokens are case-sensitive (RFC 9110 §9) and ctx.method is always the raw\n' +
+            '  uppercase token, so a lowercase entry matches nothing. Write them uppercase.');
+    }
+    if (dropped.length > 0) {
+        warnConfigNotice(logger,
+            'options.method dropped ' + dropped.length + ' unusable ' +
+            (dropped.length === 1 ? 'entry' : 'entries') + ': ' + dropped.join(', ') + '.\n' +
+            '  An entry must be a non-empty HTTP method token (RFC 9110 §5.6.2); anything else\n' +
+            '  can never equal ctx.method and would sit in the config doing nothing.');
+    }
+
+    return normalized;
+}
+
 // Sends an error response for a failed template render. If headers were already
 // flushed by the render itself, destroys the underlying socket instead (the
 // status/body can no longer be changed at that point). Page selection (custom
@@ -868,7 +941,16 @@ module.exports = function koaClassicServer(
                             //   HEAD is in the default since 5.3.0. RFC 9110 §9.1 makes GET and
                             //   HEAD the minimum a general-purpose server MUST support, and
                             //   §9.3.2 requires HEAD to mirror GET: same status, same headers,
-                            //   no body. Entries are upper-cased, so ['get'] behaves as ['GET'].
+                            //   no body.
+                            //   Entries must be UPPERCASE — for every verb, not just GET/HEAD.
+                            //   Method tokens are case-sensitive (RFC 9110 §9) and ctx.method is
+                            //   always the raw uppercase token, so a lowercase entry matches
+                            //   nothing: ['get'] alone used to leave the middleware inert,
+                            //   answering 404 to everything. A lowercase entry is now upper-cased
+                            //   AND reported on the logger; an entry that is not a usable method
+                            //   token (non-string, or not RFC 9110 §5.6.2 tchar) is dropped and
+                            //   reported. Both are notices, not deprecations: they will keep
+                            //   being corrected, not promoted to a throw.
                             //   WARNING — setting method: ['GET'] explicitly REMOVES HEAD and
                             //   yields a server NON-CONFORMANT with RFC 9110 §9.1: a HEAD on a
                             //   file that GET serves with 200 answers 404, i.e. it asserts the
@@ -1130,10 +1212,11 @@ module.exports = function koaClassicServer(
 
     // HEAD ships in the default (5.3.0): see the opts STRUCTURE note above —
     // RFC 9110 §9.1 (MUST support GET and HEAD) and §9.3.2 (HEAD mirrors GET).
-    // Upper-cased because ctx.method is always the raw uppercase token: a
-    // lowercase entry would match nothing and silently disable the middleware.
-    options.method = (Array.isArray(options.method) ? options.method : ['GET', 'HEAD'])
-        .map(verb => String(verb).toUpperCase());
+    // normalizeMethods() upper-cases and prunes the list, warning about both.
+    options.method = normalizeMethods(
+        Array.isArray(options.method) ? options.method : ['GET', 'HEAD'],
+        _logger
+    );
 
     // ── V3 breaking-change guards: helpful errors for V3-alpha-only renamed options ──
     // These were introduced in v3.0.0-alpha.0 only; no v2 user can have them in production.

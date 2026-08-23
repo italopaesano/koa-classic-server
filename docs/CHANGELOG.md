@@ -40,10 +40,28 @@ rather than a feature.
 
 Also in this change:
 
-- **Method entries are upper-cased.** `method: ['get', 'head']` previously
-  matched nothing and silently disabled the entire middleware — 404 on
-  everything, `GET` included, with no warning. `ctx.method` is always the raw
-  uppercase token, so entries are now normalized with `.toUpperCase()`.
+- **Method entries are validated, corrected and reported** (register #11).
+  `method: ['get', 'head']` previously matched nothing and silently disabled the
+  entire middleware — 404 on everything, `GET` included, with no diagnostic
+  anywhere. Method tokens are case-sensitive (RFC 9110 §9) and `ctx.method` is
+  always the raw uppercase token, so **every** entry must be uppercase, not just
+  `GET`/`HEAD`. A lowercase or mixed-case entry is now upper-cased **and**
+  reported on the logger; an entry that is not a usable method token — a
+  non-string, or a string outside the RFC 9110 §5.6.2 `token` grammar such as
+  `'BAD METHOD'` — is dropped and reported.
+
+  ```
+  [koa-classic-server] options.method entries must be uppercase — normalized "get" → "GET".
+  [koa-classic-server] options.method dropped 2 unusable entries: null, "BAD METHOD".
+  ```
+
+  These are **notices, not deprecations**: no future-throw promise rides along,
+  because the operator's intent is unmistakable and the correction is mechanical.
+  They go through a new `warnConfigNotice()` channel for exactly that reason —
+  `warnConfigDeprecation()` ends its message by announcing a throw in a future
+  major. Deduplicated once per process per distinct message, like the rest.
+  A valid but unusual verb (`'PURGE'`) is silent: the middleware serves whatever
+  the operator lists, and warning about it would be noise.
 - **Verbs beyond the list still fall through to `next()`** — unchanged, and
   deliberately so. Answering `405` here would break every application that
   mounts a static server alongside a router. Emitting `405` with the mandatory

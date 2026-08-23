@@ -88,6 +88,10 @@ shape whose size is not a string/Buffer byte length reported the wrong number:
 | stream + `ctx.length = 3` | `Content-Length: 3` | `Content-Length: 0` | `Content-Length: 3` |
 | `{ hello: 'world' }` | `Content-Length: 24` | `Content-Length: 0` | `Content-Length: 24` |
 | circular object | `500` | `200`, empty | `500`, mirrored |
+| `Blob` (32 bytes) | `Content-Length: 32` | `Content-Length: 2` | `Content-Length: 32` |
+| web `ReadableStream` | no `Content-Length` | `Content-Length: 2` | no `Content-Length` |
+| fetch `Response` | no `Content-Length` | `Content-Length: 2` | no `Content-Length` |
+| stream + `ctx.length = 0` | `Content-Length: 0` | no `Content-Length` | `Content-Length: 0` |
 
 The middle row is the damaging one: a client sizing a resource with `HEAD` was
 told **0 bytes** for a resource `GET` serves as 3. RFC 9110 §9.3.2 permits
@@ -100,17 +104,30 @@ cheerful `200` with no body. Mirroring the *failure* is as much a part of §9.3.
 as mirroring the success, so such a body is now left in place and `HEAD` fails
 identically.
 
+The `Content-Length: 2` rows are `JSON.stringify()` of an opaque object landing on
+`"{}"`: Koa 3 also accepts `Blob`, web `ReadableStream` and fetch `Response`
+bodies, and none of them is a Node stream, so they fell into the JSON branch. The
+last row is the mirror-image mistake — a declared length of exactly `0` is
+falsy, and truth-testing it dropped a header `GET` sends.
+
+The length is now taken from the `Content-Length` the response already declares
+whenever there is one, compared against `undefined` rather than truth-tested.
+That covers more than an explicit `ctx.length`: Koa's own body setter sizes
+strings, Buffers and Blobs on assignment, so their length is already present. Only
+when nothing is declared does the shape matter, and the unsized set now names all
+three of Koa's streaming shapes.
+
 The empty replacement body is otherwise chosen per shape: a `Buffer` where the
-length is knowable (string / Buffer / JSON-serializable), an already-ended stream
-where it is not — because `ctx.response.length` is `undefined` for a stream, which
-leaves the header under the function's own control. Either replacement still
+length is knowable, an already-ended stream where it is not — because
+`ctx.response.length` is `undefined` for a stream, which leaves the header under
+the function's own control. Either replacement still
 makes Koa destroy the render's stream, verified with no descriptor growth over
 200 `HEAD` requests against real file streams.
 
 The bug predates this release (it shipped with `stripBodyForHead()` in 3.0.1) but
 required `method: ['GET', 'HEAD']` to reach, so it is fixed here rather than
-left for operators who are about to get `HEAD` by default. Four matrix rows pin
-the four body shapes.
+left for operators who are about to get `HEAD` by default. Eight matrix rows pin
+the eight body shapes.
 
 > #### Cost note
 >

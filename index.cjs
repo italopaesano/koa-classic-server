@@ -301,18 +301,44 @@ async function sendTemplateError(ctx, status, builtinHtml, logMsg, err, logger, 
 //
 // Either replacement makes Koa destroy the render's previous stream body, so no
 // file descriptor leaks.
+// Body shapes Koa 3 streams rather than sizes: a GET carries no Content-Length
+// for them unless something set one explicitly. Node streams, web ReadableStreams
+// and fetch Responses all land here. Blob is deliberately absent — Koa's body
+// setter sizes it (`this.length = val.size`), so it arrives with the header
+// already set and is handled by the declared-length branch below.
+function isUnsizedBody(body) {
+    if (body instanceof Stream) return true;
+    if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) return true;
+    if (typeof Response !== 'undefined' && body instanceof Response) return true;
+    return false;
+}
+
 function stripBodyForHead(ctx) {
     if (ctx.headerSent) return;       // render already flushed — status/headers are locked
     const body = ctx.body;
     if (body == null) return;         // render produced no body (redirect, pass-through, ...) — leave status as-is
 
+    // Read the declared length BEFORE touching the body: assigning over a stream
+    // makes Koa drop Content-Length, and this is the value GET would have sent.
+    // It covers more than a render's explicit ctx.length — Koa's own body setter
+    // sizes strings, Buffers and Blobs on assignment, so their length is already
+    // here. Compared against undefined, never truth-tested: a legitimate
+    // "Content-Length: 0" is falsy and must not be dropped.
+    const declared = ctx.response.get('Content-Length');
+
     // The length GET would have carried, when it is knowable without generating
-    // the content. A stream is the one shape where it is not: Koa streams it and
-    // lets the transfer encoding carry the framing.
+    // the content.
     let length = null;
-    if (typeof body === 'string' || Buffer.isBuffer(body)) {
+    if (declared !== undefined) {
+        length = declared;
+    } else if (typeof body === 'string' || Buffer.isBuffer(body)) {
+        // Defensive, and uncovered for that reason: Koa's body setter always sizes a
+        // string or Buffer on assignment, so the declared branch above claims them
+        // first. Kept so this function stays correct on its own terms rather than
+        // depending on that setter detail — the exact coupling that produced the bug
+        // this function exists to fix.
         length = Buffer.byteLength(body);
-    } else if (!(body instanceof Stream)) {
+    } else if (!isUnsizedBody(body)) {
         // Koa JSON-serializes anything else and sizes the response from that.
         try {
             length = Buffer.byteLength(JSON.stringify(body));
@@ -331,15 +357,13 @@ function stripBodyForHead(ctx) {
         return;
     }
 
-    // Stream body. Capture any length the render declared BEFORE swapping the
-    // body: assigning over a stream makes Koa drop Content-Length.
-    const declaredLength = ctx.response.get('Content-Length');
+    // Unsized body: GET would have been chunked, so HEAD must send no
+    // Content-Length either. An empty Buffer cannot express that — Koa's
+    // respond() fills a missing Content-Length in on HEAD from
+    // ctx.response.length, which reads 0 off a Buffer but is undefined for a
+    // Node stream. Hence an already-ended stream, matching the static
+    // streaming-HEAD branch and the §9.3.2 derogation it relies on.
     ctx.body = Readable.from([]);
-    if (declaredLength) {
-        ctx.set('Content-Length', declaredLength); // mirror the render's own framing
-    }
-    // else: GET would have been chunked — leave the header absent, matching the
-    // static streaming-HEAD branch and the §9.3.2 derogation it relies on.
 }
 
 // Attempts to render the requested file through the user's template engine.

@@ -82,6 +82,7 @@ beforeAll(() => {
     fs.writeFileSync(path.join(ROOT, 'asset.txt'), 'A'.repeat(4096));   // > minFileSize → compressible
     fs.writeFileSync(path.join(ROOT, 'big.txt'), 'B'.repeat(60000));    // > the lowered maxFileSize below
     fs.writeFileSync(path.join(ROOT, 'page.tpl'), 'template source');
+    fs.writeFileSync(path.join(ROOT, 'empty.tpl'), '');                 // 0 bytes
     fs.mkdirSync(path.join(ROOT, 'dir'));
     fs.writeFileSync(path.join(ROOT, 'dir', 'inner.txt'), 'inner');
 });
@@ -130,6 +131,29 @@ const sizedStreamRender = async (ctx, next, filePath) => {
 const objectRender = async (ctx) => {
     if (ctx.method !== 'GET') return;
     ctx.body = { hello: 'world', n: 42 };              // Koa JSON-serializes and sizes it
+};
+// Koa 3 body shapes beyond Node streams. Koa sizes a Blob on assignment
+// (this.length = val.size) but streams a web ReadableStream and a fetch Response
+// without a length — so the three must NOT be lumped in with JSON bodies.
+const blobRender = async (ctx) => {
+    if (ctx.method !== 'GET') return;
+    ctx.body = new Blob(['B'.repeat(32)]);             // Koa sets Content-Length: 32
+};
+const webStreamRender = async (ctx) => {
+    if (ctx.method !== 'GET') return;
+    ctx.body = new ReadableStream({
+        start(c) { c.enqueue(new TextEncoder().encode('hello')); c.close(); },
+    });                                                // chunked: no Content-Length
+};
+const responseRender = async (ctx) => {
+    if (ctx.method !== 'GET') return;
+    ctx.body = new Response('hello world');            // chunked: no Content-Length
+};
+const emptySizedStreamRender = async (ctx, next, filePath) => {
+    if (ctx.method !== 'GET') return;
+    ctx.type = 'text/plain';
+    ctx.body = fs.createReadStream(filePath);
+    ctx.length = 0;                                    // a legitimate, falsy, zero length
 };
 const circularRender = async (ctx) => {
     if (ctx.method !== 'GET') return;
@@ -216,6 +240,32 @@ const ROWS = [
         opts: { template: { ext: ['.tpl'], render: circularRender } },
         path: '/page.tpl', headers: { 'Accept-Encoding': 'identity' },
         status: 500, contentLength: 'mirrors',
+    },
+    {
+        branch: 'stripBodyForHead() — render body is a Blob (Koa sizes it on assignment)',
+        opts: { template: { ext: ['.tpl'], render: blobRender } },
+        path: '/page.tpl', headers: { 'Accept-Encoding': 'identity' },
+        status: 200, contentLength: 'mirrors',
+    },
+    {
+        branch: 'stripBodyForHead() — render body is a web ReadableStream (chunked)',
+        opts: { template: { ext: ['.tpl'], render: webStreamRender } },
+        path: '/page.tpl', headers: { 'Accept-Encoding': 'identity' },
+        status: 200, contentLength: 'absent',
+    },
+    {
+        branch: 'stripBodyForHead() — render body is a fetch Response (chunked)',
+        opts: { template: { ext: ['.tpl'], render: responseRender } },
+        path: '/page.tpl', headers: { 'Accept-Encoding': 'identity' },
+        status: 200, contentLength: 'absent',
+    },
+    {
+        // Content-Length: 0 is legitimate and falsy. Truth-testing the declared
+        // length drops it and leaves HEAD chunked where GET declared zero.
+        branch: 'stripBodyForHead() — declared Content-Length of exactly 0',
+        opts: { template: { ext: ['.tpl'], render: emptySizedStreamRender } },
+        path: '/empty.tpl', headers: { 'Accept-Encoding': 'identity' },
+        status: 200, contentLength: 'mirrors',
     },
     {
         branch: 'dirListing.trailingSlash — directory without slash → 301',

@@ -915,7 +915,30 @@ prodotto due rilievi, entrambi verificati e corretti nello stesso PR:
    àncora corrisponda esattamente una volta in `index.cjs` — così il marcire di un
    puntatore diventa un fallimento di test invece di una bugia silenziosa.
 
-**Esito:** 71 suite / 1412 test verdi, lint pulito, coverage sopra le soglie.
+**Seconda revisione (stessa data), ambito allargato a tutto il payload della 5.3.0
+(`469cde9..HEAD`).** Ha trovato due difetti **nella correzione stessa del punto 1**,
+entrambi riprodotti e corretti:
+
+3. **Le forme di body non-Node-stream di Koa 3 finivano nel ramo JSON.** Koa 3
+   accetta anche `Blob`, `ReadableStream` (web) e `Response` (fetch); nessuna è
+   uno stream Node, quindi `JSON.stringify()` le riduceva a `"{}"` →
+   `Content-Length: 2`. Misurato: `Blob` da 32 byte → `GET: 32` ma `HEAD: 2`;
+   `ReadableStream` e `Response` → `GET` chunked ma `HEAD: 2`. Errore di metodo:
+   avevo enumerato le forme di body **a intuito** invece di rispecchiare la
+   classificazione del setter di Koa.
+4. **Un `Content-Length` dichiarato pari a 0 veniva scartato perché falsy.** Il
+   ramo stream faceva `if (declaredLength)`. Misurato: stream su file da 0 byte con
+   `ctx.length = 0` → `GET: Content-Length: 0` ma `HEAD` senza header.
+
+Correzione strutturale: la lunghezza viene ora presa dal `Content-Length` **già
+dichiarato dalla risposta** quando c'è, confrontato con `undefined` e mai
+truth-testato. Questo copre più dell'esplicito `ctx.length`: il setter di Koa
+dimensiona da solo stringhe, Buffer e `Blob` all'assegnazione. Solo in assenza di
+un header dichiarato conta la forma, e l'insieme "non dimensionabile" ora nomina
+tutte e tre le forme streaming di Koa. Otto righe di matrice coprono le otto forme,
+validate per mutazione con la specificità attesa.
+
+**Esito:** 71 suite / 1417 test verdi, lint pulito, coverage sopra le soglie.
 
 ---
 

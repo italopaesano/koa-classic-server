@@ -97,6 +97,7 @@ integrità rilevato.
 - [x] [10. Il default `method: ['GET']` rende il server non conforme: `HEAD` risponde 404 su OGNI path mentre `GET` risponde 200](#10-il-default-method-get-rende-il-server-non-conforme-head-risponde-404-su-ogni-path-mentre-get-risponde-200) — **RISOLTO in 5.3.0** (default `['GET', 'HEAD']`; normalizzazione maiuscola; matrice di parità HEAD/GET verificata per mutazione; documentazione riscritta)
 - [ ] [11. `method` era l'unica opzione a valori enumerati senza guardia: verificare che non ce ne siano altre](#11-method-era-lunica-opzione-a-valori-enumerati-senza-guardia-verificare-che-non-ce-ne-siano-altre) — **APERTO** (audit di normalizzazione/validazione sulle opzioni restanti)
 - [ ] [12. Con un `Transfer-Encoding` impostato da un middleware a monte, i rami statici emettono anche `Content-Length` (illegale, RFC 9112 §6.1)](#12-con-un-transfer-encoding-impostato-da-un-middleware-a-monte-i-rami-statici-emettono-anche-content-length-illegale-rfc-9112-61) — **APERTO** (preesistente e simmetrico GET/HEAD, quindi non una violazione di §9.3.2)
+- [ ] [13. `stripBodyForHead()` reimplementa il dimensionamento del body di Koa: valutare di eliminarla](#13-stripbodyforhead-reimplementa-il-dimensionamento-del-body-di-koa-valutare-di-eliminarla) — **APERTO** (rimuove alla radice una classe di difetti recidiva, ma reintroduce un costo: da misurare prima di procedere)
 
 ---
 
@@ -1008,6 +1009,84 @@ un file server sia semplicemente un errore dell'operatore da documentare. Node g
 sé il transfer encoding, quindi il caso è raro.
 
 **Priorità:** Bassa (richiede un middleware a monte che faccia una cosa inusuale).
+
+---
+
+### 13. `stripBodyForHead()` reimplementa il dimensionamento del body di Koa: valutare di eliminarla
+
+**Problema strutturale.** La funzione deve sapere, per conto proprio, come Koa
+dimensiona **ogni** forma di body. È una conoscenza duplicata di una decisione che
+Koa prende altrove, e ogni divergenza fra le due implementazioni è un difetto.
+Non è un timore teorico: tre revisioni consecutive del PR della 5.3.0 hanno
+prodotto **sei difetti, tutti in questa sola funzione**, tutti con la stessa
+radice.
+
+| Passata | Difetto | Sintomo |
+|---|---|---|
+| 1ª | body stream sostituito da `Buffer` vuoto | `GET` chunked, `HEAD: Content-Length: 0` |
+| 1ª | body non serializzabile (circolare) | `GET: 500`, `HEAD: 200` — divergenza di **status** |
+| 2ª | `Blob` / `ReadableStream` / `Response` nel ramo JSON | `GET: 32`, `HEAD: 2` |
+| 2ª | `Content-Length` dichiarato pari a 0 truth-testato | `GET: 0`, `HEAD` senza header |
+| 3ª | `isStream()` di Koa è strutturale, non `instanceof` | `GET` chunked, `HEAD: Content-Length: 62` |
+| 3ª | `Content-Length` accanto a `Transfer-Encoding` | risposta illegale, il parser del client la rifiuta |
+
+La gravità è calante e la terza passata è stata guidata dal sorgente di Koa
+anziché dall'intuizione, quindi la copertura attuale è argomentabile. Ma la
+funzione resta il punto di contatto più fragile fra middleware e framework, e
+ogni nuova forma di body accettata da Koa è un difetto potenziale.
+
+**Proposta: non ricalcolare la lunghezza affatto.** Lasciare il body al suo posto
+e far dimensionare la risposta a Koa con la **propria** logica — che per
+costruzione non può divergere da `GET`.
+
+Il meccanismo, verificato a runtime su Koa 3.2.1 nudo:
+
+- `respond()` ha un ramo `HEAD` che fa `return res.end()` **prima** della logica
+  di dimensionamento: è per questo che oggi la lunghezza non viene mai calcolata
+  e qualcuno deve farlo al posto suo.
+- `res._hasBody` è deciso da Node al parsing della richiesta, **prima** che
+  qualsiasi middleware giri, e non cambia se `ctx.method` viene riscritto dopo.
+- Quindi, lasciando `ctx.method === 'GET'` fino a `respond()`, Koa prende il ramo
+  `GET` e dimensiona da sé, mentre Node continua a non inviare corpo.
+
+Misurato (Koa nudo, middleware che imposta `ctx.method = 'GET'` e un body da 10 byte):
+
+```
+GET   -> Content-Length: 10   byte di corpo ricevuti: 10
+HEAD  -> Content-Length: 10   byte di corpo ricevuti: 0
+```
+
+`stripBodyForHead()` sparirebbe, e con lei l'intera classe di difetti della tabella
+sopra.
+
+**La tensione, che è reale.** Con `respond()` sul ramo `GET`, gli stream vengono
+**effettivamente pipati**: Node scarta i byte, ma la sorgente viene letta. È
+esattamente il lavoro che gli short-circuit HEAD odierni esistono per evitare —
+sul ramo streaming della compressione, sul ramo sopra `compression.maxFileSize`, e
+sui rami statici che oggi non aprono nemmeno il file. Non è un guadagno gratuito:
+si rimuove una classe di difetti e si reintroduce una classe di costo.
+
+**Mitigazione suggerita:** applicarlo **solo al percorso template**, dove
+`stripBodyForHead()` vive e dove sono nati tutti e sei i difetti, lasciando
+intatti gli short-circuit espliciti dei rami statici e di compressione. Sul
+percorso template il render viene comunque eseguito per intero anche su `HEAD`
+(è il mascheramento di `ctx.method` della 3.0.1), quindi il body è già prodotto e
+pipare il risultato costa relativamente poco.
+
+**Da verificare prima di procedere:**
+
+1. Che lasciare `ctx.method === 'GET'` non rompa nulla a valle. Il setter di Koa
+   scrive su `req.method`, quindi la modifica è **visibile all'esterno**: logger,
+   gestori d'errore e middleware a valle vedrebbero `GET` su una richiesta `HEAD`.
+   È il rischio principale della proposta.
+2. Quanto costa davvero pipare-e-scartare un render che produce uno stream grande.
+3. Che la gestione degli errori di `respond()` si comporti allo stesso modo.
+4. Che le **dieci righe** di `__tests__/head-parity-matrix.test.js` restino verdi:
+   la matrice è precisamente lo strumento per validare lo scambio, ed è il motivo
+   per cui questa proposta è affrontabile con una rete sotto.
+
+**Priorità:** Media. Nessun difetto aperto oggi, ma la recidiva è documentata e la
+proposta la elimina alla radice invece di aggiungere righe di matrice a ogni giro.
 
 ---
 

@@ -264,6 +264,15 @@ Una voce è utilizzabile se è una stringa non vuota conforme al `token` di RFC 
 qualunque altra cosa non potrebbe mai corrispondere a `ctx.method` e resterebbe nella
 configurazione senza fare nulla.
 
+Deve essere un **array**. Un valore di altra forma ricade sul default ed è segnalato:
+
+```javascript
+method: 'POST'          // ❌ non è un array
+// → ricade su ['GET','HEAD'] e POST risponde 404, con un warning:
+//   [koa-classic-server] options.method must be an ARRAY of method tokens — got "POST", ...
+method: ['POST']        // ✅
+```
+
 > Sono **avvisi**, non deprecazioni: non c'è alcuna promessa di throw futuro. Un verbo valido ma
 > inusuale (es. `'PURGE'`) non produce alcun avviso — il middleware serve qualunque verbo
 > l'operatore elenchi, e segnalarlo sarebbe solo rumore.

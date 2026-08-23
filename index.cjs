@@ -295,6 +295,9 @@ function describeEntry(value) {
     if (value === null) return 'null';
     if (value === undefined) return 'undefined';
     if (Array.isArray(value)) return 'an array';
+    // A boxed primitive never === ctx.method, and reporting it as "object" would
+    // leave the operator hunting for the difference.
+    if (value instanceof String) return 'a String object (use a plain string)';
     // Primitives print their value — 'number' tells the operator nothing, '42' points
     // straight at the offending entry. Symbols and functions stay described by type,
     // since String() on them is either useless or throws in a template literal.
@@ -311,7 +314,23 @@ function describeEntry(value) {
 // middleware goes inert and answers 404 to everything, which is exactly the kind
 // of failure that is impossible to diagnose from the outside. Both corrections
 // are therefore announced rather than applied in silence.
-function normalizeMethods(rawMethods, logger) {
+function normalizeMethods(rawMethod, logger) {
+    if (rawMethod === undefined) return ['GET', 'HEAD'];
+
+    // A non-array is the most damaging shape of all, because it discards a stated
+    // intent rather than mangling it: method: 'POST' plainly asks for POST to be
+    // served, and silently falling back to the default answers 404 to exactly the
+    // verb that was requested. Reported for the same reason the case fixes are.
+    if (!Array.isArray(rawMethod)) {
+        warnConfigNotice(logger,
+            'options.method must be an ARRAY of method tokens — got ' + describeEntry(rawMethod) +
+            ', falling back to the ["GET", "HEAD"] default.\n' +
+            '  A bare value is not accepted: method: "POST" reads as a request to serve POST, but\n' +
+            '  it is discarded and POST answers 404. Write method: ["POST"].');
+        return ['GET', 'HEAD'];
+    }
+
+    const rawMethods = rawMethod;
     const normalized = [];
     const upperCased = [];
     const dropped = [];
@@ -949,8 +968,11 @@ module.exports = function koaClassicServer(
                             //   answering 404 to everything. A lowercase entry is now upper-cased
                             //   AND reported on the logger; an entry that is not a usable method
                             //   token (non-string, or not RFC 9110 §5.6.2 tchar) is dropped and
-                            //   reported. Both are notices, not deprecations: they will keep
-                            //   being corrected, not promoted to a throw.
+                            //   reported. A non-ARRAY value falls back to the default and is
+                            //   reported too — method: 'POST' asks for POST and would otherwise
+                            //   answer 404 to exactly the verb requested. All three are notices,
+                            //   not deprecations: they will keep being corrected, not promoted
+                            //   to a throw.
                             //   WARNING — setting method: ['GET'] explicitly REMOVES HEAD and
                             //   yields a server NON-CONFORMANT with RFC 9110 §9.1: a HEAD on a
                             //   file that GET serves with 200 answers 404, i.e. it asserts the
@@ -1213,10 +1235,7 @@ module.exports = function koaClassicServer(
     // HEAD ships in the default (5.3.0): see the opts STRUCTURE note above —
     // RFC 9110 §9.1 (MUST support GET and HEAD) and §9.3.2 (HEAD mirrors GET).
     // normalizeMethods() upper-cases and prunes the list, warning about both.
-    options.method = normalizeMethods(
-        Array.isArray(options.method) ? options.method : ['GET', 'HEAD'],
-        _logger
-    );
+    options.method = normalizeMethods(options.method, _logger);
 
     // ── V3 breaking-change guards: helpful errors for V3-alpha-only renamed options ──
     // These were introduced in v3.0.0-alpha.0 only; no v2 user can have them in production.

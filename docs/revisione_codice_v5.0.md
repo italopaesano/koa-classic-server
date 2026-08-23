@@ -1000,6 +1000,11 @@ future major version» ed è destinato a diventare un throw nella 6.0.0. Qui l'i
 dell'operatore è inequivocabile (`['get']` significa palesemente GET) e la correzione è
 meccanica, quindi si è scelto un **avviso permanente** senza promessa di throw.
 
+- valore non-array (`method: 'POST'`, `null`, `42`) → ricade sul default + notice. È la
+  forma più dannosa delle tre, perché **scarta un intento dichiarato** invece di storpiarlo:
+  `'POST'` chiede palesemente di servire POST, e il fallback silenzioso rispondeva 404
+  proprio al verbo richiesto. Emersa dalla revisione del commit, non dall'implementazione
+  iniziale — che aveva dichiarato chiusa la parte `method` lasciandolo aperto
 - voce minuscola o mista → upper-case + notice che elenca le correzioni
 - voce non utilizzabile (non stringa, oppure stringa fuori dal `token` di RFC 9110
   §5.6.2, es. `'BAD METHOD'`, `''`, `'a,b'`) → **scartata** + notice; i primitivi sono

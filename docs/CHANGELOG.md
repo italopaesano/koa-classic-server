@@ -50,9 +50,16 @@ Also in this change:
   non-string, or a string outside the RFC 9110 §5.6.2 `token` grammar such as
   `'BAD METHOD'` — is dropped and reported.
 
+  A value that is not an **array** at all falls back to the default and is
+  reported too. That shape is the most damaging of the three, because it discards
+  a stated intent instead of mangling it: `method: 'POST'` plainly asks for POST
+  to be served, and the silent fallback answered 404 to exactly the verb
+  requested.
+
   ```
   [koa-classic-server] options.method entries must be uppercase — normalized "get" → "GET".
   [koa-classic-server] options.method dropped 2 unusable entries: null, "BAD METHOD".
+  [koa-classic-server] options.method must be an ARRAY of method tokens — got "POST", falling back to the ["GET", "HEAD"] default.
   ```
 
   These are **notices, not deprecations**: no future-throw promise rides along,

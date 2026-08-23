@@ -221,12 +221,19 @@ describe('options.method — verbs beyond GET', () => {
         expect(res.headers['content-security-policy']).toBeUndefined();
     });
 
-    test('a non-array method value falls back to the ["GET", "HEAD"] default', async () => {
-        const res = await withApp({ method: 'GET' }, (s) => supertest(s).get('/file.txt'));
+    test('a non-array method value falls back to the ["GET", "HEAD"] default, and says so', async () => {
+        const warns = [];
+        const logger = { warn: (...a) => warns.push(a.map(String).join(' ')), error: () => {} };
+
+        const res = await withApp({ method: 'GET', logger }, (s) => supertest(s).get('/file.txt'));
         expect(res.status).toBe(200);
 
-        const head = await withApp({ method: 'GET' }, (s) => supertest(s).head('/file.txt'));
+        const head = await withApp({ method: 'GET', logger }, (s) => supertest(s).head('/file.txt'));
         expect(head.status).toBe(200); // HEAD is in the default list (5.3.0, RFC 9110 §9.1)
+
+        // The fallback is deliberate, but not silent: discarding a stated method
+        // list without a word is the failure mode this validation exists to end.
+        expect(warns.some(w => w.includes('must be an ARRAY'))).toBe(true);
     });
 
     // The escape hatch. An operator who explicitly asks for GET-only gets GET-only,

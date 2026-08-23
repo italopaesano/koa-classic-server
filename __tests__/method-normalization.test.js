@@ -195,6 +195,68 @@ describe('entries that could never match are dropped and reported', () => {
     });
 });
 
+// ─── The container itself ────────────────────────────────────────────────────
+
+describe('a non-array method value falls back to the default and is reported', () => {
+    // This is the most damaging shape: it discards a stated intent rather than
+    // mangling it. method: 'POST' plainly asks for POST, and the fallback answers
+    // 404 to exactly the verb that was requested.
+    test("method: 'POST' — the requested verb is NOT served, and the fallback is announced", async () => {
+        const logger = capturingLogger();
+        const server = build({ method: 'POST', logger });
+        try {
+            expect(await statuses(server)).toEqual({ get: 200, head: 200, post: 404 });
+        } finally {
+            server.close();
+        }
+
+        expect(logger.warns).toHaveLength(1);
+        expect(logger.warns[0]).toContain('must be an ARRAY');
+        expect(logger.warns[0]).toContain('"POST"');
+        expect(logger.warns[0]).not.toContain('DEPRECATION');
+    });
+
+    test.each([
+        ['null', null, 'null'],
+        ['a number', 42, '42'],
+        ['an object', {}, 'object'],
+    ])('method: %s is reported by value, not by shape', async (_label, value, expected) => {
+        const logger = capturingLogger();
+        const server = build({ method: value, logger });
+        try {
+            expect(await statuses(server)).toEqual({ get: 200, head: 200, post: 404 });
+        } finally {
+            server.close();
+        }
+        expect(logger.warns[0]).toContain('must be an ARRAY');
+        expect(logger.warns[0]).toContain(expected);
+    });
+
+    test('an omitted method is the default and warns about nothing', async () => {
+        const logger = capturingLogger();
+        const server = build({ logger });
+        try {
+            expect(await statuses(server)).toEqual({ get: 200, head: 200, post: 404 });
+        } finally {
+            server.close();
+        }
+        expect(logger.warns).toEqual([]);
+    });
+
+    test('a boxed String entry is dropped and named as such, not as "object"', async () => {
+        const logger = capturingLogger();
+        // eslint-disable-next-line no-new-wrappers
+        const server = build({ method: [new String('GET')], logger });
+        try {
+            // A String object never === ctx.method, so it could not have worked.
+            expect(await statuses(server)).toEqual({ get: 404, head: 404, post: 404 });
+        } finally {
+            server.close();
+        }
+        expect(logger.warns[0]).toContain('a String object');
+    });
+});
+
 // ─── Delivery ────────────────────────────────────────────────────────────────
 
 describe('notice delivery', () => {

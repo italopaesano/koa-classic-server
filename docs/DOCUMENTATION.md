@@ -243,7 +243,39 @@ const options = {
 **Default: `['GET', 'HEAD']`.** Specifica i metodi HTTP accettati dal middleware. Se una richiesta
 usa un metodo non presente nell'array, viene passata al middleware successivo.
 
-Le voci vengono normalizzate in maiuscolo, quindi `['get', 'head']` equivale a `['GET', 'HEAD']`.
+**Le voci devono essere in MAIUSCOLO** — per ogni verbo, non solo `GET` e `HEAD`. I method token
+sono case-sensitive (RFC 9110 §9) e `ctx.method` è sempre il token maiuscolo grezzo, quindi una
+voce minuscola non corrisponde mai: `method: ['get']` da solo lasciava il middleware inerte, con
+404 su tutto.
+
+Dalla 5.3.0 il middleware **corregge e segnala**:
+
+```javascript
+method: ['get', 'head']
+// → funziona come ['GET', 'HEAD'], con un warning sul logger:
+//   [koa-classic-server] options.method entries must be uppercase — normalized "get" → "GET", ...
+
+method: ['GET', null, 'BAD METHOD']
+// → le voci inutilizzabili vengono SCARTATE, con un warning:
+//   [koa-classic-server] options.method dropped 2 unusable entries: null, "BAD METHOD"
+```
+
+Una voce è utilizzabile se è una stringa non vuota conforme al `token` di RFC 9110 §5.6.2;
+qualunque altra cosa non potrebbe mai corrispondere a `ctx.method` e resterebbe nella
+configurazione senza fare nulla.
+
+Deve essere un **array**. Un valore di altra forma ricade sul default ed è segnalato:
+
+```javascript
+method: 'POST'          // ❌ non è un array
+// → ricade su ['GET','HEAD'] e POST risponde 404, con un warning:
+//   [koa-classic-server] options.method must be an ARRAY of method tokens — got "POST", ...
+method: ['POST']        // ✅
+```
+
+> Sono **avvisi**, non deprecazioni: non c'è alcuna promessa di throw futuro. Un verbo valido ma
+> inusuale (es. `'PURGE'`) non produce alcun avviso — il middleware serve qualunque verbo
+> l'operatore elenchi, e segnalarlo sarebbe solo rumore.
 
 ```javascript
 // Default: GET e HEAD

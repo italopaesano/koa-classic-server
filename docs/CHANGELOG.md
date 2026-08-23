@@ -26,11 +26,11 @@ not exist**, which is false. RFC 9110 **§9.1** makes `GET` and `HEAD` the minim
 a general-purpose server MUST support, and **§9.3.2** requires `HEAD` to mirror
 `GET` — same status, same headers, no body. The two statuses cannot diverge.
 
-The middleware's `HEAD` implementation was already complete and correct across
-every branch (206, 416, 304, buffered and streaming compression, template
-renders, redirects, listings); it was simply gated off by a configuration
-default. This release removes the gate: **the default is now
-`method: ['GET', 'HEAD']`**.
+The middleware's `HEAD` implementation was already in place across every branch
+(206, 416, 304, buffered and streaming compression, template renders, redirects,
+listings); it was gated off by a configuration default. This release removes the
+gate: **the default is now `method: ['GET', 'HEAD']`** — and fixes the one branch
+that turned out not to be correct once the gate was gone (see the next entry).
 
 This is the same defect this project has already fixed twice as a bug, citing
 §9.3.2 both times — in **3.0.1** (template routes) and **4.0.0** (streaming
@@ -40,10 +40,35 @@ rather than a feature.
 
 Also in this change:
 
-- **Method entries are upper-cased.** `method: ['get', 'head']` previously
-  matched nothing and silently disabled the entire middleware — 404 on
-  everything, `GET` included, with no warning. `ctx.method` is always the raw
-  uppercase token, so entries are now normalized with `.toUpperCase()`.
+- **Method entries are validated, corrected and reported** (register #11).
+  `method: ['get', 'head']` previously matched nothing and silently disabled the
+  entire middleware — 404 on everything, `GET` included, with no diagnostic
+  anywhere. Method tokens are case-sensitive (RFC 9110 §9) and `ctx.method` is
+  always the raw uppercase token, so **every** entry must be uppercase, not just
+  `GET`/`HEAD`. A lowercase or mixed-case entry is now upper-cased **and**
+  reported on the logger; an entry that is not a usable method token — a
+  non-string, or a string outside the RFC 9110 §5.6.2 `token` grammar such as
+  `'BAD METHOD'` — is dropped and reported.
+
+  A value that is not an **array** at all falls back to the default and is
+  reported too. That shape is the most damaging of the three, because it discards
+  a stated intent instead of mangling it: `method: 'POST'` plainly asks for POST
+  to be served, and the silent fallback answered 404 to exactly the verb
+  requested.
+
+  ```
+  [koa-classic-server] options.method entries must be uppercase — normalized "get" → "GET".
+  [koa-classic-server] options.method dropped 2 unusable entries: null, "BAD METHOD".
+  [koa-classic-server] options.method must be an ARRAY of method tokens — got "POST", falling back to the ["GET", "HEAD"] default.
+  ```
+
+  These are **notices, not deprecations**: no future-throw promise rides along,
+  because the operator's intent is unmistakable and the correction is mechanical.
+  They go through a new `warnConfigNotice()` channel for exactly that reason —
+  `warnConfigDeprecation()` ends its message by announcing a throw in a future
+  major. Deduplicated once per process per distinct message, like the rest.
+  A valid but unusual verb (`'PURGE'`) is silent: the middleware serves whatever
+  the operator lists, and warning about it would be noise.
 - **Verbs beyond the list still fall through to `next()`** — unchanged, and
   deliberately so. Answering `405` here would break every application that
   mounts a static server alongside a router. Emitting `405` with the mandatory
@@ -73,6 +98,105 @@ Also in this change:
 > second-guess an explicit configuration. Be aware that it yields a server on
 > which caches, reverse proxies, link-checkers, uptime monitors and `curl -I`
 > see a 404 for files that `GET` serves with 200.
+
+### 🐛 Fixed — `HEAD` published a `Content-Length` the `GET` never sent, for stream and object render bodies
+
+Found by the code review of the change above, and reachable by default because of
+it. `stripBodyForHead()` replaced any render body with an empty `Buffer`. Koa's
+`respond()` fills a missing `Content-Length` in on `HEAD` from
+`ctx.response.length`, which reads **0** off that empty buffer — so every body
+shape whose size is not a string/Buffer byte length reported the wrong number:
+
+| Render body | `GET` | `HEAD` (before) | `HEAD` (now) |
+|---|---|---|---|
+| `fs.createReadStream(f)` | no `Content-Length` (chunked) | `Content-Length: 0` | no `Content-Length` |
+| stream + `ctx.length = 3` | `Content-Length: 3` | `Content-Length: 0` | `Content-Length: 3` |
+| `{ hello: 'world' }` | `Content-Length: 24` | `Content-Length: 0` | `Content-Length: 24` |
+| circular object | `500` | `200`, empty | `500`, mirrored |
+| `Blob` (32 bytes) | `Content-Length: 32` | `Content-Length: 2` | `Content-Length: 32` |
+| web `ReadableStream` | no `Content-Length` | `Content-Length: 2` | no `Content-Length` |
+| fetch `Response` | no `Content-Length` | `Content-Length: 2` | no `Content-Length` |
+| stream + `ctx.length = 0` | `Content-Length: 0` | no `Content-Length` | `Content-Length: 0` |
+| duck-typed stream | no `Content-Length` | `Content-Length: 62` | no `Content-Length` |
+| body + `Transfer-Encoding` | `TE` only | `TE` **and** `Content-Length` — response unparseable | `TE` only |
+
+The middle row is the damaging one: a client sizing a resource with `HEAD` was
+told **0 bytes** for a resource `GET` serves as 3. RFC 9110 §9.3.2 permits
+*omitting* a header that is only computable by generating the content; it does
+not permit sending a different value than `GET` would.
+
+The last row is a status divergence, not just a header one: an unserializable
+body makes `GET` fail inside Koa's `respond()`, while `HEAD` used to answer a
+cheerful `200` with no body. Mirroring the *failure* is as much a part of §9.3.2
+as mirroring the success, so such a body is now left in place and `HEAD` fails
+identically.
+
+The `Content-Length: 2` rows are `JSON.stringify()` of an opaque object landing on
+`"{}"`: Koa 3 also accepts `Blob`, web `ReadableStream` and fetch `Response`
+bodies, and none of them is a Node stream, so they fell into the JSON branch. The
+last row is the mirror-image mistake — a declared length of exactly `0` is
+falsy, and truth-testing it dropped a header `GET` sends.
+
+Two of those rows come from Koa's own classification rather than from guessing at
+it. Koa's `isStream()` is **structural**, not `instanceof` — it pipes anything with
+the right shape — so a stream-like that does not inherit from `Stream` was being
+sized from `JSON.stringify()`. And a render that declares its own
+`Transfer-Encoding` must not receive a `Content-Length` beside it (RFC 9112 §6.1):
+that combination is rejected outright by the client's HTTP parser, so the request
+fails entirely rather than merely reporting a wrong size. `GET` never hit it
+because Node drops the length on the write path; `HEAD` writes no body, so nothing
+reconciled it.
+
+The length is now taken from the `Content-Length` the response already declares
+whenever there is one, compared against `undefined` rather than truth-tested.
+That covers more than an explicit `ctx.length`: Koa's own body setter sizes
+strings, Buffers and Blobs on assignment, so their length is already present. Only
+when nothing is declared does the shape matter, and the unsized set now names all
+three of Koa's streaming shapes.
+
+The empty replacement body is otherwise chosen per shape: a `Buffer` where the
+length is knowable, an already-ended stream where it is not — because
+`ctx.response.length` is `undefined` for a stream, which leaves the header under
+the function's own control. Either replacement still
+makes Koa destroy the render's stream, verified with no descriptor growth over
+200 `HEAD` requests against real file streams.
+
+The bug predates this release (it shipped with `stripBodyForHead()` in 3.0.1) but
+required `method: ['GET', 'HEAD']` to reach, so it is fixed here rather than
+left for operators who are about to get `HEAD` by default. Ten matrix rows pin the
+ten body shapes.
+
+### ✅ Tests — HEAD/GET parity sweep, and the gaps it closed
+
+The matrix is hand-written, so it only covers branches somebody thought to list.
+`__tests__/head-parity-sweep.test.js` is the other half: a cross-product of 15
+configurations × 28 requests (with conditional variants derived from priming
+requests), asserting parity on every combination without deciding in advance which
+combinations matter. Roughly 450 GET/HEAD pairs in ~3 s.
+
+It found **no** defects when written — after three review passes that each found
+several — which is the result worth recording: it converts "we reviewed the
+branches we could think of" into "we compared every combination in the grid".
+
+Only two divergences are exempted, each naming the exact header it forgives and
+the condition under which it applies:
+
+- Koa's own fall-through 404, which Koa never sizes for HEAD. Reproduced on bare
+  Koa with no middleware at all; detected here by the absence of the CSP header
+  every generated page of this middleware carries.
+- `Transfer-Encoding` on the streaming-compression branches: GET is chunked, HEAD
+  has no body and therefore no framing to describe — the §9.3.2 derogation.
+
+Both files were validated by mutation. Six deliberately broken builds (the 3.0.1
+bug, the 4.0.0 bug, the default reverting to `['GET']`, and three dropped
+`Content-Length` restores) are each caught. That exercise exposed a real gap: the
+sweep had no template-engine configuration, so the 3.0.1 mutation left it entirely
+green. Two template configurations were added and it now fails as it should.
+
+Five rows were also added to the matrix for branches it did not reach: the
+`rawFile` cache hit paths for both a plain 200 and a 206 slice — which need a warm
+instance, since those branches only run on a cache hit — plus a 304 via
+`If-Modified-Since`, an `If-Range` mismatch degrading to 200, and a suffix range.
 
 > #### Cost note
 >

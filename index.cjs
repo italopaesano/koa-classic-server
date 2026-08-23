@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const zlib = require("zlib");
 const util = require("util");
 const mime = require("mime-types");
-const { Readable, Transform, pipeline } = require('stream');
+const { Readable, Stream, Transform, pipeline } = require('stream');
 
 const _brotliCompressAsync = util.promisify(zlib.brotliCompress);
 const _gzipAsync           = util.promisify(zlib.gzip);
@@ -270,6 +270,98 @@ function warnConfigDeprecation(logger, message) {
         '\n  This is tolerated for now and WILL throw in a future major version.'));
 }
 
+// Config NOTICES — deduplicated the same way, but deliberately NOT deprecations.
+// A notice reports a value the middleware corrected or discarded and intends to
+// keep correcting: there is no future-throw promise attached, so it must not go
+// through warnConfigDeprecation, whose message ends by announcing one. Used where
+// the operator's intent is unmistakable and the fix is mechanical — writing
+// method: ['get'] plainly means GET, so normalizing it and saying so is more
+// useful than refusing it.
+const _configNoticesWarned = new Set();
+function warnConfigNotice(logger, message) {
+    if (_configNoticesWarned.has(message)) return;
+    _configNoticesWarned.add(message);
+    logger.warn(...warnPayload(logger, '[koa-classic-server] ' + message));
+}
+
+// An HTTP method is a `token` (RFC 9110 §5.6.2): the tchar set below. An entry
+// outside it can never equal ctx.method, so it is dead configuration.
+const _METHOD_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+// Renders a rejected config entry for a message without ever throwing on it:
+// strings are quoted so whitespace is visible, everything else is described.
+function describeEntry(value) {
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (Array.isArray(value)) return 'an array';
+    // A boxed primitive never === ctx.method, and reporting it as "object" would
+    // leave the operator hunting for the difference.
+    if (value instanceof String) return 'a String object (use a plain string)';
+    // Primitives print their value — 'number' tells the operator nothing, '42' points
+    // straight at the offending entry. Symbols and functions stay described by type,
+    // since String() on them is either useless or throws in a template literal.
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+        return String(value);
+    }
+    return typeof value;
+}
+
+// Normalizes options.method: upper-cases the entries that need it, drops the ones
+// that could never match, and reports both. Method tokens are case-SENSITIVE
+// (RFC 9110 §9) and ctx.method is always the raw uppercase token, so a lowercase
+// entry silently matches nothing — for a single-entry list that means the whole
+// middleware goes inert and answers 404 to everything, which is exactly the kind
+// of failure that is impossible to diagnose from the outside. Both corrections
+// are therefore announced rather than applied in silence.
+function normalizeMethods(rawMethod, logger) {
+    if (rawMethod === undefined) return ['GET', 'HEAD'];
+
+    // A non-array is the most damaging shape of all, because it discards a stated
+    // intent rather than mangling it: method: 'POST' plainly asks for POST to be
+    // served, and silently falling back to the default answers 404 to exactly the
+    // verb that was requested. Reported for the same reason the case fixes are.
+    if (!Array.isArray(rawMethod)) {
+        warnConfigNotice(logger,
+            'options.method must be an ARRAY of method tokens — got ' + describeEntry(rawMethod) +
+            ', falling back to the ["GET", "HEAD"] default.\n' +
+            '  A bare value is not accepted: method: "POST" reads as a request to serve POST, but\n' +
+            '  it is discarded and POST answers 404. Write method: ["POST"].');
+        return ['GET', 'HEAD'];
+    }
+
+    const rawMethods = rawMethod;
+    const normalized = [];
+    const upperCased = [];
+    const dropped = [];
+
+    for (const entry of rawMethods) {
+        if (typeof entry !== 'string' || !_METHOD_TOKEN.test(entry)) {
+            dropped.push(describeEntry(entry));
+            continue;
+        }
+        const upper = entry.toUpperCase();
+        if (upper !== entry) upperCased.push(`${JSON.stringify(entry)} → "${upper}"`);
+        normalized.push(upper);
+    }
+
+    if (upperCased.length > 0) {
+        warnConfigNotice(logger,
+            'options.method entries must be uppercase — normalized ' + upperCased.join(', ') + '.\n' +
+            '  HTTP method tokens are case-sensitive (RFC 9110 §9) and ctx.method is always the raw\n' +
+            '  uppercase token, so a lowercase entry matches nothing. Write them uppercase.');
+    }
+    if (dropped.length > 0) {
+        warnConfigNotice(logger,
+            'options.method dropped ' + dropped.length + ' unusable ' +
+            (dropped.length === 1 ? 'entry' : 'entries') + ': ' + dropped.join(', ') + '.\n' +
+            '  An entry must be a non-empty HTTP method token (RFC 9110 §5.6.2); anything else\n' +
+            '  can never equal ctx.method and would sit in the config doing nothing.');
+    }
+
+    return normalized;
+}
+
 // Sends an error response for a failed template render. If headers were already
 // flushed by the render itself, destroys the underlying socket instead (the
 // status/body can no longer be changed at that point). Page selection (custom
@@ -285,25 +377,115 @@ async function sendTemplateError(ctx, status, builtinHtml, logMsg, err, logger, 
 }
 
 // Rewrites an already-rendered response into an RFC 9110 §9.3.2 compliant HEAD
-// response: the status and headers produced by the render are preserved, the
-// body is replaced with an empty buffer (so no content is sent), and
-// Content-Length is restored to the byte length the GET body would have had.
-// Reassigning ctx.body to a non-stream value also makes Koa auto-destroy a
-// previous stream body, so no file descriptor leaks. Stream / non-buffer bodies
-// (uncommon for template renders) carry no Content-Length, matching the static
-// streaming-HEAD branch.
+// response: the status and headers produced by the render are preserved, and the
+// body is dropped while Content-Length keeps reporting exactly what the GET
+// response would have reported — including reporting nothing when GET would have
+// been chunked.
+//
+// The empty replacement body is NOT uniform, and the difference is load-bearing.
+// Koa's respond() fills a missing Content-Length in on HEAD from
+// ctx.response.length, which reads 0 off an empty Buffer but is undefined for a
+// Stream. So a Buffer is correct only where the length is knowable (string /
+// Buffer / JSON-serializable bodies); for a stream body it would publish
+// "Content-Length: 0" where GET sends the render's declared length or no length
+// at all. An already-ended stream is used there instead, which keeps the header
+// under this function's control.
+//
+// Either replacement makes Koa destroy the render's previous stream body, so no
+// file descriptor leaks.
+// Body shapes Koa 3 streams rather than sizes: a GET carries no Content-Length for
+// them unless something set one explicitly. Blob is deliberately absent — Koa's
+// body setter sizes it (`this.length = val.size`), so it arrives with the header
+// already set and the declared-length branch below claims it.
+//
+// The stream test mirrors Koa's own lib/is-stream.js DUCK TYPING rather than
+// testing `instanceof Stream`. That difference is not academic: Koa pipes anything
+// satisfying this shape, so an `instanceof` test would classify a stream-like that
+// does not inherit from Stream as a JSON body and size HEAD from
+// JSON.stringify() — publishing a length GET never sends. Keep this predicate in
+// step with Koa's if it ever widens.
+function isUnsizedBody(body) {
+    if (body instanceof Stream) return true;
+    if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) return true;
+    if (typeof Response !== 'undefined' && body instanceof Response) return true;
+    return (
+        body !== null &&
+        typeof body === 'object' &&
+        !!body.readable &&
+        typeof body.pipe === 'function' &&
+        typeof body.read === 'function' &&
+        typeof body.readable === 'boolean' &&
+        typeof body.readableObjectMode === 'boolean' &&
+        typeof body.destroy === 'function' &&
+        typeof body.destroyed === 'boolean'
+    );
+}
+
 function stripBodyForHead(ctx) {
     if (ctx.headerSent) return;       // render already flushed — status/headers are locked
     const body = ctx.body;
     if (body == null) return;         // render produced no body (redirect, pass-through, ...) — leave status as-is
-    const hasKnownLength = typeof body === 'string' || Buffer.isBuffer(body);
-    const length = hasKnownLength ? Buffer.byteLength(body) : null;
-    ctx.body = Buffer.alloc(0);
-    if (length !== null) {
-        ctx.set('Content-Length', String(length)); // body setter zeroed it — restore the real length
-    } else {
-        ctx.remove('Content-Length');               // unknown length — omit, like static streaming HEAD
+
+    // RFC 9112 §6.1: Content-Length must never accompany Transfer-Encoding. A render
+    // that set its own Transfer-Encoding owns the framing, and publishing a length
+    // beside it yields a response the client's HTTP parser rejects outright — the
+    // request fails entirely, which is worse than a wrong length. GET never reaches
+    // this state because Node drops Content-Length on the write path when
+    // Transfer-Encoding is present; HEAD writes no body, so nothing reconciles it
+    // for us. The empty stream keeps ctx.response.length undefined so Koa's respond()
+    // does not put the header back.
+    if (ctx.response.get('Transfer-Encoding') !== undefined) {
+        ctx.body = Readable.from([]);
+        ctx.remove('Content-Length');
+        return;
     }
+
+    // Read the declared length BEFORE touching the body: assigning over a stream
+    // makes Koa drop Content-Length, and this is the value GET would have sent.
+    // It covers more than a render's explicit ctx.length — Koa's own body setter
+    // sizes strings, Buffers and Blobs on assignment, so their length is already
+    // here. Compared against undefined, never truth-tested: a legitimate
+    // "Content-Length: 0" is falsy and must not be dropped.
+    const declared = ctx.response.get('Content-Length');
+
+    // The length GET would have carried, when it is knowable without generating
+    // the content.
+    let length = null;
+    if (declared !== undefined) {
+        length = declared;
+    } else if (typeof body === 'string' || Buffer.isBuffer(body)) {
+        // Defensive, and uncovered for that reason: Koa's body setter always sizes a
+        // string or Buffer on assignment, so the declared branch above claims them
+        // first. Kept so this function stays correct on its own terms rather than
+        // depending on that setter detail — the exact coupling that produced the bug
+        // this function exists to fix.
+        length = Buffer.byteLength(body);
+    } else if (!isUnsizedBody(body)) {
+        // Koa JSON-serializes anything else and sizes the response from that.
+        try {
+            length = Buffer.byteLength(JSON.stringify(body));
+        } catch {
+            // Unserializable body (circular reference, BigInt, ...). GET fails on it
+            // inside Koa's respond(); leaving it in place makes HEAD fail the same
+            // way instead of answering a cheerful 200 with no body. Mirroring the
+            // FAILURE is as much a part of §9.3.2 as mirroring the success.
+            return;
+        }
+    }
+
+    if (length !== null) {
+        ctx.body = Buffer.alloc(0);
+        ctx.set('Content-Length', String(length)); // body setter zeroed it — restore the real length
+        return;
+    }
+
+    // Unsized body: GET would have been chunked, so HEAD must send no
+    // Content-Length either. An empty Buffer cannot express that — Koa's
+    // respond() fills a missing Content-Length in on HEAD from
+    // ctx.response.length, which reads 0 off a Buffer but is undefined for a
+    // Node stream. Hence an already-ended stream, matching the static
+    // streaming-HEAD branch and the §9.3.2 derogation it relies on.
+    ctx.body = Readable.from([]);
 }
 
 // Attempts to render the requested file through the user's template engine.
@@ -778,7 +960,19 @@ module.exports = function koaClassicServer(
                             //   HEAD is in the default since 5.3.0. RFC 9110 §9.1 makes GET and
                             //   HEAD the minimum a general-purpose server MUST support, and
                             //   §9.3.2 requires HEAD to mirror GET: same status, same headers,
-                            //   no body. Entries are upper-cased, so ['get'] behaves as ['GET'].
+                            //   no body.
+                            //   Entries must be UPPERCASE — for every verb, not just GET/HEAD.
+                            //   Method tokens are case-sensitive (RFC 9110 §9) and ctx.method is
+                            //   always the raw uppercase token, so a lowercase entry matches
+                            //   nothing: ['get'] alone used to leave the middleware inert,
+                            //   answering 404 to everything. A lowercase entry is now upper-cased
+                            //   AND reported on the logger; an entry that is not a usable method
+                            //   token (non-string, or not RFC 9110 §5.6.2 tchar) is dropped and
+                            //   reported. A non-ARRAY value falls back to the default and is
+                            //   reported too — method: 'POST' asks for POST and would otherwise
+                            //   answer 404 to exactly the verb requested. All three are notices,
+                            //   not deprecations: they will keep being corrected, not promoted
+                            //   to a throw.
                             //   WARNING — setting method: ['GET'] explicitly REMOVES HEAD and
                             //   yields a server NON-CONFORMANT with RFC 9110 §9.1: a HEAD on a
                             //   file that GET serves with 200 answers 404, i.e. it asserts the
@@ -1040,10 +1234,8 @@ module.exports = function koaClassicServer(
 
     // HEAD ships in the default (5.3.0): see the opts STRUCTURE note above —
     // RFC 9110 §9.1 (MUST support GET and HEAD) and §9.3.2 (HEAD mirrors GET).
-    // Upper-cased because ctx.method is always the raw uppercase token: a
-    // lowercase entry would match nothing and silently disable the middleware.
-    options.method = (Array.isArray(options.method) ? options.method : ['GET', 'HEAD'])
-        .map(verb => String(verb).toUpperCase());
+    // normalizeMethods() upper-cases and prunes the list, warning about both.
+    options.method = normalizeMethods(options.method, _logger);
 
     // ── V3 breaking-change guards: helpful errors for V3-alpha-only renamed options ──
     // These were introduced in v3.0.0-alpha.0 only; no v2 user can have them in production.

@@ -95,7 +95,9 @@ integrità rilevato.
 
 ### Sesta passata (2026-08-22) — conformità HEAD (RFC 9110 §9.1 / §9.3.2)
 - [x] [10. Il default `method: ['GET']` rende il server non conforme: `HEAD` risponde 404 su OGNI path mentre `GET` risponde 200](#10-il-default-method-get-rende-il-server-non-conforme-head-risponde-404-su-ogni-path-mentre-get-risponde-200) — **RISOLTO in 5.3.0** (default `['GET', 'HEAD']`; normalizzazione maiuscola; matrice di parità HEAD/GET verificata per mutazione; documentazione riscritta)
-- [ ] [11. `method` era l'unica opzione a valori enumerati senza guardia: verificare che non ce ne siano altre](#11-method-era-lunica-opzione-a-valori-enumerati-senza-guardia-verificare-che-non-ce-ne-siano-altre) — **APERTO** (audit di normalizzazione/validazione sulle opzioni restanti)
+- [ ] [11. `method` era l'unica opzione a valori enumerati senza guardia: verificare che non ce ne siano altre](#11-method-era-lunica-opzione-a-valori-enumerati-senza-guardia-verificare-che-non-ce-ne-siano-altre) — **PARZIALE**: `method` chiuso in 5.3.0 (maiuscolo forzato + voci inutilizzabili scartate, entrambi segnalati); resta l'audit sulle opzioni a forma libera
+- [ ] [12. Con un `Transfer-Encoding` impostato da un middleware a monte, i rami statici emettono anche `Content-Length` (illegale, RFC 9112 §6.1)](#12-con-un-transfer-encoding-impostato-da-un-middleware-a-monte-i-rami-statici-emettono-anche-content-length-illegale-rfc-9112-61) — **APERTO** (preesistente e simmetrico GET/HEAD, quindi non una violazione di §9.3.2)
+- [ ] [13. `stripBodyForHead()` reimplementa il dimensionamento del body di Koa: valutare di eliminarla](#13-stripbodyforhead-reimplementa-il-dimensionamento-del-body-di-koa-valutare-di-eliminarla) — **APERTO** (rimuove alla radice una classe di difetti recidiva, ma reintroduce un costo: da misurare prima di procedere)
 
 ---
 
@@ -885,8 +887,82 @@ allo stesso chiamante.
      ha firma black-box. Limite dichiarato nel docblock del file: quell'ottimizzazione è
      protetta dai commenti al codice, non dai test.
 
-**Esito:** 70 suite / 1398 test verdi, lint pulito, coverage 98.48% stmts / 98.36% branch
-/ 99.01% funcs / 98.51% lines.
+**Revisione post-implementazione (stessa data).** Una revisione completa del diff ha
+prodotto due rilievi, entrambi verificati e corretti nello stesso PR:
+
+1. **`stripBodyForHead()` pubblicava un `Content-Length` che `GET` non inviava.** La
+   funzione sostituiva qualunque body di render con un `Buffer` vuoto; il `respond()`
+   di Koa, su HEAD, riempie un `Content-Length` mancante da `ctx.response.length`, che
+   su un buffer vuoto vale **0**. Risultato misurato: body stream senza lunghezza
+   dichiarata → `GET` chunked ma `HEAD: Content-Length: 0`; body stream con
+   `ctx.length = 3` → `GET: 3` ma **`HEAD: 0`**; body oggetto → `GET: 24` ma
+   `HEAD: 0`. Il caso intermedio è il dannoso: un client che dimensiona la risorsa con
+   `HEAD` leggeva 0 byte. §9.3.2 consente di **omettere** un header calcolabile solo
+   generando il contenuto, non di inviarne uno **diverso** da quello di `GET`.
+   Un quarto caso emerso completando la copertura: body **non serializzabile**
+   (circolare) → `GET: 500` ma `HEAD: 200` con corpo vuoto, cioè una divergenza di
+   **status**, non solo di header. Corretto lasciando il body al suo posto, così Koa
+   fallisce su `HEAD` esattamente dove fallisce su `GET`: rispecchiare il **fallimento**
+   fa parte di §9.3.2 quanto rispecchiare il successo.
+   Il bug è antecedente (arrivato con `stripBodyForHead()` in 3.0.1) ma richiedeva
+   `method: ['GET','HEAD']` per essere raggiunto: corretto qui perché è questa release
+   a renderlo raggiungibile di default. Corpo vuoto ora scelto per forma: `Buffer` dove
+   la lunghezza è conoscibile, stream già terminato dove non lo è (per uno stream
+   `ctx.response.length` è `undefined`, quindi l'header resta sotto controllo della
+   funzione). Nessuna crescita di descrittori su 200 HEAD con stream di file reali.
+2. **Le etichette di riga nella matrice erano sbagliate all'atto del merge.** Erano
+   state scritte sui numeri di riga PRE-modifica, e la stessa commit aveva aggiunto 24
+   righe sopra: una etichetta indicava un ramo diverso da quello che la sua riga
+   esercita. Sostituite con **àncore grep-abili**, più un test che verifica che ogni
+   àncora corrisponda esattamente una volta in `index.cjs` — così il marcire di un
+   puntatore diventa un fallimento di test invece di una bugia silenziosa.
+
+**Seconda revisione (stessa data), ambito allargato a tutto il payload della 5.3.0
+(`469cde9..HEAD`).** Ha trovato due difetti **nella correzione stessa del punto 1**,
+entrambi riprodotti e corretti:
+
+3. **Le forme di body non-Node-stream di Koa 3 finivano nel ramo JSON.** Koa 3
+   accetta anche `Blob`, `ReadableStream` (web) e `Response` (fetch); nessuna è
+   uno stream Node, quindi `JSON.stringify()` le riduceva a `"{}"` →
+   `Content-Length: 2`. Misurato: `Blob` da 32 byte → `GET: 32` ma `HEAD: 2`;
+   `ReadableStream` e `Response` → `GET` chunked ma `HEAD: 2`. Errore di metodo:
+   avevo enumerato le forme di body **a intuito** invece di rispecchiare la
+   classificazione del setter di Koa.
+4. **Un `Content-Length` dichiarato pari a 0 veniva scartato perché falsy.** Il
+   ramo stream faceva `if (declaredLength)`. Misurato: stream su file da 0 byte con
+   `ctx.length = 0` → `GET: Content-Length: 0` ma `HEAD` senza header.
+
+Correzione strutturale: la lunghezza viene ora presa dal `Content-Length` **già
+dichiarato dalla risposta** quando c'è, confrontato con `undefined` e mai
+truth-testato. Questo copre più dell'esplicito `ctx.length`: il setter di Koa
+dimensiona da solo stringhe, Buffer e `Blob` all'assegnazione. Solo in assenza di
+un header dichiarato conta la forma, e l'insieme "non dimensionabile" ora nomina
+tutte e tre le forme streaming di Koa. Otto righe di matrice coprono le otto forme,
+validate per mutazione con la specificità attesa.
+
+**Quarta passata (stessa data) — esame sistematico della copertura dei test.**
+Invece di elencare a memoria i casi mancanti, è stato costruito un differenziale
+GET/HEAD sul prodotto cartesiano configurazioni × richieste: **409 coppie
+confrontate, 28 divergenze, tutte riconducibili a due classi già documentate come
+benigne** (il 404 sintetico di Koa, che Koa non dimensiona mai su HEAD — riprodotto
+su Koa nudo; e l'omissione di `Transfer-Encoding` sui rami streaming, deroga
+§9.3.2). **Nessun difetto nuovo.**
+
+Il confronto fra i 9 rami HEAD di `index.cjs` e le righe della matrice ha però
+mostrato tre rami non pinnati: il 206 servito da `rawBuffer`, il non-compresso da
+`rawBuffer` (entrambi raggiungibili solo a cache `rawFile` **calda**, mentre la
+matrice usa istanze fredde per costruzione) e il fallback di compressione — che è
+però già coperto su HEAD da `compression-fallback-deep.test.js`. Aggiunte cinque
+righe con un meccanismo `warm` dedicato, più 304 via `If-Modified-Since`,
+`If-Range` non corrispondente e range suffisso.
+
+Lo sweep è stato reso permanente (`__tests__/head-parity-sweep.test.js`, ~450
+coppie in ~3 s) e **validato per mutazione**: sei build rotte di proposito, sei
+catturate. L'esercizio ha scoperto un buco reale nello sweep stesso — non aveva
+alcuna configurazione con template engine, quindi la mutazione del bug 3.0.1 lo
+lasciava completamente verde. Aggiunte due configurazioni template.
+
+**Esito:** 72 suite / 1439 test verdi, lint pulito, coverage sopra le soglie.
 
 ---
 
@@ -914,14 +990,152 @@ una guardia forte:
 | `compression.buffered/streaming` | fuori range | **throw** |
 | `method` (pre-5.3.0) | `['get']` | **silenzio, middleware spento** |
 
-**Da fare:** completare l'audit sulle opzioni non coperte da questa tabella — in
-particolare quelle a forma libera dove un valore malformato degrada in silenzio anziché
-fallire (`urlPrefix`, `urlsReserved` con voci senza slash iniziale, `index`,
-`template.ext` / `hideExtension.ext` rispetto al case) — e decidere se il progetto vuole
-una politica uniforme (throw) o caso per caso.
+**Parte `method`: CHIUSA in 5.3.0.** Decisione del manutentore (2026-08-23): la forma
+corretta è **tutta maiuscola per ogni verbo**, non solo `GET`/`HEAD`; il minuscolo va
+corretto **e segnalato**; la validazione copre anche le voci non utilizzabili.
+
+Implementato con un canale nuovo, `warnConfigNotice()`. Non si poteva riusare
+`warnConfigDeprecation()`: quel canale chiude da sé ogni messaggio con «WILL throw in a
+future major version» ed è destinato a diventare un throw nella 6.0.0. Qui l'intento
+dell'operatore è inequivocabile (`['get']` significa palesemente GET) e la correzione è
+meccanica, quindi si è scelto un **avviso permanente** senza promessa di throw.
+
+- valore non-array (`method: 'POST'`, `null`, `42`) → ricade sul default + notice. È la
+  forma più dannosa delle tre, perché **scarta un intento dichiarato** invece di storpiarlo:
+  `'POST'` chiede palesemente di servire POST, e il fallback silenzioso rispondeva 404
+  proprio al verbo richiesto. Emersa dalla revisione del commit, non dall'implementazione
+  iniziale — che aveva dichiarato chiusa la parte `method` lasciandolo aperto
+- voce minuscola o mista → upper-case + notice che elenca le correzioni
+- voce non utilizzabile (non stringa, oppure stringa fuori dal `token` di RFC 9110
+  §5.6.2, es. `'BAD METHOD'`, `''`, `'a,b'`) → **scartata** + notice; i primitivi sono
+  nominati per valore (`42`, non `number`)
+- verbo valido ma inusuale (`'PURGE'`) → **nessun avviso**: il middleware serve
+  qualunque verbo elencato, segnalarlo sarebbe rumore e contraddirebbe «l'operatore è
+  la fonte di verità»
+- dedupe once-per-process per messaggio distinto, come il resto
+
+Test: `__tests__/method-normalization.test.js` (11 casi), validati per mutazione — sei
+build rotte di proposito, sei catturate, inclusa quella che sostituisce il notice con una
+deprecation.
+
+**Resta da fare:** l'audit sulle opzioni **a forma libera** dove un valore malformato
+degrada in silenzio anziché fallire — `urlPrefix`, `urlsReserved` con voci senza slash
+iniziale, `index`, `template.ext` / `hideExtension.ext` rispetto al case — e la decisione
+se il progetto voglia una politica uniforme o caso per caso.
 
 **Priorità:** Bassa (nessun impatto noto sul comportamento servito; è robustezza di
 configurazione).
+
+---
+
+### 12. Con un `Transfer-Encoding` impostato da un middleware a monte, i rami statici emettono anche `Content-Length` (illegale, RFC 9112 §6.1)
+
+**Problema:** RFC 9112 §6.1 vieta di inviare `Content-Length` in un messaggio che porta
+`Transfer-Encoding`. Se un middleware a monte imposta `Transfer-Encoding: chunked` e poi
+delega al file server, i rami statici impostano comunque il proprio `Content-Length`.
+Misurato su socket grezzo:
+
+```
+file semplice   GET TE=chunked CL=11  <ILLEGALE>  | HEAD TE=chunked CL=11  <ILLEGALE>
+range 206       GET TE=chunked CL=100 <ILLEGALE>  | HEAD TE=chunked CL=100 <ILLEGALE>
+gzip buffered   GET TE=chunked CL=41  <ILLEGALE>  | HEAD TE=chunked CL=41  <ILLEGALE>
+listing         GET TE=chunked CL=-               | HEAD TE=chunked CL=-
+```
+
+Il parser HTTP del client rifiuta l'intera risposta (`HPE_INVALID_CONTENT_LENGTH`), quindi
+la richiesta fallisce del tutto, non degrada.
+
+**Perché NON è stato corretto nella 5.3.0:** è **simmetrico** — colpisce `GET` e `HEAD`
+identicamente — quindi non è una violazione di §9.3.2 e non rientra nell'oggetto di quella
+release. Ed è **preesistente**: non introdotto dal cambio di default. Il caso analogo sul
+percorso template *era* asimmetrico (`GET` legale perché Node scarta la lunghezza sul
+percorso di scrittura, `HEAD` illegale perché non scrive corpo e nulla riconcilia) ed è
+stato corretto lì, dove ricadeva nell'oggetto della release.
+
+**Da valutare:** se il file server debba rispettare un `Transfer-Encoding` deciso a monte
+rinunciando al proprio `Content-Length`, oppure se impostare `Transfer-Encoding` prima di
+un file server sia semplicemente un errore dell'operatore da documentare. Node gestisce da
+sé il transfer encoding, quindi il caso è raro.
+
+**Priorità:** Bassa (richiede un middleware a monte che faccia una cosa inusuale).
+
+---
+
+### 13. `stripBodyForHead()` reimplementa il dimensionamento del body di Koa: valutare di eliminarla
+
+**Problema strutturale.** La funzione deve sapere, per conto proprio, come Koa
+dimensiona **ogni** forma di body. È una conoscenza duplicata di una decisione che
+Koa prende altrove, e ogni divergenza fra le due implementazioni è un difetto.
+Non è un timore teorico: tre revisioni consecutive del PR della 5.3.0 hanno
+prodotto **sei difetti, tutti in questa sola funzione**, tutti con la stessa
+radice.
+
+| Passata | Difetto | Sintomo |
+|---|---|---|
+| 1ª | body stream sostituito da `Buffer` vuoto | `GET` chunked, `HEAD: Content-Length: 0` |
+| 1ª | body non serializzabile (circolare) | `GET: 500`, `HEAD: 200` — divergenza di **status** |
+| 2ª | `Blob` / `ReadableStream` / `Response` nel ramo JSON | `GET: 32`, `HEAD: 2` |
+| 2ª | `Content-Length` dichiarato pari a 0 truth-testato | `GET: 0`, `HEAD` senza header |
+| 3ª | `isStream()` di Koa è strutturale, non `instanceof` | `GET` chunked, `HEAD: Content-Length: 62` |
+| 3ª | `Content-Length` accanto a `Transfer-Encoding` | risposta illegale, il parser del client la rifiuta |
+
+La gravità è calante e la terza passata è stata guidata dal sorgente di Koa
+anziché dall'intuizione, quindi la copertura attuale è argomentabile. Ma la
+funzione resta il punto di contatto più fragile fra middleware e framework, e
+ogni nuova forma di body accettata da Koa è un difetto potenziale.
+
+**Proposta: non ricalcolare la lunghezza affatto.** Lasciare il body al suo posto
+e far dimensionare la risposta a Koa con la **propria** logica — che per
+costruzione non può divergere da `GET`.
+
+Il meccanismo, verificato a runtime su Koa 3.2.1 nudo:
+
+- `respond()` ha un ramo `HEAD` che fa `return res.end()` **prima** della logica
+  di dimensionamento: è per questo che oggi la lunghezza non viene mai calcolata
+  e qualcuno deve farlo al posto suo.
+- `res._hasBody` è deciso da Node al parsing della richiesta, **prima** che
+  qualsiasi middleware giri, e non cambia se `ctx.method` viene riscritto dopo.
+- Quindi, lasciando `ctx.method === 'GET'` fino a `respond()`, Koa prende il ramo
+  `GET` e dimensiona da sé, mentre Node continua a non inviare corpo.
+
+Misurato (Koa nudo, middleware che imposta `ctx.method = 'GET'` e un body da 10 byte):
+
+```
+GET   -> Content-Length: 10   byte di corpo ricevuti: 10
+HEAD  -> Content-Length: 10   byte di corpo ricevuti: 0
+```
+
+`stripBodyForHead()` sparirebbe, e con lei l'intera classe di difetti della tabella
+sopra.
+
+**La tensione, che è reale.** Con `respond()` sul ramo `GET`, gli stream vengono
+**effettivamente pipati**: Node scarta i byte, ma la sorgente viene letta. È
+esattamente il lavoro che gli short-circuit HEAD odierni esistono per evitare —
+sul ramo streaming della compressione, sul ramo sopra `compression.maxFileSize`, e
+sui rami statici che oggi non aprono nemmeno il file. Non è un guadagno gratuito:
+si rimuove una classe di difetti e si reintroduce una classe di costo.
+
+**Mitigazione suggerita:** applicarlo **solo al percorso template**, dove
+`stripBodyForHead()` vive e dove sono nati tutti e sei i difetti, lasciando
+intatti gli short-circuit espliciti dei rami statici e di compressione. Sul
+percorso template il render viene comunque eseguito per intero anche su `HEAD`
+(è il mascheramento di `ctx.method` della 3.0.1), quindi il body è già prodotto e
+pipare il risultato costa relativamente poco.
+
+**Da verificare prima di procedere:**
+
+1. Che lasciare `ctx.method === 'GET'` non rompa nulla a valle. Il setter di Koa
+   scrive su `req.method`, quindi la modifica è **visibile all'esterno**: logger,
+   gestori d'errore e middleware a valle vedrebbero `GET` su una richiesta `HEAD`.
+   È il rischio principale della proposta.
+2. Quanto costa davvero pipare-e-scartare un render che produce uno stream grande.
+3. Che la gestione degli errori di `respond()` si comporti allo stesso modo.
+4. Che le **dieci righe** di `__tests__/head-parity-matrix.test.js` restino verdi:
+   la matrice è precisamente lo strumento per validare lo scambio, ed è il motivo
+   per cui questa proposta è affrontabile con una rete sotto.
+
+**Priorità:** Media. Nessun difetto aperto oggi, ma la recidiva è documentata e la
+proposta la elimina alla radice invece di aggiungere righe di matrice a ogni giro.
 
 ---
 

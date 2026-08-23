@@ -96,6 +96,7 @@ integrità rilevato.
 ### Sesta passata (2026-08-22) — conformità HEAD (RFC 9110 §9.1 / §9.3.2)
 - [x] [10. Il default `method: ['GET']` rende il server non conforme: `HEAD` risponde 404 su OGNI path mentre `GET` risponde 200](#10-il-default-method-get-rende-il-server-non-conforme-head-risponde-404-su-ogni-path-mentre-get-risponde-200) — **RISOLTO in 5.3.0** (default `['GET', 'HEAD']`; normalizzazione maiuscola; matrice di parità HEAD/GET verificata per mutazione; documentazione riscritta)
 - [ ] [11. `method` era l'unica opzione a valori enumerati senza guardia: verificare che non ce ne siano altre](#11-method-era-lunica-opzione-a-valori-enumerati-senza-guardia-verificare-che-non-ce-ne-siano-altre) — **APERTO** (audit di normalizzazione/validazione sulle opzioni restanti)
+- [ ] [12. Con un `Transfer-Encoding` impostato da un middleware a monte, i rami statici emettono anche `Content-Length` (illegale, RFC 9112 §6.1)](#12-con-un-transfer-encoding-impostato-da-un-middleware-a-monte-i-rami-statici-emettono-anche-content-length-illegale-rfc-9112-61) — **APERTO** (preesistente e simmetrico GET/HEAD, quindi non una violazione di §9.3.2)
 
 ---
 
@@ -974,6 +975,39 @@ una politica uniforme (throw) o caso per caso.
 
 **Priorità:** Bassa (nessun impatto noto sul comportamento servito; è robustezza di
 configurazione).
+
+---
+
+### 12. Con un `Transfer-Encoding` impostato da un middleware a monte, i rami statici emettono anche `Content-Length` (illegale, RFC 9112 §6.1)
+
+**Problema:** RFC 9112 §6.1 vieta di inviare `Content-Length` in un messaggio che porta
+`Transfer-Encoding`. Se un middleware a monte imposta `Transfer-Encoding: chunked` e poi
+delega al file server, i rami statici impostano comunque il proprio `Content-Length`.
+Misurato su socket grezzo:
+
+```
+file semplice   GET TE=chunked CL=11  <ILLEGALE>  | HEAD TE=chunked CL=11  <ILLEGALE>
+range 206       GET TE=chunked CL=100 <ILLEGALE>  | HEAD TE=chunked CL=100 <ILLEGALE>
+gzip buffered   GET TE=chunked CL=41  <ILLEGALE>  | HEAD TE=chunked CL=41  <ILLEGALE>
+listing         GET TE=chunked CL=-               | HEAD TE=chunked CL=-
+```
+
+Il parser HTTP del client rifiuta l'intera risposta (`HPE_INVALID_CONTENT_LENGTH`), quindi
+la richiesta fallisce del tutto, non degrada.
+
+**Perché NON è stato corretto nella 5.3.0:** è **simmetrico** — colpisce `GET` e `HEAD`
+identicamente — quindi non è una violazione di §9.3.2 e non rientra nell'oggetto di quella
+release. Ed è **preesistente**: non introdotto dal cambio di default. Il caso analogo sul
+percorso template *era* asimmetrico (`GET` legale perché Node scarta la lunghezza sul
+percorso di scrittura, `HEAD` illegale perché non scrive corpo e nulla riconcilia) ed è
+stato corretto lì, dove ricadeva nell'oggetto della release.
+
+**Da valutare:** se il file server debba rispettare un `Transfer-Encoding` deciso a monte
+rinunciando al proprio `Content-Length`, oppure se impostare `Transfer-Encoding` prima di
+un file server sia semplicemente un errore dell'operatore da documentare. Node gestisce da
+sé il transfer encoding, quindi il caso è raro.
+
+**Priorità:** Bassa (richiede un middleware a monte che faccia una cosa inusuale).
 
 ---
 

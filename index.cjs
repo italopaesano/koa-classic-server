@@ -301,22 +301,52 @@ async function sendTemplateError(ctx, status, builtinHtml, logMsg, err, logger, 
 //
 // Either replacement makes Koa destroy the render's previous stream body, so no
 // file descriptor leaks.
-// Body shapes Koa 3 streams rather than sizes: a GET carries no Content-Length
-// for them unless something set one explicitly. Node streams, web ReadableStreams
-// and fetch Responses all land here. Blob is deliberately absent — Koa's body
-// setter sizes it (`this.length = val.size`), so it arrives with the header
-// already set and is handled by the declared-length branch below.
+// Body shapes Koa 3 streams rather than sizes: a GET carries no Content-Length for
+// them unless something set one explicitly. Blob is deliberately absent — Koa's
+// body setter sizes it (`this.length = val.size`), so it arrives with the header
+// already set and the declared-length branch below claims it.
+//
+// The stream test mirrors Koa's own lib/is-stream.js DUCK TYPING rather than
+// testing `instanceof Stream`. That difference is not academic: Koa pipes anything
+// satisfying this shape, so an `instanceof` test would classify a stream-like that
+// does not inherit from Stream as a JSON body and size HEAD from
+// JSON.stringify() — publishing a length GET never sends. Keep this predicate in
+// step with Koa's if it ever widens.
 function isUnsizedBody(body) {
     if (body instanceof Stream) return true;
     if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) return true;
     if (typeof Response !== 'undefined' && body instanceof Response) return true;
-    return false;
+    return (
+        body !== null &&
+        typeof body === 'object' &&
+        !!body.readable &&
+        typeof body.pipe === 'function' &&
+        typeof body.read === 'function' &&
+        typeof body.readable === 'boolean' &&
+        typeof body.readableObjectMode === 'boolean' &&
+        typeof body.destroy === 'function' &&
+        typeof body.destroyed === 'boolean'
+    );
 }
 
 function stripBodyForHead(ctx) {
     if (ctx.headerSent) return;       // render already flushed — status/headers are locked
     const body = ctx.body;
     if (body == null) return;         // render produced no body (redirect, pass-through, ...) — leave status as-is
+
+    // RFC 9112 §6.1: Content-Length must never accompany Transfer-Encoding. A render
+    // that set its own Transfer-Encoding owns the framing, and publishing a length
+    // beside it yields a response the client's HTTP parser rejects outright — the
+    // request fails entirely, which is worse than a wrong length. GET never reaches
+    // this state because Node drops Content-Length on the write path when
+    // Transfer-Encoding is present; HEAD writes no body, so nothing reconciles it
+    // for us. The empty stream keeps ctx.response.length undefined so Koa's respond()
+    // does not put the header back.
+    if (ctx.response.get('Transfer-Encoding') !== undefined) {
+        ctx.body = Readable.from([]);
+        ctx.remove('Content-Length');
+        return;
+    }
 
     // Read the declared length BEFORE touching the body: assigning over a stream
     // makes Koa drop Content-Length, and this is the value GET would have sent.

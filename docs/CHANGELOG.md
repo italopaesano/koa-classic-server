@@ -92,6 +92,8 @@ shape whose size is not a string/Buffer byte length reported the wrong number:
 | web `ReadableStream` | no `Content-Length` | `Content-Length: 2` | no `Content-Length` |
 | fetch `Response` | no `Content-Length` | `Content-Length: 2` | no `Content-Length` |
 | stream + `ctx.length = 0` | `Content-Length: 0` | no `Content-Length` | `Content-Length: 0` |
+| duck-typed stream | no `Content-Length` | `Content-Length: 62` | no `Content-Length` |
+| body + `Transfer-Encoding` | `TE` only | `TE` **and** `Content-Length` — response unparseable | `TE` only |
 
 The middle row is the damaging one: a client sizing a resource with `HEAD` was
 told **0 bytes** for a resource `GET` serves as 3. RFC 9110 §9.3.2 permits
@@ -110,6 +112,16 @@ bodies, and none of them is a Node stream, so they fell into the JSON branch. Th
 last row is the mirror-image mistake — a declared length of exactly `0` is
 falsy, and truth-testing it dropped a header `GET` sends.
 
+Two of those rows come from Koa's own classification rather than from guessing at
+it. Koa's `isStream()` is **structural**, not `instanceof` — it pipes anything with
+the right shape — so a stream-like that does not inherit from `Stream` was being
+sized from `JSON.stringify()`. And a render that declares its own
+`Transfer-Encoding` must not receive a `Content-Length` beside it (RFC 9112 §6.1):
+that combination is rejected outright by the client's HTTP parser, so the request
+fails entirely rather than merely reporting a wrong size. `GET` never hit it
+because Node drops the length on the write path; `HEAD` writes no body, so nothing
+reconciled it.
+
 The length is now taken from the `Content-Length` the response already declares
 whenever there is one, compared against `undefined` rather than truth-tested.
 That covers more than an explicit `ctx.length`: Koa's own body setter sizes
@@ -126,8 +138,8 @@ makes Koa destroy the render's stream, verified with no descriptor growth over
 
 The bug predates this release (it shipped with `stripBodyForHead()` in 3.0.1) but
 required `method: ['GET', 'HEAD']` to reach, so it is fixed here rather than
-left for operators who are about to get `HEAD` by default. Eight matrix rows pin
-the eight body shapes.
+left for operators who are about to get `HEAD` by default. Ten matrix rows pin the
+ten body shapes.
 
 > #### Cost note
 >

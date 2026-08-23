@@ -49,6 +49,13 @@
  *     ctx.response.length, so replacing a STREAM body with an empty Buffer
  *     reports 0 where GET reports the render's declared length, or nothing at
  *     all. The three body-shape rows (stream, sized stream, object) pin it.
+ *   CAUGHT — a body shape being mis-classified as sizable. Koa 3 accepts Blob,
+ *     web ReadableStream, fetch Response and DUCK-TYPED streams (its isStream()
+ *     is structural, not instanceof), and sizing any of them from
+ *     JSON.stringify() publishes a length GET never sends.
+ *   CAUGHT — Content-Length emitted beside a Transfer-Encoding the render
+ *     declared. That combination is illegal (RFC 9112 §6.1) and the client's
+ *     parser rejects the whole response, so the request fails outright.
  *   NOT CAUGHT — the streaming branches losing their INTERNAL short-circuit,
  *     i.e. running the compression on HEAD and discarding it. That mutation
  *     leaves a byte-identical response: Node strips a HEAD body at the transport
@@ -56,6 +63,19 @@
  *     wasted CPU has no black-box signature. That optimization is guarded by the
  *     code comments at those branches, NOT by this file — a reviewer removing it
  *     will not be stopped here.
+ *
+ * TWO KNOWN LIMITS, both outside this middleware and both deliberately unpinned:
+ *
+ *   - A render that sets NO body at all leaves Koa's own generated status-message
+ *     body ("Not Found"). Koa does not synthesize that body on HEAD, so it cannot
+ *     size it: GET carries Content-Length/Content-Type, HEAD carries neither.
+ *     Reproduced on bare Koa with no middleware at all. The STATUS still mirrors,
+ *     which is what §9.3.2 makes non-negotiable, and stripBodyForHead() never runs
+ *     (it returns early on a null body).
+ *   - If an UPSTREAM middleware sets Transfer-Encoding, the static-file branches
+ *     emit Content-Length beside it — on GET and HEAD alike. Symmetric, so not a
+ *     parity defect, but illegal per RFC 9112 §6.1 and pre-existing. Tracked as
+ *     docs/revisione_codice_v5.0.md #12 rather than fixed here.
  *
  * COLD CACHE PER REQUEST
  *
@@ -70,6 +90,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { Readable } = require('stream');
 const Koa = require('koa');
 const supertest = require('supertest');
 const koaClassicServer = require('../index.cjs');
@@ -154,6 +175,34 @@ const emptySizedStreamRender = async (ctx, next, filePath) => {
     ctx.type = 'text/plain';
     ctx.body = fs.createReadStream(filePath);
     ctx.length = 0;                                    // a legitimate, falsy, zero length
+};
+// Koa's isStream() is DUCK TYPED, so it pipes anything with this shape even when
+// it does not inherit from Stream. An instanceof test would size such a body from
+// JSON.stringify() and publish a length GET never sends.
+const duckStreamRender = async (ctx) => {
+    if (ctx.method !== 'GET') return;
+    const inner = Readable.from(['hello']);
+    ctx.body = {
+        readable: true,
+        readableObjectMode: false,
+        destroyed: false,
+        read: (...a) => inner.read(...a),
+        pipe: (...a) => inner.pipe(...a),
+        destroy: (...a) => inner.destroy(...a),
+        on: (...a) => { inner.on(...a); },
+        once: (...a) => { inner.once(...a); },
+        emit: (...a) => inner.emit(...a),
+        removeListener: (...a) => inner.removeListener(...a),
+    };
+};
+// RFC 9112 §6.1 — Content-Length must never accompany Transfer-Encoding. GET stays
+// legal because Node drops the length on the write path; HEAD writes no body, so
+// without an explicit guard it emits both and the client's parser rejects the whole
+// response.
+const chunkedRender = async (ctx) => {
+    if (ctx.method !== 'GET') return;
+    ctx.set('Transfer-Encoding', 'chunked');
+    ctx.body = 'abc';
 };
 const circularRender = async (ctx) => {
     if (ctx.method !== 'GET') return;
@@ -266,6 +315,18 @@ const ROWS = [
         opts: { template: { ext: ['.tpl'], render: emptySizedStreamRender } },
         path: '/empty.tpl', headers: { 'Accept-Encoding': 'identity' },
         status: 200, contentLength: 'mirrors',
+    },
+    {
+        branch: 'stripBodyForHead() — render body is a DUCK-TYPED stream (not instanceof Stream)',
+        opts: { template: { ext: ['.tpl'], render: duckStreamRender } },
+        path: '/page.tpl', headers: { 'Accept-Encoding': 'identity' },
+        status: 200, contentLength: 'absent',
+    },
+    {
+        branch: 'stripBodyForHead() — render declared Transfer-Encoding (RFC 9112 §6.1: no Content-Length beside it)',
+        opts: { template: { ext: ['.tpl'], render: chunkedRender } },
+        path: '/page.tpl', headers: { 'Accept-Encoding': 'identity' },
+        status: 200, contentLength: 'absent',
     },
     {
         branch: 'dirListing.trailingSlash — directory without slash → 301',

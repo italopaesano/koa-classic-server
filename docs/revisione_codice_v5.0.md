@@ -940,7 +940,29 @@ un header dichiarato conta la forma, e l'insieme "non dimensionabile" ora nomina
 tutte e tre le forme streaming di Koa. Otto righe di matrice coprono le otto forme,
 validate per mutazione con la specificità attesa.
 
-**Esito:** 71 suite / 1417 test verdi, lint pulito, coverage sopra le soglie.
+**Quarta passata (stessa data) — esame sistematico della copertura dei test.**
+Invece di elencare a memoria i casi mancanti, è stato costruito un differenziale
+GET/HEAD sul prodotto cartesiano configurazioni × richieste: **409 coppie
+confrontate, 28 divergenze, tutte riconducibili a due classi già documentate come
+benigne** (il 404 sintetico di Koa, che Koa non dimensiona mai su HEAD — riprodotto
+su Koa nudo; e l'omissione di `Transfer-Encoding` sui rami streaming, deroga
+§9.3.2). **Nessun difetto nuovo.**
+
+Il confronto fra i 9 rami HEAD di `index.cjs` e le righe della matrice ha però
+mostrato tre rami non pinnati: il 206 servito da `rawBuffer`, il non-compresso da
+`rawBuffer` (entrambi raggiungibili solo a cache `rawFile` **calda**, mentre la
+matrice usa istanze fredde per costruzione) e il fallback di compressione — che è
+però già coperto su HEAD da `compression-fallback-deep.test.js`. Aggiunte cinque
+righe con un meccanismo `warm` dedicato, più 304 via `If-Modified-Since`,
+`If-Range` non corrispondente e range suffisso.
+
+Lo sweep è stato reso permanente (`__tests__/head-parity-sweep.test.js`, ~450
+coppie in ~3 s) e **validato per mutazione**: sei build rotte di proposito, sei
+catturate. L'esercizio ha scoperto un buco reale nello sweep stesso — non aveva
+alcuna configurazione con template engine, quindi la mutazione del bug 3.0.1 lo
+lasciava completamente verde. Aggiunte due configurazioni template.
+
+**Esito:** 72 suite / 1439 test verdi, lint pulito, coverage sopra le soglie.
 
 ---
 

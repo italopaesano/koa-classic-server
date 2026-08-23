@@ -211,6 +211,30 @@ const circularRender = async (ctx) => {
     ctx.body = o;                                      // GET fails inside Koa's respond() → 500
 };
 
+// Some branches only run on a cache HIT, so their rows cannot use the cold
+// fresh-instance rule: a row marked `warm` shares ONE instance and primes it with
+// a GET first. Safe for the rawFile cache, whose contents are a pure function of
+// the file; deliberately NOT used for the compressed cache, where the cold/warm
+// distinction is the thing under test (see "COLD CACHE PER REQUEST").
+async function warmPair(opts, reqPath, headers) {
+    const app = new Koa();
+    app.on('error', () => {});
+    app.use(koaClassicServer(ROOT, opts));
+    const server = app.listen();
+    const send = (method) => {
+        let req = supertest(server)[method](reqPath).redirects(0);
+        for (const [k, v] of Object.entries(headers || {})) req = req.set(k, v);
+        return req;
+    };
+    try {
+        await send('get');                       // prime the cache
+        return { get: await send('get'), head: await send('head') };
+    } finally {
+        server.close();
+    }
+}
+
+const RAW_CACHE = { serverCache: { rawFile: { enabled: true } } };
 const CACHE_OFF = { serverCache: { compressedFile: { enabled: false } } };
 const CAP_LOW = { compression: { maxFileSize: 8192 } };
 const TEMPLATE = { template: { ext: ['.tpl'], render: methodAwareRender } };
@@ -240,8 +264,37 @@ const ROWS = [
         opts: ETAGS, path: '/plain.txt', headers: { 'Accept-Encoding': 'identity' },
         // If-None-Match is filled in from a priming GET (the ETag is a property
         // of the file, so any instance yields the same validator).
-        etagConditional: true,
+        conditional: 'etag',
         status: 304, contentLength: 'mirrors',
+    },
+    {
+        branch: 'conditional request → 304 via If-Modified-Since (date validator)',
+        opts: ETAGS, path: '/plain.txt', headers: { 'Accept-Encoding': 'identity' },
+        conditional: 'last-modified',
+        status: 304, contentLength: 'mirrors',
+    },
+    {
+        // If-Range that does NOT match must degrade to the full 200, not a 206.
+        branch: 'If-Range mismatch → full 200 instead of 206',
+        opts: ETAGS, path: '/big.txt',
+        headers: { 'Accept-Encoding': 'identity', Range: 'bytes=0-99', 'If-Range': '"stale-validator"' },
+        status: 200, contentLength: 'mirrors',
+    },
+    {
+        branch: 'suffix Range (bytes=-50) → 206',
+        opts: {}, path: '/big.txt', headers: { 'Accept-Encoding': 'identity', Range: 'bytes=-50' },
+        status: 206, contentLength: 'mirrors',
+    },
+    {
+        branch: 'uncompressed served from the rawFile CACHE — index.cjs grep: "Serve directly from in-memory buffer"',
+        opts: RAW_CACHE, warm: true, path: '/plain.txt', headers: { 'Accept-Encoding': 'identity' },
+        status: 200, contentLength: 'mirrors',
+    },
+    {
+        branch: '206 Range sliced from the rawFile CACHE — index.cjs grep: "Serve range slice from in-memory buffer"',
+        opts: RAW_CACHE, warm: true, path: '/big.txt',
+        headers: { 'Accept-Encoding': 'identity', Range: 'bytes=0-99' },
+        status: 206, contentLength: 'mirrors',
     },
     {
         branch: 'compressed BUFFERED (cache on): real Content-Length, compression runs on HEAD — index.cjs grep: "set correct Content-Length; body assignment"',
@@ -354,14 +407,23 @@ describe('HEAD mirrors GET on every response branch (RFC 9110 §9.3.2)', () => {
     test.each(ROWS.map(r => [r.branch, r]))('%s', async (_label, row) => {
         let headers = row.headers;
 
-        if (row.etagConditional) {
+        if (row.conditional) {
             const priming = await once(row.opts, 'get', row.path, row.headers);
-            expect(priming.headers.etag).toBeTruthy();
-            headers = { ...row.headers, 'If-None-Match': priming.headers.etag };
+            if (row.conditional === 'etag') {
+                expect(priming.headers.etag).toBeTruthy();
+                headers = { ...row.headers, 'If-None-Match': priming.headers.etag };
+            } else {
+                expect(priming.headers['last-modified']).toBeTruthy();
+                headers = { ...row.headers, 'If-Modified-Since': priming.headers['last-modified'] };
+            }
         }
 
-        const get = await once(row.opts, 'get', row.path, headers);
-        const head = await once(row.opts, 'head', row.path, headers);
+        const { get, head } = row.warm
+            ? await warmPair(row.opts, row.path, headers)
+            : {
+                get: await once(row.opts, 'get', row.path, headers),
+                head: await once(row.opts, 'head', row.path, headers),
+            };
 
         // 1. The core §9.3.2 requirement: the statuses cannot diverge.
         expect(get.status).toBe(row.status);

@@ -141,6 +141,38 @@ required `method: ['GET', 'HEAD']` to reach, so it is fixed here rather than
 left for operators who are about to get `HEAD` by default. Ten matrix rows pin the
 ten body shapes.
 
+### ✅ Tests — HEAD/GET parity sweep, and the gaps it closed
+
+The matrix is hand-written, so it only covers branches somebody thought to list.
+`__tests__/head-parity-sweep.test.js` is the other half: a cross-product of 15
+configurations × 28 requests (with conditional variants derived from priming
+requests), asserting parity on every combination without deciding in advance which
+combinations matter. Roughly 450 GET/HEAD pairs in ~3 s.
+
+It found **no** defects when written — after three review passes that each found
+several — which is the result worth recording: it converts "we reviewed the
+branches we could think of" into "we compared every combination in the grid".
+
+Only two divergences are exempted, each naming the exact header it forgives and
+the condition under which it applies:
+
+- Koa's own fall-through 404, which Koa never sizes for HEAD. Reproduced on bare
+  Koa with no middleware at all; detected here by the absence of the CSP header
+  every generated page of this middleware carries.
+- `Transfer-Encoding` on the streaming-compression branches: GET is chunked, HEAD
+  has no body and therefore no framing to describe — the §9.3.2 derogation.
+
+Both files were validated by mutation. Six deliberately broken builds (the 3.0.1
+bug, the 4.0.0 bug, the default reverting to `['GET']`, and three dropped
+`Content-Length` restores) are each caught. That exercise exposed a real gap: the
+sweep had no template-engine configuration, so the 3.0.1 mutation left it entirely
+green. Two template configurations were added and it now fails as it should.
+
+Five rows were also added to the matrix for branches it did not reach: the
+`rawFile` cache hit paths for both a plain 200 and a 206 slice — which need a warm
+instance, since those branches only run on a cache hit — plus a 304 via
+`If-Modified-Since`, an `If-Range` mismatch degrading to 200, and a suffix range.
+
 > #### Cost note
 >
 > With `serverCache.compressedFile.enabled` on (the default), a cold `HEAD` on a

@@ -62,6 +62,30 @@ hidden: {
 }
 ```
 
+> **Check the shape, not just the intent (5.3.1).** `hidden` is the one
+> namespace where a wrong shape fails **open**: the value is discarded, the
+> defaults apply, and the file you meant to hide stays **served** — with
+> nothing to reveal it until someone requests that file. Since **5.3.1** every
+> discarded value is reported on the logger, and a future major (target 6.0.0)
+> will throw instead. If you are on an earlier version, or you suppress
+> warnings, verify these near-misses by hand:
+>
+> ```js
+> hidden: 'yes'                             // ❌ not an object      → nothing is hidden
+> hidden: { dotFiles: 'hidden' }            // ❌ meant { default: 'hidden' }
+> hidden: { dotFiles: { blacklist: '.env' } } // ❌ meant ['.env']
+> hidden: { alwaysHide: '*.key' }           // ❌ meant ['*.key']
+> hidden: { alwaysHide: [123] }             // ❌ entry is not a glob or RegExp
+> ```
+>
+> The **value** of `dotFiles/dotDirs.default` has always been guarded — anything
+> but `'hidden'` / `'visible'` throws at startup. It was only the shape of the
+> container around it that went unchecked.
+>
+> Either way, do not take the config's word for it: assert the outcome
+> (`curl -s -o /dev/null -w '%{http_code}' https://host/.env` → `404`). That
+> check costs nothing and catches a typo the config alone cannot.
+
 ### 3.2 Symlinks — recommended internal standard: `follow-within-root`
 
 **Risk:** a symlink inside `rootDir` pointing **outside** it is served → arbitrary file read

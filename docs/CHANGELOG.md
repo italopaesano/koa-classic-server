@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.1] - 2026-09-01
+
+### 🔒 Fixed — a malformed `hidden` configuration failed OPEN, in silence
+
+Every branch of `normalizeHiddenConfig` that discards what the operator wrote
+now reports it. The **served behaviour is unchanged** — `hidden` is a v2-stable
+option and changing what it serves on a patch release would be the breaking
+change this warning exists to avoid — and each message announces that a future
+major (target **6.0.0**) will **throw** instead of warning.
+
+`hidden` is the one namespace where a wrong shape fails **open**. A listing that
+wrongly appears is visible on the first request; a file that was supposed to be
+hidden and is not stays invisible until someone asks for it. So the warning *is*
+the detection. The near-misses that used to pass in silence:
+
+```js
+hidden: 'yes'                               // not an object → nothing is hidden at all
+hidden: { dotFiles: 'hidden' }              // meant { default: 'hidden' } → .env still SERVED
+hidden: { dotFiles: { blacklist: '.env' } } // meant ['.env']              → .env still SERVED
+hidden: { alwaysHide: '*.key' }             // meant ['*.key']             → *.key still SERVED
+hidden: { alwaysHide: [123] }               // entry is not a glob/RegExp  → dropped
+```
+
+Each now emits, once per process per distinct message:
+
+```
+[koa-classic-server] DEPRECATION: hidden.dotFiles must be an object like
+  { default: "hidden", whitelist: [], blacklist: [] }; got string ("hidden" —
+  did you mean { default: "hidden" }?) — it is IGNORED, so hidden.dotFiles.default
+  stays "visible" and those entries remain SERVED.
+  This is tolerated for now and WILL throw in a future major version.
+```
+
+Note the asymmetry this closes: the **value** of `dotFiles/dotDirs.default` has
+always thrown on anything but `'hidden'` / `'visible'`. It was only the shape of
+the **container** around it that went unchecked.
+
+This resolves register entry **#14** (`docs/revisione_codice_v5.0.md`). The two
+sibling findings from the same audit stay open by design — **#15**
+(`compression.mimeTypes`) and **#16** (the two opposite boolean conventions)
+cost bandwidth and surprise, but neither fails open.
+
+`docs/SECURITY_HARDENING.md` §3.1 now lists the near-misses, and recommends
+asserting the outcome (`curl … /.env` → `404`) rather than trusting the config.
+
+### ✅ Fixed — `symlink-cycles` baked in an assumption about the OS symlink budget
+
+The macOS jobs of the CI matrix went red while ubuntu and windows stayed green.
+The test walked a self-referencing directory symlink 20 times, but symlink
+resolution per lookup is bounded by the **OS**, not the middleware — Linux
+`MAXSYMLINKS` is 40, Darwin/BSD is 32 — and the fixture spent that budget twice
+as fast as intended: `os.tmpdir()` on macOS is `/var/folders/…` where `/var` is
+itself a symlink, and the fixture's link stored an *absolute* target, so every
+hop made the kernel re-resolve the whole prefix. Measured by rebuilding the
+fixture under a symlinked parent on Linux: the budget drops from 40 hops to 19.
+The test asked for 20.
+
+Fixed at the level of the assumption rather than the number: the fixture root
+goes through `fs.realpathSync()`, the self-link target is now relative (one
+budget unit per hop on every platform), the depth is a named constant chosen
+against the *smallest* budget any supported platform offers — and the platform
+difference became an asserted contract: a new test walks past every platform's
+budget and pins that the kernel's `ELOOP` surfaces as a clean **404**, never a
+hang and never a 500.
+
+### Tests
+
+`__tests__/hidden-shape-warnings.test.js` (33 tests) pins the message contract:
+the option path, the shape that arrived, the "stays SERVED" consequence, the
+6.0.0 announcement, the once-per-process dedup — and, for every shape, that
+what the middleware *serves* did not move. `__tests__/option-shape-audit.test.js`
+flipped its four `hidden` assertions from "nothing is reported" to the warning,
+which is exactly the job that inventory was written to do.
+
+Suite: 81 files / 1667 tests.
+
+
 ### ✅ Tests — seven untested configuration surfaces
 
 Behavioural-coverage pass (register *Settima passata*, 2026-09-01). Statement

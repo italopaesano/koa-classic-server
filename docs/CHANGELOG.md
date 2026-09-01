@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✅ Tests — seven untested configuration surfaces
+
+Behavioural-coverage pass (register *Settima passata*, 2026-09-01). Statement
+coverage on `index.cjs` was already 98.4% / 98.25% branch, so the remaining gaps
+were not unreached lines but **combinations** of configuration and request shape
+that no suite instantiated. 175 new tests across 7 files; `npm run test:ci` goes
+72 suites / 1446 tests → 79 / 1621 (80 / 1631 with the full suite), all green,
+coverage unchanged (as expected — combinations, not new code).
+
+| New suite | Surface it closes |
+|---|---|
+| `urlprefix-multisegment.test.js` | **multi-segment `urlPrefix`** (`/a/b`) — every prior test used a single segment, so the segment-matching loop only ever ran its degenerate one-iteration case. Routing, listing links, parent link, canonical redirect, `hideExtension` redirect and `urlsReserved` under a two-segment mount, plus the bypass surface (partial segment, case, `%2F`, leading `//`, dot-segment) |
+| `listing-pagination-params.test.js` | `?page` coercion (float, exponent, negative, repeated, non-numeric), silent clamping, `maxEntries × entriesPerPage`, and the encoding that keeps a hostile `?sort` inert in the paginator hrefs |
+| `server-cache-staleness.test.js` | the cases where the `mtime`+`size` validator disagrees with the bytes on disk: an atomic same-size rewrite, an `mtime` moving backwards, a file made unreadable after caching |
+| `option-shape-audit.test.js` | the free-form option audit of register **#11**, made executable |
+| `hideextension-name-shapes.test.js` | names the suffix rule was not written for: a **directory** ending with the hidden suffix, a compound suffix, a file whose whole name *is* the suffix, non-ASCII and spaced names |
+| `symlink-cycles.test.js` | cycles and self-references across all three `symlinks` modes (the existing circular-symlink test was one request, one mode, satisfied by any of `[404, 500]`) |
+| `template-response-contract.test.js` | what the middleware does with whatever the render leaves on `ctx`, and what it **stops** doing once a render has run |
+
+Four new register entries came out of the pass, all configuration-robustness —
+none is a correctness bug on the served path, but three degrade **silently** and
+one of those three degrades in the insecure direction:
+
+- **#14** — `hidden` with a wrong shape fails **open**, in silence.
+  `hidden: { dotFiles: 'hidden' }`, `{ dotFiles: { blacklist: '.env' } }` and
+  `{ alwaysHide: '*.key' }` (string instead of array/object) each leave the file
+  **served**, with nothing on the logger. The guard exists one level down —
+  `hidden.dotFiles.default: 'maybe'` throws — it is only the container shape
+  that is unchecked.
+- **#15** — `compression.mimeTypes: [123]` (or a typo'd list) replaces the
+  defaults and silently disables compression for the whole deployment, without
+  even a `Vary`. `[]` and non-arrays fall back to the defaults; a non-empty list
+  is trusted whatever it contains.
+- **#16** — two opposite coercion conventions for boolean options:
+  `dirListing.enabled: 'false'` is truthy and turns the listing **on**, while
+  `browserCacheEnabled: 'yes'` is not a boolean and turns caching **off**.
+- **#17** — the `R_OK` readability probe is skipped on a `rawFile` cache hit,
+  although its own comment says it exists so that "a file made unreadable after
+  caching" stops being served from RAM. The `compressedFile` cache does run it
+  and answers 404. Comment and code state different specifications; the entry
+  records which is which.
+
+No behaviour changed in this pass — every test pins what the middleware does
+today.
+
+
 ## [5.3.0] - 2026-08-22
 
 ### 🐛 Fixed — `HEAD` returned 404 on every path with the default configuration (RFC 9110 §9.1 / §9.3.2)

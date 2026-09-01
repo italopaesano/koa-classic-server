@@ -99,6 +99,12 @@ integrità rilevato.
 - [ ] [12. Con un `Transfer-Encoding` impostato da un middleware a monte, i rami statici emettono anche `Content-Length` (illegale, RFC 9112 §6.1)](#12-con-un-transfer-encoding-impostato-da-un-middleware-a-monte-i-rami-statici-emettono-anche-content-length-illegale-rfc-9112-61) — **APERTO** (preesistente e simmetrico GET/HEAD, quindi non una violazione di §9.3.2)
 - [ ] [13. `stripBodyForHead()` reimplementa il dimensionamento del body di Koa: valutare di eliminarla](#13-stripbodyforhead-reimplementa-il-dimensionamento-del-body-di-koa-valutare-di-eliminarla) — **APERTO** (rimuove alla radice una classe di difetti recidiva, ma reintroduce un costo: da misurare prima di procedere)
 
+### Settima passata (2026-09-01) — copertura: configurazioni e combinazioni non testate
+- [ ] [14. `hidden` con la forma sbagliata fallisce APERTO e in silenzio: il file resta servito](#14-hidden-con-la-forma-sbagliata-fallisce-aperto-e-in-silenzio-il-file-resta-servito) — **APERTO** (unica coercizione silenziosa con conseguenza di sicurezza; comportamento pinnato dai test)
+- [ ] [15. `compression.mimeTypes`: una lista non vuota di voci invalide sostituisce i default e spegne la compressione in silenzio](#15-compressionmimetypes-una-lista-non-vuota-di-voci-invalide-sostituisce-i-default-e-spegne-la-compressione-in-silenzio) — **APERTO** (asimmetria `[]` = "non impostato" vs `[123]` = "lista deliberata")
+- [ ] [16. Due convenzioni opposte per le opzioni booleane, entrambe silenziose](#16-due-convenzioni-opposte-per-le-opzioni-booleane-entrambe-silenziose) — **APERTO** (`dirListing.enabled: 'false'` accende il listing, `browserCacheEnabled: 'yes'` spegne la cache)
+- [ ] [17. La sonda di leggibilità è saltata su un HIT della cache `rawFile`, contro l'intento dichiarato dal suo stesso commento](#17-la-sonda-di-leggibilità-è-saltata-su-un-hit-della-cache-rawfile-contro-lintento-dichiarato-dal-suo-stesso-commento) — **APERTO** (asimmetria con la cache `compressedFile`, che invece risponde 404)
+
 ---
 
 ## Minori / conformità / coerenza
@@ -1023,6 +1029,17 @@ degrada in silenzio anziché fallire — `urlPrefix`, `urlsReserved` con voci se
 iniziale, `index`, `template.ext` / `hideExtension.ext` rispetto al case — e la decisione
 se il progetto voglia una politica uniforme o caso per caso.
 
+**Aggiornamento 2026-09-01 — l'audit ora esiste, ed è eseguibile.**
+`__tests__/option-shape-audit.test.js` percorre l'intera superficie a forma libera e,
+per ogni valore malformato, fissa **due cose**: che cosa il middleware effettivamente
+*serve*, e che cosa l'operatore viene a sapere (oggi: nulla). Il file è l'inventario di
+ciò che dovrà cambiare quando la 6.0.0 promuoverà questi casi a warning o throw: ogni
+asserzione che fallirà nominerà l'opzione interessata. Dall'audit sono emerse tre voci
+che meritano un numero proprio perché non sono solo "robustezza di configurazione":
+**#14** (le forme di `hidden` che lasciano il file servito), **#15**
+(`compression.mimeTypes` che spegne la compressione) e **#16** (le due convenzioni
+booleane opposte). La decisione sulla politica uniforme resta al manutentore.
+
 **Priorità:** Bassa (nessun impatto noto sul comportamento servito; è robustezza di
 configurazione).
 
@@ -1136,6 +1153,194 @@ pipare il risultato costa relativamente poco.
 
 **Priorità:** Media. Nessun difetto aperto oggi, ma la recidiva è documentata e la
 proposta la elimina alla radice invece di aggiungere righe di matrice a ogni giro.
+
+---
+
+## Settima passata (2026-09-01) — copertura: configurazioni e combinazioni non testate
+
+Passata mirata sulla **copertura comportamentale**, non sulle righe: `index.cjs` era già
+al 98.4% stmts / 98.25% branch, quindi le lacune residue non sono rami irraggiungibili ma
+**combinazioni** di configurazione e forma della richiesta che nessuna suite attraversava.
+Metodo: enumerazione della superficie di opzioni dal blocco `opts STRUCTURE`, confronto
+con quello che le 72 suite esistenti effettivamente istanziano, e sonda empirica di ogni
+combinazione scoperta.
+
+Baseline di partenza (`npm run test:ci`): 72 suite / 1446 test verdi. Esito: **7 nuove
+suite, 175 nuovi test** — 79 suite / 1621 test con `test:ci`, 80 / 1631 con la suite
+completa; tutti verdi, lint pulito, coverage invariata (98.4% stmts / 98.25% branch),
+come atteso trattandosi di combinazioni e non di righe nuove. Le lacune chiuse:
+
+| Suite | Superficie che nessun test attraversava |
+|---|---|
+| `urlprefix-multisegment.test.js` | `urlPrefix` a **più segmenti** (`/a/b`): ogni test precedente usava un segmento solo, quindi il ciclo di matching girava solo nel caso degenere a un'iterazione. Include la superficie di bypass (segmento parziale, case, `%2F`, `//` iniziale, dot-segment) |
+| `listing-pagination-params.test.js` | coercizione di `?page` (float, esponente, negativo, ripetuto, non numerico), clamp, e l'interazione `maxEntries × entriesPerPage` (paginazione calcolata sull'insieme troncato) |
+| `server-cache-staleness.test.js` | i casi in cui il validatore `mtime`+`size` **diverge dai byte su disco**: riscrittura atomica a parità di dimensione, `mtime` che torna indietro, file reso illeggibile dopo il caching |
+| `option-shape-audit.test.js` | l'audit a forma libera del **#11**, reso eseguibile (vedi sopra) |
+| `hideextension-name-shapes.test.js` | nomi che la regola del suffisso non prevedeva: una **directory** che finisce col suffisso nascosto, un suffisso composto, un file il cui nome *è* il suffisso, nomi non-ASCII |
+| `symlink-cycles.test.js` | cicli e auto-riferimenti nei **tre** modi di `symlinks` (il test circolare esistente era una richiesta sola, un modo solo, soddisfatta da qualunque `[404, 500]`) |
+| `template-response-contract.test.js` | che cosa il middleware fa con quello che il render lascia su `ctx`, e che cosa **smette** di fare una volta che un render è girato |
+
+Quattro voci nuove, tutte di **robustezza di configurazione**: nessuna è un bug di
+correttezza sul percorso servito, ma tre delle quattro degradano **in silenzio** e una
+di quelle tre degrada nella direzione insicura.
+
+---
+
+### 14. `hidden` con la forma sbagliata fallisce APERTO e in silenzio: il file resta servito
+
+**Posizione:** `normalizeHiddenConfig` / `normalizeCategory` / `filterPatternList`
+(`index.cjs:1519-1554`).
+
+**Problema:** tutte e tre le normalizzazioni del namespace `hidden` scartano un valore
+della forma sbagliata e **ricadono sul default di sistema**, che è `'visible'` / lista
+vuota. L'effetto è che una configurazione *quasi* corretta non protegge niente:
+
+```js
+hidden: { dotFiles: 'hidden' }              // invece di { default: 'hidden' } → .env SERVITO
+hidden: { dotFiles: { blacklist: '.env' } } // invece di ['.env']              → .env SERVITO
+hidden: { alwaysHide: '*.key' }             // invece di ['*.key']             → secret.key SERVITO
+hidden: 'yes'                               // namespace intero scartato        → .env SERVITO
+```
+
+Nessun warning, nessun throw: `logger.warn` non viene chiamato in nessuno dei quattro casi.
+
+**Perché è diverso dalle altre coercizioni silenziose:** è l'**unica** che fallisce nella
+direzione insicura. `dirListing.enabled: 'false'` mostra un listing che l'operatore voleva
+spegnere — visibile alla prima richiesta. `hidden` malformato lascia servito un file che
+l'operatore credeva nascosto — invisibile finché qualcuno non lo chiede. E la guardia
+esiste già, un livello più sotto: `hidden.dotFiles.default: 'maybe'` **throwa**. È solo la
+forma del *contenitore* a non essere controllata, non quella del valore.
+
+**Nota sulla filosofia di progetto:** questo NON è un caso di "il default deve proteggere".
+I dot-file visibili di default sono una scelta deliberata e documentata. Il punto è
+un altro: qui l'operatore ha **espresso un'intenzione**, e l'intenzione viene scartata
+senza dirlo. Segnalarlo non cambia nessun default.
+
+**Test:** describe *"hidden — a wrong shape fails OPEN, in silence"* in
+`__tests__/option-shape-audit.test.js` — i quattro casi sopra, ciascuno con
+l'asserzione sul corpo servito **e** su `logger.warns`, più il contrasto col caso
+guardato (`dotFiles.default` invalido → throw) e con quello che funziona (voci
+invalide *dentro* una lista valida: scartate, le valide continuano ad applicarsi).
+
+**Proposta:** `warnConfigDeprecation()` sui quattro casi (canale già esistente, dedupe
+once-per-process, promessa di throw in 6.0.0 già nel messaggio). Nessun cambio di
+comportamento servito.
+
+**Priorità:** Media — nessun impatto sul percorso servito con configurazione corretta,
+ma è l'unica coercizione silenziosa il cui esito è "il segreto è esposto".
+
+---
+
+### 15. `compression.mimeTypes`: una lista non vuota di voci invalide sostituisce i default e spegne la compressione in silenzio
+
+**Posizione:** `normalizeCompressionConfig` (`index.cjs:1813-1815`).
+
+```js
+const mimeTypes = Array.isArray(compression.mimeTypes) && compression.mimeTypes.length > 0
+    ? compression.mimeTypes
+    : DEFAULT_COMPRESSIBLE_MIME_TYPES;
+```
+
+**Problema:** la condizione tratta `[]` e i non-array come «non impostato» (ricade sui
+default — ragionevole), ma tratta **qualunque** array non vuoto come una lista deliberata,
+senza guardare che cosa contiene. Una lista con un refuso — `['text/plian']`, `[123]`, o
+un array di estensioni invece di MIME type — sostituisce i default con una lista che non
+corrisponde a niente: **la compressione si spegne per l'intero deployment**, senza warning
+e senza nemmeno un `Vary: Accept-Encoding` che lasci intuire che una negoziazione è
+avvenuta. Su un file server è una regressione di banda invisibile fino a che qualcuno non
+misura.
+
+**Test:** describe *"compression.mimeTypes — empty falls back, garbage replaces"* in
+`__tests__/option-shape-audit.test.js` — i due lati dell'asimmetria, il caso garbage con
+asserzione su `content-encoding`, `vary` e `logger.warns`, e il caso legittimo (una lista
+custom valida sostituisce i default: quello è l'intento documentato e resta).
+
+**Proposta:** filtrare le voci non-stringa e avvisare, oppure avvisare quando la lista
+normalizzata risulta vuota. Nessun cambio per le liste valide.
+
+**Priorità:** Bassa-Media (nessun impatto su correttezza; impatto su prestazioni/banda).
+
+---
+
+### 16. Due convenzioni opposte per le opzioni booleane, entrambe silenziose
+
+**Problema:** le opzioni booleane del middleware si dividono in due gruppi che coercono
+un valore non booleano in **direzioni opposte**:
+
+| Convenzione | Opzioni | `'false'` (stringa) | `'yes'` (stringa) |
+|---|---|---|---|
+| truthiness (`!!x`) | `dirListing.enabled`, `dirListing.trailingSlash` | **true** (listing acceso) | true |
+| tipo stretto (`typeof x === 'boolean' ? x : default`) | `browserCacheEnabled`, `serverCache.*.enabled`, `compression.enabled` | default | **default** (cache spenta) |
+
+Quindi `dirListing.enabled: 'false'` **accende** il listing che l'operatore voleva
+spegnere, mentre `browserCacheEnabled: 'yes'` **spegne** la cache che voleva accendere.
+Entrambe le forme arrivano naturalmente da una configurazione letta da variabili
+d'ambiente o da un file `.env` senza cast — il caso d'uso più comune per cui un booleano
+arriva come stringa. Nessuna delle due avvisa.
+
+**Test:** describe *"boolean options coerce by truthiness — the classic 'false' string
+trap"* in `__tests__/option-shape-audit.test.js`, con le due convenzioni messe a
+confronto nello stesso blocco.
+
+**Nota:** `compression.enabled` non booleano è già coperto da
+`__tests__/config-normalization-more.test.js`; qui interessa il **contrasto** fra le due
+regole, non i singoli casi.
+
+**Proposta:** scegliere una convenzione e avvisare sull'altra forma, oppure — a costo
+zero e senza breaking — avvisare in entrambi i gruppi quando il valore non è booleano.
+
+**Priorità:** Bassa (robustezza di configurazione).
+
+---
+
+### 17. La sonda di leggibilità è saltata su un HIT della cache `rawFile`, contro l'intento dichiarato dal suo stesso commento
+
+**Posizione:** `loadFile` (`index.cjs:2771-2782`).
+
+```js
+// Skip if rawBuffer already loaded — the successful readFile() is equivalent proof.
+// [...] this probe is kept for the outcomes that never open the file
+// (compressed-cache hits, 304s, HEAD): dropping it would let a file made
+// unreadable after caching keep being served from RAM.
+if (!rawBuffer) {
+    await fs.promises.access(toOpen, fs.constants.R_OK);
+}
+```
+
+**Problema:** il commento formula **due** giustificazioni che non coincidono. La prima
+(«una readFile appena riuscita è prova equivalente») vale solo quando `rawBuffer` viene da
+una lettura fatta *in questa richiesta*. La seconda dice esplicitamente che la sonda
+esiste perché «un file reso illeggibile dopo il caching non deve continuare a essere
+servito dalla RAM». Ma la guardia è `if (!rawBuffer)`, e su un **hit** della cache
+`rawFile` il buffer arriva dalla RAM, non da una readFile: la sonda viene saltata proprio
+nel caso che la seconda giustificazione voleva coprire.
+
+Ne risulta un'asimmetria fra le due cache, verificata a runtime:
+
+| Situazione | Sonda `R_OK` | Esito |
+|---|---|---|
+| nessuna cache | eseguita | **404** |
+| hit cache `compressedFile` | eseguita | **404** |
+| hit cache `rawFile` | **saltata** (0 chiamate) | **200 dalla RAM** |
+
+**Non è necessariamente un difetto:** «la cache è uno snapshot, resta valida finché
+`mtime`/`size` non si muovono» è una posizione difendibile, e coerente con il fatto che
+un `chmod` non cambia né mtime né size (quindi *nessun* validatore lo vedrebbe: renderla
+simmetrica costerebbe una `access()` per ogni hit, cioè il costo che la cache esiste per
+evitare). La voce è aperta perché **codice e commento affermano cose diverse**, e va
+deciso quale delle due è la specifica.
+
+**Test:** describe *"a file made unreadable AFTER it was cached"* in
+`__tests__/server-cache-staleness.test.js` — i tre casi della tabella, con
+`expect(spy).not.toHaveBeenCalled()` sull'hit `rawFile` per rendere esplicito che la
+sonda non viene proprio raggiunta.
+
+**Proposta:** a costo zero, correggere il commento perché descriva la guardia reale
+(la sonda copre gli esiti *senza buffer*: hit compressi, 304, HEAD). Se invece si
+sceglie la simmetria, la sonda va spostata dopo il lookup e prima del ramo `fresh`,
+misurando il costo per hit.
+
+**Priorità:** Bassa (nessun impatto su integrità; documentazione interna divergente).
 
 ---
 

@@ -43,13 +43,32 @@ const describeIfSymlinks = symlinkSupported ? describe : describe.skip;
 describeIfSymlinks('symlink cycles', () => {
     let root;
 
-    beforeAll(() => {
-        root = fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-cycles-'));
+    // How deep the repeated-hop tests walk. The OS — not the middleware —
+    // bounds symlink resolution per path lookup (Linux MAXSYMLINKS = 40,
+    // Darwin/BSD = 32), so both numbers are chosen relative to the SMALLEST
+    // budget any supported platform offers, not to a measurement on one of them:
+    //   MANY  — comfortably inside every budget: the cycle must resolve.
+    //   BEYOND— above every budget: the kernel answers ELOOP and the middleware
+    //           must turn that into a clean 404, which is the property that
+    //           actually matters and is identical on every platform.
+    const MANY = 8;
+    const BEYOND_ANY_OS_LIMIT = 64;
 
-        // 1. A directory that contains a symlink back to itself.
+    beforeAll(() => {
+        // realpath(): on macOS os.tmpdir() lives under /var/folders/…, and
+        // /var → /private/var is itself a symlink. In a suite ABOUT symlinks the
+        // fixture must not carry one nobody put there on purpose — it silently
+        // spends the same per-lookup budget these tests measure.
+        root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kcs-cycles-')));
+
+        // 1. A directory that contains a symlink back to itself. The target is
+        // RELATIVE on purpose: an absolute target makes the kernel re-resolve
+        // the whole prefix on every hop, so each hop costs one budget unit per
+        // symlink in that prefix instead of one in total. Relative keeps the
+        // cost at exactly one hop per hop, on every platform.
         fs.mkdirSync(path.join(root, 'd'));
         fs.writeFileSync(path.join(root, 'd', 'inner.txt'), 'INNER');
-        fs.symlinkSync(path.join(root, 'd'), path.join(root, 'd', 'self'), 'dir');
+        fs.symlinkSync('.', path.join(root, 'd', 'self'), 'dir');
 
         // 2. A two-node cycle: ca/tocb → cb, cb/toca → ca.
         fs.mkdirSync(path.join(root, 'ca'));
@@ -101,10 +120,20 @@ describeIfSymlinks('symlink cycles', () => {
         });
 
         test('many hops still terminate and still resolve to the same file', async () => {
-            const deep = '/d/' + 'self/'.repeat(20) + 'inner.txt';
+            const deep = '/d/' + 'self/'.repeat(MANY) + 'inner.txt';
             const res = await supertest(server).get(deep);
             expect(res.status).toBe(200);
             expect(res.text).toBe('INNER');
+        });
+
+        test('past the OS symlink budget the request ends in a clean 404, never a hang or a 500', async () => {
+            // The kernel stops resolving at MAXSYMLINKS and returns ELOOP. What
+            // this pins is the middleware's half of the contract: an ELOOP is a
+            // "not found", handled exactly like any other failed stat — same
+            // outcome on every platform, whatever its budget happens to be.
+            const tooDeep = '/d/' + 'self/'.repeat(BEYOND_ANY_OS_LIMIT) + 'inner.txt';
+            const res = await supertest(server).get(tooDeep);
+            expect(res.status).toBe(404);
         });
 
         test('the two-node cycle resolves as well', async () => {
@@ -129,9 +158,14 @@ describeIfSymlinks('symlink cycles', () => {
             expect((await supertest(server).get('/d/self/')).status).toBe(404);
         });
 
-        test('a deep repetition is 404 too, with no extra work per hop', async () => {
-            const deep = '/d/' + 'self/'.repeat(20) + 'inner.txt';
+        test('a deep repetition is 404 too, refused at the first hop', async () => {
+            const deep = '/d/' + 'self/'.repeat(MANY) + 'inner.txt';
             expect((await supertest(server).get(deep)).status).toBe(404);
+        });
+
+        test('past the OS symlink budget it is still a 404 — the two reasons are indistinguishable', async () => {
+            const tooDeep = '/d/' + 'self/'.repeat(BEYOND_ANY_OS_LIMIT) + 'inner.txt';
+            expect((await supertest(server).get(tooDeep)).status).toBe(404);
         });
 
         test('the two-node cycle is refused', async () => {

@@ -100,7 +100,7 @@ integrità rilevato.
 - [ ] [13. `stripBodyForHead()` reimplementa il dimensionamento del body di Koa: valutare di eliminarla](#13-stripbodyforhead-reimplementa-il-dimensionamento-del-body-di-koa-valutare-di-eliminarla) — **APERTO** (rimuove alla radice una classe di difetti recidiva, ma reintroduce un costo: da misurare prima di procedere)
 
 ### Settima passata (2026-09-01) — copertura: configurazioni e combinazioni non testate
-- [ ] [14. `hidden` con la forma sbagliata fallisce APERTO e in silenzio: il file resta servito](#14-hidden-con-la-forma-sbagliata-fallisce-aperto-e-in-silenzio-il-file-resta-servito) — **APERTO** (unica coercizione silenziosa con conseguenza di sicurezza; comportamento pinnato dai test)
+- [x] [14. `hidden` con la forma sbagliata fallisce APERTO e in silenzio: il file resta servito](#14-hidden-con-la-forma-sbagliata-fallisce-aperto-e-in-silenzio-il-file-resta-servito) — **RISOLTO in 5.3.1** (ogni forma scartata ora avvisa via `warnConfigDeprecation`, con la promessa di throw in 6.0.0; comportamento servito invariato)
 - [ ] [15. `compression.mimeTypes`: una lista non vuota di voci invalide sostituisce i default e spegne la compressione in silenzio](#15-compressionmimetypes-una-lista-non-vuota-di-voci-invalide-sostituisce-i-default-e-spegne-la-compressione-in-silenzio) — **APERTO** (asimmetria `[]` = "non impostato" vs `[123]` = "lista deliberata")
 - [ ] [16. Due convenzioni opposte per le opzioni booleane, entrambe silenziose](#16-due-convenzioni-opposte-per-le-opzioni-booleane-entrambe-silenziose) — **APERTO** (`dirListing.enabled: 'false'` accende il listing, `browserCacheEnabled: 'yes'` spegne la cache)
 - [ ] [17. La sonda di leggibilità è saltata su un HIT della cache `rawFile`, contro l'intento dichiarato dal suo stesso commento](#17-la-sonda-di-leggibilità-è-saltata-su-un-hit-della-cache-rawfile-contro-lintento-dichiarato-dal-suo-stesso-commento) — **APERTO** (asimmetria con la cache `compressedFile`, che invece risponde 404)
@@ -1188,6 +1188,48 @@ di quelle tre degrada nella direzione insicura.
 
 ### 14. `hidden` con la forma sbagliata fallisce APERTO e in silenzio: il file resta servito
 
+**Stato: ✅ RISOLTO in 5.3.1** (2026-09-01 — opzione «avvisare, non rifiutare»,
+richiesta dal manutentore). Ogni ramo di `normalizeHiddenConfig` che **scarta**
+quello che l'operatore ha scritto ora lo segnala tramite `warnConfigDeprecation`,
+il canale che chiude da sé ogni messaggio con «WILL throw in a future major
+version» — quindi l'avviso porta con sé la promessa del throw in 6.0.0, come
+richiesto. Il **comportamento servito è invariato**: `hidden` è v2-stable, e
+cambiare ciò che serve su una patch sarebbe esattamente il breaking change che
+l'avviso esiste per evitare.
+
+I messaggi non si limitano a nominare il tipo atteso: nominano la **conseguenza**,
+perché è quella che l'operatore deve capire —
+
+```
+[koa-classic-server] DEPRECATION: hidden.dotFiles must be an object like
+  { default: "hidden", whitelist: [], blacklist: [] }; got string ("hidden" —
+  did you mean { default: "hidden" }?) — it is IGNORED, so hidden.dotFiles.default
+  stays "visible" and those entries remain SERVED.
+  This is tolerated for now and WILL throw in a future major version.
+```
+
+Coperti: namespace non-oggetto; categoria (`dotFiles`/`dotDirs`) non-oggetto;
+lista di pattern (`whitelist`/`blacklist`/`alwaysHide`) non-array; voce dentro
+una lista valida che non è né stringa né RegExp. Il caso `undefined` (opzione
+semplicemente non configurata) **non** avvisa: assente non è malformato.
+
+Test: `__tests__/hidden-shape-warnings.test.js` (33 casi) fissa il contratto del
+messaggio — path dell'opzione, forma arrivata, conseguenza «stays SERVED»,
+annuncio del 6.0.0, dedupe once-per-process — e, per ogni forma, che ciò che il
+middleware **serve** non si è mosso. Le quattro asserzioni sul silenzio in
+`__tests__/option-shape-audit.test.js` sono passate da «non viene segnalato
+nulla» all'avviso: è esattamente il lavoro per cui quell'inventario era stato
+scritto, ed è servito da checklist della modifica.
+
+Restano aperte, per scelta, le due voci sorelle emerse dallo stesso audit:
+**#15** (`compression.mimeTypes`) e **#16** (le due convenzioni booleane opposte).
+Costano banda e sorpresa, ma **nessuna delle due fallisce aperto** — è quella la
+differenza che ha fatto passare la #14 per prima.
+
+Documentazione: `docs/SECURITY_HARDENING.md` §3.1 elenca ora i quattro
+near-miss e raccomanda di **verificare l'esito** (`curl … /.env` → `404`)
+invece di fidarsi della configurazione.
+
 **Posizione:** `normalizeHiddenConfig` / `normalizeCategory` / `filterPatternList`
 (`index.cjs:1519-1554`).
 
@@ -1222,9 +1264,9 @@ l'asserzione sul corpo servito **e** su `logger.warns`, più il contrasto col ca
 guardato (`dotFiles.default` invalido → throw) e con quello che funziona (voci
 invalide *dentro* una lista valida: scartate, le valide continuano ad applicarsi).
 
-**Proposta:** `warnConfigDeprecation()` sui quattro casi (canale già esistente, dedupe
-once-per-process, promessa di throw in 6.0.0 già nel messaggio). Nessun cambio di
-comportamento servito.
+**Proposta (implementata in 5.3.1):** `warnConfigDeprecation()` sui quattro casi
+(canale già esistente, dedupe once-per-process, promessa di throw in 6.0.0 già nel
+messaggio). Nessun cambio di comportamento servito.
 
 **Priorità:** Media — nessun impatto sul percorso servito con configurazione corretta,
 ma è l'unica coercizione silenziosa il cui esito è "il segreto è esposto".

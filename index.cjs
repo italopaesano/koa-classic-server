@@ -1112,6 +1112,20 @@ module.exports = function koaClassicServer(
             alwaysHide: [],  // Path-aware patterns (string glob or RegExp) for any file/dir.
                              // Secondary to dotFiles/dotDirs whitelist and blacklist.
                              // Examples: ['*.secret', 'config/secrets/**', /\.key$/]
+            // SHAPE ERRORS ARE REPORTED (5.3.1). A wrong shape anywhere in this
+            //   namespace is still tolerated — the value is discarded and the
+            //   defaults apply — but it now emits a DEPRECATION warning on the
+            //   logger, and a future major (target 6.0.0) will THROW instead.
+            //   This namespace is the one where a discarded value fails OPEN:
+            //   the file the operator meant to hide stays SERVED, and nothing
+            //   reveals it until someone requests that file. The near-misses:
+            //     hidden: 'yes'                          (not an object)
+            //     hidden.dotFiles: 'hidden'              (meant { default: 'hidden' })
+            //     hidden.dotFiles.blacklist: '.env'      (meant ['.env'])
+            //     hidden.alwaysHide: '*.key'             (meant ['*.key'])
+            //     hidden.alwaysHide: [123]               (entry is not a glob/RegExp)
+            //   Unrelated to the VALUE check on dotFiles/dotDirs `default`,
+            //   which has always thrown on anything but 'hidden' | 'visible'.
         },
         serverCache: {       // Server-side in-memory caches (independent of browser HTTP caching)
             rawFile: {
@@ -1516,22 +1530,79 @@ module.exports = function koaClassicServer(
     }
 
     // Normalize and validate the hidden option into a clean internal structure.
+    //
+    // A malformed SHAPE is tolerated rather than thrown (`hidden` is v2-stable,
+    // and throwing on a minor upgrade would break working deployments), but it
+    // is no longer SILENT (register v5.0 #14, 5.3.1): every branch below that
+    // discards what the operator wrote warns through warnConfigDeprecation,
+    // whose message announces the 6.0.0 throw.
+    //
+    // This namespace gets the loudest messages of the config surface because it
+    // is the only one whose wrong shape fails OPEN: the discarded intent leaves
+    // a file SERVED that the operator meant to hide, and unlike a listing that
+    // wrongly appears, nothing shows it until someone requests the file. Each
+    // message therefore names the consequence, not just the expected type.
+    //
+    // Note the asymmetry this closes: hidden.<category>.default has ALWAYS
+    // thrown on an unknown VALUE ('maybe'). It was only the shape of the
+    // CONTAINER around it that went unchecked.
     function normalizeHiddenConfig(hidden) {
+        const nothingHidden = () => ({
+            dotFiles: { default: 'visible', whitelist: [], blacklist: [] },
+            dotDirs:  { default: 'visible', whitelist: [], blacklist: [] },
+            alwaysHide: []
+        });
+
+        if (hidden === undefined) return nothingHidden();
         if (!hidden || typeof hidden !== 'object' || Array.isArray(hidden)) {
-            return {
-                dotFiles: { default: 'visible', whitelist: [], blacklist: [] },
-                dotDirs:  { default: 'visible', whitelist: [], blacklist: [] },
-                alwaysHide: []
-            };
+            warnConfigDeprecation(_logger,
+                'hidden must be an object like { dotFiles: { default: "hidden" } }; got ' +
+                (hidden === null ? 'null' : Array.isArray(hidden) ? 'an array' : typeof hidden) +
+                ' — the whole namespace is IGNORED, so NOTHING is hidden and every entry stays SERVED.');
+            return nothingHidden();
         }
 
-        const filterPatternList = (arr) =>
-            Array.isArray(arr)
-                ? arr.filter(p => typeof p === 'string' || p instanceof RegExp)
-                : [];
+        // Pattern lists (whitelist / blacklist / alwaysHide). A non-array became
+        // an empty list and a non-pattern entry was dropped, both in silence:
+        // `alwaysHide: '*.key'` (a bare string instead of ['*.key']) read as a
+        // configured rule but hid nothing.
+        const filterPatternList = (arr, optionPath) => {
+            if (arr === undefined) return [];
+            if (!Array.isArray(arr)) {
+                warnConfigDeprecation(_logger,
+                    optionPath + ' must be an ARRAY of patterns like ["*.key"] (string glob or RegExp); got ' +
+                    (arr === null ? 'null' : typeof arr) +
+                    ' — the list is treated as EMPTY, so it hides NOTHING and the entries it names stay SERVED.');
+                return [];
+            }
+            const cleaned = [];
+            for (const p of arr) {
+                if (typeof p === 'string' || p instanceof RegExp) {
+                    cleaned.push(p);
+                    continue;
+                }
+                // Dropped, as before: a non-pattern entry can never match, so
+                // dropping it cannot break working behavior — but the rule the
+                // operator meant to write is not in force.
+                warnConfigDeprecation(_logger,
+                    optionPath + ' entries must be a string glob like "*.key" or a RegExp; dropping a non-pattern (' +
+                    (p === null ? 'null' : typeof p) + ') entry — it can never match, so it hides nothing.');
+            }
+            return cleaned;
+        };
 
         function normalizeCategory(input, systemDefault, categoryName) {
+            if (input === undefined) {
+                return { default: systemDefault, whitelist: [], blacklist: [] };
+            }
             if (!input || typeof input !== 'object' || Array.isArray(input)) {
+                // The classic near-miss: hidden.dotFiles: 'hidden' instead of
+                // hidden.dotFiles: { default: 'hidden' }.
+                warnConfigDeprecation(_logger,
+                    `hidden.${categoryName} must be an object like { default: "hidden", whitelist: [], blacklist: [] }; got ` +
+                    (input === null ? 'null' : Array.isArray(input) ? 'an array' : typeof input) +
+                    (typeof input === 'string' ? ` (${JSON.stringify(input)} — did you mean { default: ${JSON.stringify(input)} }?)` : '') +
+                    ` — it is IGNORED, so hidden.${categoryName}.default stays "${systemDefault}" and those entries remain SERVED.`);
                 return { default: systemDefault, whitelist: [], blacklist: [] };
             }
             if (input.default !== undefined && input.default !== 'hidden' && input.default !== 'visible') {
@@ -1541,15 +1612,15 @@ module.exports = function koaClassicServer(
             }
             return {
                 default: input.default !== undefined ? input.default : systemDefault,
-                whitelist: filterPatternList(input.whitelist),
-                blacklist: filterPatternList(input.blacklist),
+                whitelist: filterPatternList(input.whitelist, `hidden.${categoryName}.whitelist`),
+                blacklist: filterPatternList(input.blacklist, `hidden.${categoryName}.blacklist`),
             };
         }
 
         return {
             dotFiles: normalizeCategory(hidden.dotFiles, 'visible', 'dotFiles'),
             dotDirs:  normalizeCategory(hidden.dotDirs,  'visible', 'dotDirs'),
-            alwaysHide: filterPatternList(hidden.alwaysHide),
+            alwaysHide: filterPatternList(hidden.alwaysHide, 'hidden.alwaysHide'),
         };
     }
 
